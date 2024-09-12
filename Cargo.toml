@@ -1,0 +1,15 @@
+[package]
+name = "sabi-rust"
+version = "0.1.0"
+authors = ["Takayuki Sato <sttk.xslet@gmail.com>"]
+edition = "2021"
+rust-version = "1.74.1"
+description = "A small framework to separate logics and data accesses for Rust application."
+documentation = "https://docs.rs/sabi-rust"
+readme = "README.md"
+repository = "https://github.com/sttk/sabi-rust"
+license = "MIT"
+keywords = ["framework", "logic", "dataaccess", "dax"]
+categories = []
+
+[dependencies]
