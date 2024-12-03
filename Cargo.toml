@@ -12,4 +12,7 @@ license = "MIT"
 keywords = ["framework", "logic", "dataaccess", "dax"]
 categories = []
 
+[lib]
+name = "sabi"
+
 [dependencies]
