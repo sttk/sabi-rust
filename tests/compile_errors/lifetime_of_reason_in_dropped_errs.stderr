@@ -1,0 +1,12 @@
+error[E0505]: cannot move out of `err` because it is borrowed
+  --> tests/compile_errors/lifetime_of_reason_in_dropped_errs.rs:19:15
+   |
+16 |   let err = return_err().unwrap_err();
+   |       --- binding `err` declared here
+17 |   let reason = err.reason::<Reasons>().unwrap();
+   |                --- borrow of `err` occurs here
+18 |   println!("{:?}", reason);
+19 |   consume_err(err);
+   |               ^^^ move out of `err` occurs here
+20 |   println!("{:?}", reason);
+   |                    ------ borrow later used here
