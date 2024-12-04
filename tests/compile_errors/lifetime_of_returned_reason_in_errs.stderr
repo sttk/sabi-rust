@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing local variable `err`
+  --> tests/compile_errors/lifetime_of_returned_reason_in_errs.rs:23:3
+   |
+23 |   err.reason::<Reasons>()
+   |   ---^^^^^^^^^^^^^^^^^^^^
+   |   |
+   |   returns a value referencing data owned by the current function
+   |   `err` is borrowed here
