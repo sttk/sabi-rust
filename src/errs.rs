@@ -14,6 +14,7 @@ use std::ptr;
 /// the error.
 pub struct Err {
     reason_container: *const ReasonContainer,
+    source: Box<dyn error::Error>,
 }
 
 impl Err {
@@ -38,6 +39,37 @@ impl Err {
             unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
         Self {
             reason_container: ptr.as_ptr(),
+            source: Box::new(NoSource {}),
+        }
+    }
+
+    /// Creates a new error with the value reprenents the reason and the source error that causes
+    /// this error.
+    ///
+    /// ```rust
+    /// use sabi::Err;
+    /// use std::io;
+    ///
+    /// #[derive(Debug)]
+    /// enum Reasons {
+    ///     FailToDoSomething,
+    /// }
+    ///
+    /// let io_error = io::Error::other("oh no!");
+    ///
+    /// let err = Err::with_source(Reasons::FailToDoSomething, io_error);
+    /// ```
+    pub fn with_source<R, E>(reason: R, source: E) -> Self
+    where
+        R: fmt::Debug + Send + Sync + 'static,
+        E: error::Error + Send + Sync + 'static,
+    {
+        let boxed = Box::new(ReasonContainer::<R>::new(reason));
+        let ptr: ptr::NonNull<ReasonContainer> =
+            unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
+        Self {
+            reason_container: ptr.as_ptr(),
+            source: Box::new(source),
         }
     }
 
@@ -158,7 +190,10 @@ impl fmt::Display for Err {
 
 impl error::Error for Err {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        None
+        match self.source.downcast_ref::<NoSource>() {
+            Some(_) => None,
+            None => Some(&(*self.source)),
+        }
     }
 }
 
@@ -228,9 +263,21 @@ where
     any::TypeId::of::<R>() == type_id
 }
 
+#[derive(Debug)]
+struct NoSource {}
+
+impl error::Error for NoSource {}
+
+impl fmt::Display for NoSource {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
-mod tests_of_err {
+mod tests_of_err_without_source {
     use super::*;
+    use std::error::Error;
     use std::sync::{LazyLock, Mutex};
 
     struct Logger {
@@ -282,6 +329,8 @@ mod tests_of_err {
             assert!(err.is_reason::<Enum0>());
             assert!(!err.is_reason::<String>());
 
+            assert!(err.source().is_none()); // necessary `use std::error::Error;`
+
             match err.reason::<String>() {
                 Ok(_) => panic!(),
                 Err(err) => match err.reason::<Enum0>() {
@@ -301,7 +350,7 @@ mod tests_of_err {
                 _ => panic!(),
             });
 
-            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err::reason_is_enum_with_no_data::Enum0 Reason0 }");
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_without_source::reason_is_enum_with_no_data::Enum0 Reason0 }");
             assert_eq!(format!("{err}"), "Reason0");
 
             LOGGER.lock().unwrap().log("consumed Enum0");
@@ -350,6 +399,8 @@ mod tests_of_err {
             assert!(err.is_reason::<Enum1>());
             assert!(!err.is_reason::<String>());
 
+            assert!(err.source().is_none()); // necessary `use std::error::Error;`
+
             match err.reason::<String>() {
                 Ok(_) => panic!(),
                 Err(err) => match err.reason::<Enum1>() {
@@ -369,7 +420,7 @@ mod tests_of_err {
                 _ => panic!(),
             });
 
-            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err::reason_is_enum_with_one_value::Enum1 Reason1(\"hello\") }");
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_without_source::reason_is_enum_with_one_value::Enum1 Reason1(\"hello\") }");
             assert_eq!(format!("{err}"), "Reason1(\"hello\")");
 
             LOGGER.lock().unwrap().log("consumed Enum1");
@@ -418,6 +469,8 @@ mod tests_of_err {
             assert!(err.is_reason::<Enum2>());
             assert!(!err.is_reason::<String>());
 
+            assert!(err.source().is_none()); // necessary `use std::error::Error;`
+
             match err.reason::<String>() {
                 Ok(_) => panic!(),
                 Err(err) => match err.reason::<Enum2>() {
@@ -443,7 +496,7 @@ mod tests_of_err {
                 _ => panic!(),
             });
 
-            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err::reason_is_enum_with_two_values::Enum2 Reason2(\"hello\", 123) }");
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_without_source::reason_is_enum_with_two_values::Enum2 Reason2(\"hello\", 123) }");
             assert_eq!(format!("{err}"), "Reason2(\"hello\", 123)");
 
             LOGGER.lock().unwrap().log("consumed Enum2");
@@ -492,6 +545,8 @@ mod tests_of_err {
             assert!(err.is_reason::<Enum3>());
             assert!(!err.is_reason::<String>());
 
+            assert!(err.source().is_none()); // necessary `use std::error::Error;`
+
             match err.reason::<String>() {
                 Ok(_) => panic!(),
                 Err(err) => match err.reason::<Enum3>() {
@@ -517,7 +572,7 @@ mod tests_of_err {
                 _ => panic!(),
             });
 
-            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err::reason_is_enum_with_named_fields::Enum3 Reason3 { x: 123, y: 456 } }");
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_without_source::reason_is_enum_with_named_fields::Enum3 Reason3 { x: 123, y: 456 } }");
             assert_eq!(format!("{err}"), "Reason3 { x: 123, y: 456 }");
 
             LOGGER.lock().unwrap().log("consumed Enum3");
@@ -550,6 +605,8 @@ mod tests_of_err {
 
             assert!(err.is_reason::<i32>());
             assert!(!err.is_reason::<String>());
+
+            assert!(err.source().is_none()); // necessary `use std::error::Error;`
 
             match err.reason::<String>() {
                 Ok(_) => panic!(),
@@ -589,6 +646,8 @@ mod tests_of_err {
 
             assert!(!err.is_reason::<i32>());
             assert!(err.is_reason::<String>());
+
+            assert!(err.source().is_none()); // necessary `use std::error::Error;`
 
             match err.reason::<String>() {
                 Ok(s) => assert_eq!(s, "Hello, world!"),
@@ -652,6 +711,8 @@ mod tests_of_err {
             assert!(err.is_reason::<Struct6>());
             assert!(!err.is_reason::<String>());
 
+            assert!(err.source().is_none()); // necessary `use std::error::Error;`
+
             match err.reason::<String>() {
                 Ok(_) => panic!(),
                 Err(err) => match err.reason::<Struct6>() {
@@ -675,7 +736,7 @@ mod tests_of_err {
 
             assert_eq!(
                 format!("{err:?}"),
-                "sabi::errs::Err { reason: sabi::errs::tests_of_err::reason_is_struct::Struct6 Struct6 { s: \"hello\", b: true, n: 987 } }"
+                "sabi::errs::Err { reason: sabi::errs::tests_of_err_without_source::reason_is_struct::Struct6 Struct6 { s: \"hello\", b: true, n: 987 } }"
             );
             assert_eq!(
                 format!("{err}"),
@@ -694,6 +755,709 @@ mod tests_of_err {
                 "created Struct6",
                 "consumed Struct6",
                 "drop Struct6",
+                "end",
+            ]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_of_err_with_source {
+    use super::*;
+    use std::error::Error;
+    use std::sync::{LazyLock, Mutex};
+
+    struct Logger {
+        log_vec: Vec<String>,
+    }
+    impl Logger {
+        fn new() -> Self {
+            Self {
+                log_vec: Vec::<String>::new(),
+            }
+        }
+        fn log(&mut self, s: &str) {
+            self.log_vec.push(s.to_string());
+        }
+        fn assert_logs(&self, logs: &[&str]) {
+            assert_eq!(self.log_vec.len(), logs.len());
+            for i in 0..self.log_vec.len() {
+                assert_eq!(self.log_vec[i], logs[i]);
+            }
+        }
+    }
+
+    mod reason_is_enum_with_no_data {
+        use super::*;
+
+        static LOGGER: LazyLock<Mutex<Logger>> = LazyLock::new(|| Mutex::new(Logger::new()));
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        enum Enum0 {
+            Reason0,
+            Other,
+        }
+        impl Drop for Enum0 {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop Enum0");
+            }
+        }
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct MyError {
+            message: String,
+        }
+
+        impl MyError {
+            fn new(msg: &str) -> Self {
+                Self {
+                    message: msg.to_string(),
+                }
+            }
+        }
+
+        impl error::Error for MyError {}
+
+        impl fmt::Display for MyError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+                write!(f, "MyError{{message:\"{}\"}}", self.message)
+            }
+        }
+
+        impl Drop for MyError {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop MyError");
+            }
+        }
+
+        fn create_err() -> Result<(), Err> {
+            let err = Err::with_source(Enum0::Reason0, MyError::new("oh no!"));
+            LOGGER.lock().unwrap().log("created Enum0");
+            Err(err)
+        }
+
+        fn consume_err() {
+            let err = create_err().unwrap_err();
+
+            assert!(err.is_reason::<Enum0>());
+            assert!(!err.is_reason::<String>());
+
+            // necessary `use std::error::Error;`
+            if let Some(src) = err.source() {
+                assert_eq!(format!("{:?}", src), "MyError { message: \"oh no!\" }");
+            }
+
+            match err.reason::<String>() {
+                Ok(_) => panic!(),
+                Err(err) => match err.reason::<Enum0>() {
+                    Ok(r) => match r {
+                        Enum0::Reason0 => {}
+                        _ => panic!(),
+                    },
+                    Err(_) => panic!(),
+                },
+            }
+
+            err.match_reason::<String>(|_s| {
+                panic!();
+            })
+            .match_reason::<Enum0>(|r| match r {
+                Enum0::Reason0 => {}
+                _ => panic!(),
+            });
+
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_with_source::reason_is_enum_with_no_data::Enum0 Reason0 }");
+            assert_eq!(format!("{err}"), "Reason0");
+
+            LOGGER.lock().unwrap().log("consumed Enum0");
+        }
+
+        #[test]
+        fn test_err_by_reaason0() {
+            consume_err();
+            LOGGER.lock().unwrap().log("end");
+
+            LOGGER.lock().unwrap().assert_logs(&[
+                "created Enum0",
+                "consumed Enum0",
+                "drop Enum0",
+                "drop MyError",
+                "end",
+            ]);
+        }
+    }
+
+    mod reason_is_enum_with_one_value {
+        use super::*;
+
+        static LOGGER: LazyLock<Mutex<Logger>> = LazyLock::new(|| Mutex::new(Logger::new()));
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        enum Enum1 {
+            Reason1(String),
+            Other,
+        }
+        impl Drop for Enum1 {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop Enum1");
+            }
+        }
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct MyError {
+            message: String,
+        }
+
+        impl MyError {
+            fn new(msg: &str) -> Self {
+                Self {
+                    message: msg.to_string(),
+                }
+            }
+        }
+
+        impl error::Error for MyError {}
+
+        impl fmt::Display for MyError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+                write!(f, "MyError{{message:\"{}\"}}", self.message)
+            }
+        }
+
+        impl Drop for MyError {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop MyError");
+            }
+        }
+
+        fn create_err() -> Result<(), Err> {
+            let err = Err::with_source(Enum1::Reason1("hello".to_string()), MyError::new("oh no!"));
+            LOGGER.lock().unwrap().log("created Enum1");
+            Err(err)
+        }
+
+        fn consume_err() {
+            let err = create_err().unwrap_err();
+
+            assert!(err.is_reason::<Enum1>());
+            assert!(!err.is_reason::<String>());
+
+            // necessary `use std::error::Error;`
+            if let Some(src) = err.source() {
+                assert_eq!(format!("{:?}", src), "MyError { message: \"oh no!\" }");
+            }
+
+            match err.reason::<String>() {
+                Ok(_) => panic!(),
+                Err(err) => match err.reason::<Enum1>() {
+                    Ok(r) => match r {
+                        Enum1::Reason1(s) => assert_eq!(s, "hello"),
+                        _ => panic!(),
+                    },
+                    Err(_) => panic!(),
+                },
+            }
+
+            err.match_reason::<String>(|_s| {
+                panic!();
+            })
+            .match_reason::<Enum1>(|r| match r {
+                Enum1::Reason1(s) => assert_eq!(s, "hello"),
+                _ => panic!(),
+            });
+
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_with_source::reason_is_enum_with_one_value::Enum1 Reason1(\"hello\") }");
+            assert_eq!(format!("{err}"), "Reason1(\"hello\")");
+
+            LOGGER.lock().unwrap().log("consumed Enum1");
+        }
+
+        #[test]
+        fn test_err_by_reaason1() {
+            consume_err();
+            LOGGER.lock().unwrap().log("end");
+
+            LOGGER.lock().unwrap().assert_logs(&[
+                "created Enum1",
+                "consumed Enum1",
+                "drop Enum1",
+                "drop MyError",
+                "end",
+            ]);
+        }
+    }
+
+    mod reason_is_enum_with_two_values {
+        use super::*;
+
+        static LOGGER: LazyLock<Mutex<Logger>> = LazyLock::new(|| Mutex::new(Logger::new()));
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        enum Enum2 {
+            Reason2(String, i32),
+            Other,
+        }
+        impl Drop for Enum2 {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop Enum2");
+            }
+        }
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct MyError {
+            message: String,
+        }
+
+        impl MyError {
+            fn new(msg: &str) -> Self {
+                Self {
+                    message: msg.to_string(),
+                }
+            }
+        }
+
+        impl error::Error for MyError {}
+
+        impl fmt::Display for MyError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+                write!(f, "MyError{{message:\"{}\"}}", self.message)
+            }
+        }
+
+        impl Drop for MyError {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop MyError");
+            }
+        }
+
+        fn create_err() -> Result<(), Err> {
+            let err = Err::with_source(
+                Enum2::Reason2("hello".to_string(), 123),
+                MyError::new("oh no!"),
+            );
+            LOGGER.lock().unwrap().log("created Enum2");
+            Err(err)
+        }
+
+        fn consume_err() {
+            let err = create_err().unwrap_err();
+
+            assert!(err.is_reason::<Enum2>());
+            assert!(!err.is_reason::<String>());
+
+            // necessary `use std::error::Error;`
+            if let Some(src) = err.source() {
+                assert_eq!(format!("{:?}", src), "MyError { message: \"oh no!\" }");
+            }
+
+            match err.reason::<String>() {
+                Ok(_) => panic!(),
+                Err(err) => match err.reason::<Enum2>() {
+                    Ok(r) => match r {
+                        Enum2::Reason2(s, n) => {
+                            assert_eq!(s, "hello");
+                            assert_eq!(*n, 123);
+                        }
+                        _ => panic!(),
+                    },
+                    Err(_) => panic!(),
+                },
+            }
+
+            err.match_reason::<String>(|_s| {
+                panic!();
+            })
+            .match_reason::<Enum2>(|r| match r {
+                Enum2::Reason2(s, n) => {
+                    assert_eq!(s, "hello");
+                    assert_eq!(*n, 123);
+                }
+                _ => panic!(),
+            });
+
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_with_source::reason_is_enum_with_two_values::Enum2 Reason2(\"hello\", 123) }");
+            assert_eq!(format!("{err}"), "Reason2(\"hello\", 123)");
+
+            LOGGER.lock().unwrap().log("consumed Enum2");
+        }
+
+        #[test]
+        fn test_err_by_reaason2() {
+            consume_err();
+            LOGGER.lock().unwrap().log("end");
+
+            LOGGER.lock().unwrap().assert_logs(&[
+                "created Enum2",
+                "consumed Enum2",
+                "drop Enum2",
+                "drop MyError",
+                "end",
+            ]);
+        }
+    }
+
+    mod reason_is_enum_with_named_fields {
+        use super::*;
+
+        static LOGGER: LazyLock<Mutex<Logger>> = LazyLock::new(|| Mutex::new(Logger::new()));
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        enum Enum3 {
+            Reason3 { x: i32, y: i32 },
+            Other,
+        }
+        impl Drop for Enum3 {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop Enum3");
+            }
+        }
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct MyError {
+            message: String,
+        }
+
+        impl MyError {
+            fn new(msg: &str) -> Self {
+                Self {
+                    message: msg.to_string(),
+                }
+            }
+        }
+
+        impl error::Error for MyError {}
+
+        impl fmt::Display for MyError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+                write!(f, "MyError{{message:\"{}\"}}", self.message)
+            }
+        }
+
+        impl Drop for MyError {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop MyError");
+            }
+        }
+
+        fn create_err() -> Result<(), Err> {
+            let err = Err::with_source(Enum3::Reason3 { x: 123, y: 456 }, MyError::new("oh no!"));
+            LOGGER.lock().unwrap().log("created Enum3");
+            Err(err)
+        }
+
+        fn consume_err() {
+            let err = create_err().unwrap_err();
+
+            assert!(err.is_reason::<Enum3>());
+            assert!(!err.is_reason::<String>());
+
+            // necessary `use std::error::Error;`
+            if let Some(src) = err.source() {
+                assert_eq!(format!("{:?}", src), "MyError { message: \"oh no!\" }");
+            }
+
+            match err.reason::<String>() {
+                Ok(_) => panic!(),
+                Err(err) => match err.reason::<Enum3>() {
+                    Ok(r) => match r {
+                        Enum3::Reason3 { x, y } => {
+                            assert_eq!(*x, 123);
+                            assert_eq!(*y, 456);
+                        }
+                        _ => panic!(),
+                    },
+                    Err(_) => panic!(),
+                },
+            }
+
+            err.match_reason::<String>(|_s| {
+                panic!();
+            })
+            .match_reason::<Enum3>(|r| match r {
+                Enum3::Reason3 { x, y } => {
+                    assert_eq!(*x, 123);
+                    assert_eq!(*y, 456);
+                }
+                _ => panic!(),
+            });
+
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: sabi::errs::tests_of_err_with_source::reason_is_enum_with_named_fields::Enum3 Reason3 { x: 123, y: 456 } }");
+            assert_eq!(format!("{err}"), "Reason3 { x: 123, y: 456 }");
+
+            LOGGER.lock().unwrap().log("consumed Enum3");
+        }
+
+        #[test]
+        fn test_err_by_reaason3() {
+            consume_err();
+            LOGGER.lock().unwrap().log("end");
+
+            LOGGER.lock().unwrap().assert_logs(&[
+                "created Enum3",
+                "consumed Enum3",
+                "drop Enum3",
+                "drop MyError",
+                "end",
+            ]);
+        }
+    }
+
+    mod reason_is_number {
+        use super::*;
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct MyError {
+            message: String,
+        }
+
+        impl MyError {
+            fn new(msg: &str) -> Self {
+                Self {
+                    message: msg.to_string(),
+                }
+            }
+        }
+
+        impl error::Error for MyError {}
+
+        impl fmt::Display for MyError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+                write!(f, "MyError{{message:\"{}\"}}", self.message)
+            }
+        }
+
+        fn create_err() -> Result<(), Err> {
+            let err = Err::with_source(123_456, MyError::new("oh no!"));
+            Err(err)
+        }
+
+        fn consume_err() {
+            let err = create_err().unwrap_err();
+
+            assert!(err.is_reason::<i32>());
+            assert!(!err.is_reason::<String>());
+
+            // necessary `use std::error::Error;`
+            if let Some(src) = err.source() {
+                assert_eq!(format!("{:?}", src), "MyError { message: \"oh no!\" }");
+            }
+
+            match err.reason::<String>() {
+                Ok(_) => panic!(),
+                Err(err) => match err.reason::<i32>() {
+                    Ok(n) => assert_eq!(*n, 123_456),
+                    Err(_) => panic!(),
+                },
+            }
+
+            err.match_reason::<String>(|_s| {
+                panic!();
+            })
+            .match_reason::<i32>(|n| {
+                assert_eq!(*n, 123_456);
+            });
+
+            assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: i32 123456 }");
+            assert_eq!(format!("{err}"), "123456");
+        }
+
+        #[test]
+        fn test_err_by_reaason4() {
+            consume_err();
+        }
+    }
+
+    mod reason_is_string {
+        use super::*;
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct MyError {
+            message: String,
+        }
+
+        impl MyError {
+            fn new(msg: &str) -> Self {
+                Self {
+                    message: msg.to_string(),
+                }
+            }
+        }
+
+        impl error::Error for MyError {}
+
+        impl fmt::Display for MyError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+                write!(f, "MyError{{message:\"{}\"}}", self.message)
+            }
+        }
+
+        fn create_err() -> Result<(), Err> {
+            let err = Err::with_source("Hello, world!".to_string(), MyError::new("oh no!"));
+            Err(err)
+        }
+
+        fn consume_err() {
+            let err = create_err().unwrap_err();
+
+            assert!(!err.is_reason::<i32>());
+            assert!(err.is_reason::<String>());
+
+            // necessary `use std::error::Error;`
+            if let Some(src) = err.source() {
+                assert_eq!(format!("{:?}", src), "MyError { message: \"oh no!\" }");
+            }
+
+            match err.reason::<String>() {
+                Ok(s) => assert_eq!(s, "Hello, world!"),
+                Err(err) => match err.reason::<i32>() {
+                    Ok(_n) => panic!(),
+                    Err(_) => panic!(),
+                },
+            }
+
+            err.match_reason::<String>(|s| {
+                assert_eq!(s, "Hello, world!");
+            })
+            .match_reason::<i32>(|_n| {
+                panic!();
+            });
+
+            assert_eq!(
+                format!("{err:?}"),
+                "sabi::errs::Err { reason: alloc::string::String \"Hello, world!\" }"
+            );
+            assert_eq!(format!("{err}"), "\"Hello, world!\"");
+        }
+
+        #[test]
+        fn test_err_by_reaason5() {
+            consume_err();
+        }
+    }
+
+    mod reason_is_struct {
+        use super::*;
+
+        static LOGGER: LazyLock<Mutex<Logger>> = LazyLock::new(|| Mutex::new(Logger::new()));
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct Struct6 {
+            s: String,
+            b: bool,
+            n: i64,
+        }
+        impl Drop for Struct6 {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop Struct6");
+            }
+        }
+
+        #[allow(dead_code)]
+        #[derive(Debug)]
+        struct MyError {
+            message: String,
+        }
+
+        impl MyError {
+            fn new(msg: &str) -> Self {
+                Self {
+                    message: msg.to_string(),
+                }
+            }
+        }
+
+        impl error::Error for MyError {}
+
+        impl fmt::Display for MyError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+                write!(f, "MyError{{message:\"{}\"}}", self.message)
+            }
+        }
+
+        impl Drop for MyError {
+            fn drop(&mut self) {
+                LOGGER.lock().unwrap().log("drop MyError");
+            }
+        }
+
+        fn create_err() -> Result<(), Err> {
+            let err = Err::with_source(
+                Struct6 {
+                    s: "hello".to_string(),
+                    b: true,
+                    n: 987,
+                },
+                MyError::new("oh no!"),
+            );
+            LOGGER.lock().unwrap().log("created Struct6");
+            Err(err)
+        }
+
+        fn consume_err() {
+            let err = create_err().unwrap_err();
+
+            assert!(err.is_reason::<Struct6>());
+            assert!(!err.is_reason::<String>());
+
+            // necessary `use std::error::Error;`
+            if let Some(src) = err.source() {
+                assert_eq!(format!("{:?}", src), "MyError { message: \"oh no!\" }");
+            }
+
+            match err.reason::<String>() {
+                Ok(_) => panic!(),
+                Err(err) => match err.reason::<Struct6>() {
+                    Ok(r) => {
+                        assert_eq!(r.s, "hello");
+                        assert_eq!(r.b, true);
+                        assert_eq!(r.n, 987);
+                    }
+                    Err(_) => panic!(),
+                },
+            }
+
+            err.match_reason::<String>(|_s| {
+                panic!();
+            })
+            .match_reason::<Struct6>(|r| {
+                assert_eq!(r.s, "hello");
+                assert_eq!(r.b, true);
+                assert_eq!(r.n, 987);
+            });
+
+            assert_eq!(
+                format!("{err:?}"),
+                "sabi::errs::Err { reason: sabi::errs::tests_of_err_with_source::reason_is_struct::Struct6 Struct6 { s: \"hello\", b: true, n: 987 } }"
+            );
+            assert_eq!(
+                format!("{err}"),
+                "Struct6 { s: \"hello\", b: true, n: 987 }"
+            );
+
+            LOGGER.lock().unwrap().log("consumed Struct6");
+        }
+
+        #[test]
+        fn test_err_by_reaason6() {
+            consume_err();
+            LOGGER.lock().unwrap().log("end");
+
+            LOGGER.lock().unwrap().assert_logs(&[
+                "created Struct6",
+                "consumed Struct6",
+                "drop Struct6",
+                "drop MyError",
                 "end",
             ]);
         }
