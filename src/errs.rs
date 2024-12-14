@@ -14,7 +14,7 @@ use std::ptr;
 /// the error.
 pub struct Err {
     reason_container: ptr::NonNull<ReasonContainer>,
-    source: Box<dyn error::Error>,
+    source: Option<Box<dyn error::Error>>,
 }
 
 impl Err {
@@ -35,10 +35,11 @@ impl Err {
         R: fmt::Debug + Send + Sync + 'static,
     {
         let boxed = Box::new(ReasonContainer::<R>::new(reason));
-        let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<ReasonContainer>();
+        let ptr: ptr::NonNull<ReasonContainer> =
+            unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
         Self {
             reason_container: ptr,
-            source: Box::new(NoSource {}),
+            source: None,
         }
     }
 
@@ -64,10 +65,11 @@ impl Err {
         E: error::Error + Send + Sync + 'static,
     {
         let boxed = Box::new(ReasonContainer::<R>::new(reason));
-        let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<ReasonContainer>();
+        let ptr: ptr::NonNull<ReasonContainer> =
+            unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
         Self {
             reason_container: ptr,
-            source: Box::new(source),
+            source: Some(Box::new(source)),
         }
     }
 
@@ -194,10 +196,7 @@ impl fmt::Display for Err {
 
 impl error::Error for Err {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self.source.downcast_ref::<NoSource>() {
-            Some(_) => None,
-            None => Some(&(*self.source)),
-        }
+        self.source.as_deref()
     }
 }
 
@@ -265,17 +264,6 @@ where
     R: fmt::Debug + Send + Sync + 'static,
 {
     any::TypeId::of::<R>() == type_id
-}
-
-#[derive(Debug)]
-struct NoSource {}
-
-impl error::Error for NoSource {}
-
-impl fmt::Display for NoSource {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        Ok(())
-    }
 }
 
 #[cfg(test)]
