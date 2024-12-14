@@ -35,8 +35,7 @@ impl Err {
         R: fmt::Debug + Send + Sync + 'static,
     {
         let boxed = Box::new(ReasonContainer::<R>::new(reason));
-        let ptr: ptr::NonNull<ReasonContainer> =
-            unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
+        let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<ReasonContainer>();
         Self {
             reason_container: ptr,
             source: Box::new(NoSource {}),
@@ -65,8 +64,7 @@ impl Err {
         E: error::Error + Send + Sync + 'static,
     {
         let boxed = Box::new(ReasonContainer::<R>::new(reason));
-        let ptr: ptr::NonNull<ReasonContainer> =
-            unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
+        let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<ReasonContainer>();
         Self {
             reason_container: ptr,
             source: Box::new(source),
