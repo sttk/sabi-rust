@@ -13,7 +13,7 @@ use std::ptr;
 /// By the reason, it is possible to identify the error or retrieve the detailed information about
 /// the error.
 pub struct Err {
-    reason_container: *const ReasonContainer,
+    reason_container: ptr::NonNull<ReasonContainer>,
     source: Box<dyn error::Error>,
 }
 
@@ -38,7 +38,7 @@ impl Err {
         let ptr: ptr::NonNull<ReasonContainer> =
             unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
         Self {
-            reason_container: ptr.as_ptr(),
+            reason_container: ptr,
             source: Box::new(NoSource {}),
         }
     }
@@ -68,7 +68,7 @@ impl Err {
         let ptr: ptr::NonNull<ReasonContainer> =
             unsafe { ptr::NonNull::new_unchecked(Box::into_raw(boxed)).cast::<ReasonContainer>() };
         Self {
-            reason_container: ptr.as_ptr(),
+            reason_container: ptr,
             source: Box::new(source),
         }
     }
@@ -92,7 +92,8 @@ impl Err {
         R: fmt::Debug + Send + Sync + 'static,
     {
         let type_id = any::TypeId::of::<R>();
-        let is_fn = unsafe { (*self.reason_container).is_fn };
+        let ptr = self.reason_container.as_ptr();
+        let is_fn = unsafe { (*ptr).is_fn };
         is_fn(type_id)
     }
 
@@ -123,9 +124,10 @@ impl Err {
         R: fmt::Debug + Send + Sync + 'static,
     {
         let type_id = any::TypeId::of::<R>();
-        let is_fn = unsafe { (*self.reason_container).is_fn };
+        let ptr = self.reason_container.as_ptr();
+        let is_fn = unsafe { (*ptr).is_fn };
         if is_fn(type_id) {
-            let typed_ptr = self.reason_container as *const ReasonContainer<R>;
+            let typed_ptr = ptr as *const ReasonContainer<R>;
             return Ok(unsafe { &((*typed_ptr).reason) });
         }
 
@@ -157,9 +159,10 @@ impl Err {
         R: fmt::Debug + Send + Sync + 'static,
     {
         let type_id = any::TypeId::of::<R>();
-        let is_fn = unsafe { (*self.reason_container).is_fn };
+        let ptr = self.reason_container.as_ptr();
+        let is_fn = unsafe { (*ptr).is_fn };
         if is_fn(type_id) {
-            let typed_ptr = self.reason_container as *const ReasonContainer<R>;
+            let typed_ptr = ptr as *const ReasonContainer<R>;
             func(unsafe { &((*typed_ptr).reason) });
         }
 
@@ -169,22 +172,25 @@ impl Err {
 
 impl Drop for Err {
     fn drop(&mut self) {
-        let drop_fn = unsafe { (*self.reason_container).drop_fn };
-        drop_fn(self.reason_container);
+        let ptr = self.reason_container.as_ptr();
+        let drop_fn = unsafe { (*ptr).drop_fn };
+        drop_fn(ptr);
     }
 }
 
 impl fmt::Debug for Err {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let debug_fn = unsafe { (*self.reason_container).debug_fn };
-        debug_fn(self.reason_container, f)
+        let ptr = self.reason_container.as_ptr();
+        let debug_fn = unsafe { (*ptr).debug_fn };
+        debug_fn(ptr, f)
     }
 }
 
 impl fmt::Display for Err {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_fn = unsafe { (*self.reason_container).display_fn };
-        display_fn(self.reason_container, f)
+        let ptr = self.reason_container.as_ptr();
+        let display_fn = unsafe { (*ptr).display_fn };
+        display_fn(ptr, f)
     }
 }
 
