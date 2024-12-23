@@ -198,6 +198,10 @@ impl error::Error for Err {
     }
 }
 
+// Because Err struct is immutable and its fields are safe to send and share between threads.
+unsafe impl Send for Err {}
+unsafe impl Sync for Err {}
+
 #[repr(C)]
 struct ReasonContainer<R = ()>
 where
