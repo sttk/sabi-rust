@@ -3,7 +3,6 @@
 // See the file LICENSE in this distribution for more details.
 
 use std::collections::HashMap;
-use std::marker::Send;
 use std::thread;
 
 use crate::Err;
