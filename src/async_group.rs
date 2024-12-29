@@ -5,9 +5,11 @@
 use std::collections::HashMap;
 use std::thread;
 
+use crate::errors;
+
 use crate::Err;
 
-/// The trait to execute added functions asynchronously.
+/// Executes added functions asynchronously.
 ///
 /// This trait is used as an argument of DaxSrc#setup, DaxConn#commit, DacConn#rollback, and
 /// DaxConn#forceback.
@@ -42,8 +44,7 @@ impl AsyncGroupAsync<'_> {
         }
     }
 
-    pub(crate) fn wait(&mut self) -> HashMap<String, Err> {
-        let mut err_map = HashMap::new();
+    pub(crate) fn wait(&mut self, err_map: &mut HashMap<String, Err>) {
         while self.join_handles.len() > 0 {
             let name = self.names.remove(0);
             match self.join_handles.remove(0).join() {
@@ -60,11 +61,15 @@ impl AsyncGroupAsync<'_> {
                             None => "Thread panicked!",
                         },
                     };
-                    err_map.insert(name, Err::new(msg.to_string()));
+                    err_map.insert(
+                        name,
+                        Err::new(errors::AsyncGroup::ThreadPanicked {
+                            message: msg.to_string(),
+                        }),
+                    );
                 }
             }
         }
-        err_map
     }
 }
 
@@ -101,7 +106,8 @@ mod tests_async_group {
         #[test]
         fn when_zero_function() {
             let mut ag = AsyncGroupAsync::new();
-            let hm = ag.wait();
+            let mut hm = HashMap::new();
+            ag.wait(&mut hm);
             assert_eq!(hm.len(), 0);
         }
 
@@ -110,7 +116,8 @@ mod tests_async_group {
             let mut ag = AsyncGroupAsync::new();
             ag.name = "foo";
             ag.add(|| Ok(()));
-            let hm = ag.wait();
+            let mut hm = HashMap::new();
+            ag.wait(&mut hm);
             assert_eq!(hm.len(), 0);
         }
 
@@ -127,7 +134,8 @@ mod tests_async_group {
                 thread::sleep(time::Duration::from_millis(10));
                 Ok(())
             });
-            let hm = ag.wait();
+            let mut hm = HashMap::new();
+            ag.wait(&mut hm);
             assert_eq!(hm.len(), 0);
         }
 
@@ -142,7 +150,8 @@ mod tests_async_group {
             let mut ag = AsyncGroupAsync::new();
             ag.name = "foo";
             ag.add(|| Err(Err::new(Reasons::BadNumber(123u32))));
-            let hm = ag.wait();
+            let mut hm = HashMap::new();
+            ag.wait(&mut hm);
             assert_eq!(hm.len(), 1);
             assert_eq!(
                 *(hm.get("foo").unwrap().reason::<Reasons>().unwrap()),
@@ -163,7 +172,8 @@ mod tests_async_group {
                 thread::sleep(time::Duration::from_millis(10));
                 Err(Err::new(Reasons::BadString("hello".to_string())))
             });
-            let hm = ag.wait();
+            let mut hm = HashMap::new();
+            ag.wait(&mut hm);
             assert_eq!(hm.len(), 2);
             assert_eq!(
                 *(hm.get("foo").unwrap().reason::<Reasons>().unwrap()),
@@ -183,12 +193,19 @@ mod tests_async_group {
                 thread::sleep(time::Duration::from_millis(20));
                 panic!("panic 1");
             });
-            let hm = ag.wait();
+            let mut hm = HashMap::new();
+            ag.wait(&mut hm);
             assert_eq!(hm.len(), 1);
-            assert_eq!(
-                *(hm.get("foo").unwrap().reason::<String>().unwrap()),
-                "panic 1"
-            );
+
+            match hm
+                .get("foo")
+                .unwrap()
+                .reason::<errors::AsyncGroup>()
+                .unwrap()
+            {
+                errors::AsyncGroup::ThreadPanicked { message } => assert_eq!(message, "panic 1"),
+                _ => panic!(),
+            }
         }
     }
 
