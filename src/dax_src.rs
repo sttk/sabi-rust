@@ -3,13 +3,12 @@
 // See the file LICENSE in this distribution for more details.
 
 use std::collections::HashMap;
+use std::ptr;
 
 use crate::async_group::AsyncGroupAsync;
 use crate::errors;
 use crate::AsyncGroup;
 use crate::Err;
-
-use std::ptr;
 
 /// Represents a connection to a data store.
 ///
@@ -277,7 +276,7 @@ pub fn setup() -> Result<(), Err> {
 // This function should always be called before an application ends.
 pub fn close() {
     unsafe {
-        GLOBAL_DAX_SRC_LIST.setup();
+        GLOBAL_DAX_SRC_LIST.close();
     }
 }
 
