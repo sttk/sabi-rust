@@ -31,3 +31,16 @@ pub enum DaxSrc {
         errors: HashMap<String, Err>,
     },
 }
+
+/// The enum type for errors by `DaxConn`.
+///
+/// The variants of this enum indicates the possible errors that may occur with `DaxConn`
+#[derive(Debug)]
+pub enum DaxConn {
+    /// The error reason which indicates that some `DaxConn`(s) failed to commit.
+    FailToCommit {
+        /// The map of which keys are the registered names of `DaxConn`(s) that failed, and of
+        /// which values are `Err`(s) having their error reasons.
+        errors: HashMap<String, Err>,
+    },
+}

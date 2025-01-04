@@ -5,32 +5,10 @@
 use std::collections::HashMap;
 use std::ptr;
 
-use crate::async_group::AsyncGroupAsync;
+use crate::async_group::{AsyncGroup, AsyncGroupAsync};
+use crate::dax_conn::{DaxConn, NoopDaxConn};
 use crate::errors;
-use crate::AsyncGroup;
-use crate::Err;
-
-/// Represents a connection to a data store.
-///
-/// This trait declares methods: `commit`, `rollback`, `close`, etc. to work in a transaction
-/// process.
-pub trait DaxConn {
-    /// Commits the updates in a transaction.
-    fn commit(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err>;
-
-    /// Checks whether updates are already committed.
-    fn is_committed(&self) -> bool;
-
-    /// Rollbacks updates in a transaction.
-    fn rollback(&mut self, ag: &mut dyn AsyncGroup);
-
-    /// Reverts updates forcely even if updates are already committed or this connection does not
-    /// have rollback mechanism.
-    fn force_back(&mut self, ag: &mut dyn AsyncGroup);
-
-    /// Closes this connection.
-    fn close(&mut self);
-}
+use crate::errs::Err;
 
 /// Represents a data source which creates connections to a data store like database, etc.
 ///
@@ -50,20 +28,6 @@ pub trait DaxSrc {
 
     /// Creates a `DaxConn` instance.
     fn create_dax_conn(&self) -> Result<Box<dyn DaxConn>, Err>;
-}
-
-struct NoopDaxConn {}
-
-impl DaxConn for NoopDaxConn {
-    fn commit(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
-        Ok(())
-    }
-    fn is_committed(&self) -> bool {
-        true
-    }
-    fn rollback(&mut self, _ag: &mut dyn AsyncGroup) {}
-    fn force_back(&mut self, _ag: &mut dyn AsyncGroup) {}
-    fn close(&mut self) {}
 }
 
 struct NoopDaxSrc {}
