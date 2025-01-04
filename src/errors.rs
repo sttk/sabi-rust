@@ -23,7 +23,7 @@ pub enum AsyncGroup {
 ///
 /// The variants of this enum indicates the possible errors that may occur with `DataSrc`
 #[derive(Debug)]
-pub enum DataSrc {
+pub enum DaxSrc {
     /// The error reason which indicates that some DataSrc(s) failed to set up.
     FailToSetupGlobal {
         /// The map of which keys are the registered names of DataSrc(s) that failed, and of which

@@ -3,7 +3,7 @@
 // See the file LICENSE in this distribution for more details.
 
 mod async_group;
-mod data_src;
+mod dax_src;
 mod errs;
 
 /// Enums for errors that can occur in this `sabi` crate.
@@ -13,10 +13,10 @@ pub use errs::Err;
 
 pub use async_group::AsyncGroup;
 
-pub use data_src::DataConn;
-pub use data_src::DataSrc;
+pub use dax_src::DaxConn;
+pub use dax_src::DaxSrc;
 
-pub use data_src::close;
-pub use data_src::setup;
-pub use data_src::start_app;
-pub use data_src::uses;
+pub use dax_src::close;
+pub use dax_src::setup;
+pub use dax_src::start_app;
+pub use dax_src::uses;
