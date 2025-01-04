@@ -15,7 +15,7 @@ use std::ptr;
 ///
 /// This trait declares methods: `commit`, `rollback`, `close`, etc. to work in a transaction
 /// process.
-pub trait DataConn {
+pub trait DaxConn {
     /// Commits the updates in a transaction.
     fn commit(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err>;
 
@@ -35,9 +35,9 @@ pub trait DataConn {
 
 /// Represents a data source which creates connections to a data store like database, etc.
 ///
-/// This trait declares methods: `setup`, `close`, and `create_data_conn`.
-pub trait DataSrc {
-    /// Connects to a data store and prepares to create `DataConn` instances.
+/// This trait declares methods: `setup`, `close`, and `create_dax_conn`.
+pub trait DaxSrc {
+    /// Connects to a data store and prepares to create `DaxConn` instances.
     ///
     /// If the setup procedure is asynchronous, the `setup` method is implemented so as to use
     /// `AsyncGroup`.
@@ -49,13 +49,13 @@ pub trait DataSrc {
     /// `AsyncGroup`.
     fn close(&mut self, ag: &mut dyn AsyncGroup);
 
-    /// Creates a `DataConn` instance.
-    fn create_data_conn(&self) -> Result<Box<dyn DataConn>, Err>;
+    /// Creates a `DaxConn` instance.
+    fn create_dax_conn(&self) -> Result<Box<dyn DaxConn>, Err>;
 }
 
-struct NoopDataConn {}
+struct NoopDaxConn {}
 
-impl DataConn for NoopDataConn {
+impl DaxConn for NoopDaxConn {
     fn commit(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
         Ok(())
     }
@@ -67,45 +67,45 @@ impl DataConn for NoopDataConn {
     fn close(&mut self) {}
 }
 
-struct NoopDataSrc {}
+struct NoopDaxSrc {}
 
-impl DataSrc for NoopDataSrc {
+impl DaxSrc for NoopDaxSrc {
     fn setup(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
         Ok(())
     }
     fn close(&mut self, _ag: &mut dyn AsyncGroup) {}
-    fn create_data_conn(&self) -> Result<Box<dyn DataConn>, Err> {
-        Ok(Box::new(NoopDataConn {}))
+    fn create_dax_conn(&self) -> Result<Box<dyn DaxConn>, Err> {
+        Ok(Box::new(NoopDaxConn {}))
     }
 }
 
 #[repr(C)]
-struct DataSrcContainer<S = NoopDataSrc>
+struct DaxSrcContainer<S = NoopDaxSrc>
 where
-    S: DataSrc + 'static,
+    S: DaxSrc + 'static,
 {
-    drop_fn: fn(*const DataSrcContainer),
-    setup_fn: fn(*const DataSrcContainer, ag: &mut dyn AsyncGroup) -> Result<(), Err>,
-    close_fn: fn(*const DataSrcContainer, ag: &mut dyn AsyncGroup),
-    prev: *mut DataSrcContainer,
-    next: *mut DataSrcContainer,
+    drop_fn: fn(*const DaxSrcContainer),
+    setup_fn: fn(*const DaxSrcContainer, ag: &mut dyn AsyncGroup) -> Result<(), Err>,
+    close_fn: fn(*const DaxSrcContainer, ag: &mut dyn AsyncGroup),
+    prev: *mut DaxSrcContainer,
+    next: *mut DaxSrcContainer,
     name: String,
-    data_src: S,
+    dax_src: S,
 }
 
-impl<S> DataSrcContainer<S>
+impl<S> DaxSrcContainer<S>
 where
-    S: DataSrc + 'static,
+    S: DaxSrc + 'static,
 {
-    fn new(name: String, data_src: S) -> Self {
+    fn new(name: String, dax_src: S) -> Self {
         Self {
-            drop_fn: drop_data_src_container::<S>,
-            setup_fn: setup_data_src_container::<S>,
-            close_fn: close_data_src_container::<S>,
+            drop_fn: drop_dax_src_container::<S>,
+            setup_fn: setup_dax_src_container::<S>,
+            close_fn: close_dax_src_container::<S>,
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
             name,
-            data_src,
+            dax_src,
         }
     }
 
@@ -114,40 +114,40 @@ where
     }
 }
 
-fn drop_data_src_container<S>(ptr: *const DataSrcContainer)
+fn drop_dax_src_container<S>(ptr: *const DaxSrcContainer)
 where
-    S: DataSrc + 'static,
+    S: DaxSrc + 'static,
 {
-    let typed_ptr = ptr as *mut DataSrcContainer<S>;
+    let typed_ptr = ptr as *mut DaxSrcContainer<S>;
     drop(unsafe { Box::from_raw(typed_ptr) });
 }
 
-fn setup_data_src_container<S>(
-    ptr: *const DataSrcContainer,
+fn setup_dax_src_container<S>(
+    ptr: *const DaxSrcContainer,
     ag: &mut dyn AsyncGroup,
 ) -> Result<(), Err>
 where
-    S: DataSrc + 'static,
+    S: DaxSrc + 'static,
 {
-    let typed_ptr = ptr as *mut DataSrcContainer<S>;
-    unsafe { (*typed_ptr).data_src.setup(ag) }
+    let typed_ptr = ptr as *mut DaxSrcContainer<S>;
+    unsafe { (*typed_ptr).dax_src.setup(ag) }
 }
 
-fn close_data_src_container<S>(ptr: *const DataSrcContainer, ag: &mut dyn AsyncGroup)
+fn close_dax_src_container<S>(ptr: *const DaxSrcContainer, ag: &mut dyn AsyncGroup)
 where
-    S: DataSrc + 'static,
+    S: DaxSrc + 'static,
 {
-    let typed_ptr = ptr as *mut DataSrcContainer<S>;
-    unsafe { (*typed_ptr).data_src.close(ag) };
+    let typed_ptr = ptr as *mut DaxSrcContainer<S>;
+    unsafe { (*typed_ptr).dax_src.close(ag) };
 }
 
-struct DataSrcList {
-    head: *mut DataSrcContainer,
-    last: *mut DataSrcContainer,
+struct DaxSrcList {
+    head: *mut DaxSrcContainer,
+    last: *mut DaxSrcContainer,
     fixed: bool,
 }
 
-impl DataSrcList {
+impl DaxSrcList {
     const fn new() -> Self {
         Self {
             head: ptr::null_mut(),
@@ -158,15 +158,15 @@ impl DataSrcList {
 
     fn add<S>(&mut self, name: String, ds: S)
     where
-        S: DataSrc + 'static,
+        S: DaxSrc + 'static,
     {
         if self.fixed {
             return;
         }
 
-        let boxed = Box::new(DataSrcContainer::<S>::new(name, ds));
+        let boxed = Box::new(DaxSrcContainer::<S>::new(name, ds));
         let typed_ptr = Box::into_raw(boxed);
-        let ptr = typed_ptr.cast::<DataSrcContainer>();
+        let ptr = typed_ptr.cast::<DaxSrcContainer>();
         if self.last.is_null() {
             self.head = ptr;
             self.last = ptr;
@@ -229,7 +229,7 @@ impl DataSrcList {
     }
 }
 
-impl Drop for DataSrcList {
+impl Drop for DaxSrcList {
     fn drop(&mut self) {
         let mut ptr = self.last;
         while !ptr.is_null() {
@@ -241,29 +241,29 @@ impl Drop for DataSrcList {
     }
 }
 
-static mut globalDataSrcList: DataSrcList = DataSrcList::new();
+static mut GLOBAL_DAX_SRC_LIST: DaxSrcList = DaxSrcList::new();
 
-/// Registers a global `DataSrc` with its name.
+/// Registers a global `DaxSrc` with its name.
 ///
-/// By registering with this funciton, `DataSrc` becomes able to create a `DataConn` that can be
+/// By registering with this funciton, `DaxSrc` becomes able to create a `DaxConn` that can be
 /// used within a transaction.
-pub fn uses<S: DataSrc + 'static>(name: &str, ds: S) {
+pub fn uses<S: DaxSrc + 'static>(name: &str, ds: S) {
     unsafe {
-        globalDataSrcList.add(name.to_string(), ds);
+        GLOBAL_DAX_SRC_LIST.add(name.to_string(), ds);
     }
 }
 
-/// Makes all globally registered DataSrc(s) usable.
+/// Makes all globally registered DaxSrc(s) usable.
 ///
-/// This function forbids adding more global `DataSrc`(s), and calls each `setup` method of all
-/// registered `DataSrc`(s)
+/// This function forbids adding more global `DaxSrc`(s), and calls each `setup` method of all
+/// registered `DaxSrc`(s)
 pub fn setup() -> Result<(), Err> {
     unsafe {
-        globalDataSrcList.fix();
+        GLOBAL_DAX_SRC_LIST.fix();
 
-        let err_map = globalDataSrcList.setup();
+        let err_map = GLOBAL_DAX_SRC_LIST.setup();
         if err_map.len() > 0 {
-            return Err(Err::new(errors::DataSrc::FailToSetupGlobal {
+            return Err(Err::new(errors::DaxSrc::FailToSetupGlobal {
                 errors: err_map,
             }));
         }
@@ -272,12 +272,12 @@ pub fn setup() -> Result<(), Err> {
     Ok(())
 }
 
-/// Closes and frees each resource of registered global `DataSrc`(s).
+/// Closes and frees each resource of registered global `DaxSrc`(s).
 ///
 // This function should always be called before an application ends.
 pub fn close() {
     unsafe {
-        globalDataSrcList.setup();
+        GLOBAL_DAX_SRC_LIST.setup();
     }
 }
 
@@ -300,7 +300,7 @@ pub fn start_app(app: fn() -> Result<(), Err>) -> Result<(), Err> {
 }
 
 #[cfg(test)]
-mod tests_of_data_src_list {
+mod tests_of_dax_src_list {
     use super::*;
     use std::sync::LazyLock;
     use std::sync::Mutex;
@@ -331,70 +331,70 @@ mod tests_of_data_src_list {
 
         static LOGGER: LazyLock<Mutex<Logger>> = LazyLock::new(|| Mutex::new(Logger::new()));
 
-        struct DataSrcA {}
+        struct DaxSrcA {}
 
-        impl DataSrcA {
+        impl DaxSrcA {
             fn new() -> Self {
-                LOGGER.lock().unwrap().log("create DataSrcA");
+                LOGGER.lock().unwrap().log("create DaxSrcA");
                 Self {}
             }
         }
 
-        impl DataSrc for DataSrcA {
+        impl DaxSrc for DaxSrcA {
             fn setup(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
-                LOGGER.lock().unwrap().log("setup DataSrcA");
+                LOGGER.lock().unwrap().log("setup DaxSrcA");
                 Ok(())
             }
             fn close(&mut self, _ag: &mut dyn AsyncGroup) {
-                LOGGER.lock().unwrap().log("close DataSrcA");
+                LOGGER.lock().unwrap().log("close DaxSrcA");
             }
-            fn create_data_conn(&self) -> Result<Box<dyn DataConn>, Err> {
-                LOGGER.lock().unwrap().log("create DataConn of DataSrcA");
-                Ok(Box::new(NoopDataConn {}))
+            fn create_dax_conn(&self) -> Result<Box<dyn DaxConn>, Err> {
+                LOGGER.lock().unwrap().log("create DaxConn of DaxSrcA");
+                Ok(Box::new(NoopDaxConn {}))
             }
         }
 
-        impl Drop for DataSrcA {
+        impl Drop for DaxSrcA {
             fn drop(&mut self) {
-                LOGGER.lock().unwrap().log("drop DataSrcA");
+                LOGGER.lock().unwrap().log("drop DaxSrcA");
             }
         }
 
-        struct DataSrcB {}
+        struct DaxSrcB {}
 
-        impl DataSrcB {
+        impl DaxSrcB {
             fn new() -> Self {
-                LOGGER.lock().unwrap().log("create DataSrcB");
+                LOGGER.lock().unwrap().log("create DaxSrcB");
                 Self {}
             }
         }
-        impl DataSrc for DataSrcB {
+        impl DaxSrc for DaxSrcB {
             fn setup(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
-                LOGGER.lock().unwrap().log("setup DataSrcB");
+                LOGGER.lock().unwrap().log("setup DaxSrcB");
                 Ok(())
             }
             fn close(&mut self, _ag: &mut dyn AsyncGroup) {
-                LOGGER.lock().unwrap().log("close DataSrcB");
+                LOGGER.lock().unwrap().log("close DaxSrcB");
             }
-            fn create_data_conn(&self) -> Result<Box<dyn DataConn>, Err> {
-                LOGGER.lock().unwrap().log("create DataConn of DataSrcB");
-                Ok(Box::new(NoopDataConn {}))
+            fn create_dax_conn(&self) -> Result<Box<dyn DaxConn>, Err> {
+                LOGGER.lock().unwrap().log("create DaxConn of DaxSrcB");
+                Ok(Box::new(NoopDaxConn {}))
             }
         }
 
-        impl Drop for DataSrcB {
+        impl Drop for DaxSrcB {
             fn drop(&mut self) {
-                LOGGER.lock().unwrap().log("drop DataSrcB");
+                LOGGER.lock().unwrap().log("drop DaxSrcB");
             }
         }
 
-        fn data_src_list() {
-            let mut ds_list = DataSrcList::new();
+        fn dax_src_list() {
+            let mut ds_list = DaxSrcList::new();
 
-            let ds_a = DataSrcA::new();
+            let ds_a = DaxSrcA::new();
             ds_list.add("a".to_string(), ds_a);
 
-            let ds_b = DataSrcB::new();
+            let ds_b = DaxSrcB::new();
             ds_list.add("b".to_string(), ds_b);
 
             let err_map = ds_list.setup();
@@ -405,17 +405,17 @@ mod tests_of_data_src_list {
 
         #[test]
         fn test() {
-            data_src_list();
+            dax_src_list();
 
             LOGGER.lock().unwrap().assert_logs(&[
-                "create DataSrcA",
-                "create DataSrcB",
-                "setup DataSrcA",
-                "setup DataSrcB",
-                "close DataSrcB",
-                "close DataSrcA",
-                "drop DataSrcB",
-                "drop DataSrcA",
+                "create DaxSrcA",
+                "create DaxSrcB",
+                "setup DaxSrcA",
+                "setup DaxSrcB",
+                "close DaxSrcB",
+                "close DaxSrcA",
+                "drop DaxSrcB",
+                "drop DaxSrcA",
             ]);
         }
     }
@@ -427,21 +427,21 @@ mod tests_of_data_src_list {
 
         static LOGGER: LazyLock<Mutex<Logger>> = LazyLock::new(|| Mutex::new(Logger::new()));
 
-        struct DataSrcA {}
+        struct DaxSrcA {}
 
-        impl DataSrcA {
+        impl DaxSrcA {
             fn new() -> Self {
-                LOGGER.lock().unwrap().log("create DataSrcA");
+                LOGGER.lock().unwrap().log("create DaxSrcA");
                 Self {}
             }
         }
 
-        impl DataSrc for DataSrcA {
+        impl DaxSrc for DaxSrcA {
             fn setup(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err> {
                 ag.add(|| {
-                    LOGGER.lock().unwrap().log("setup DataSrcA: start");
+                    LOGGER.lock().unwrap().log("setup DaxSrcA: start");
                     thread::sleep(time::Duration::from_millis(100));
-                    LOGGER.lock().unwrap().log("setup DataSrcA: end");
+                    LOGGER.lock().unwrap().log("setup DaxSrcA: end");
                     Ok(())
                 });
                 Ok(())
@@ -449,70 +449,70 @@ mod tests_of_data_src_list {
             fn close(&mut self, ag: &mut dyn AsyncGroup) {
                 ag.add(|| {
                     thread::sleep(time::Duration::from_millis(10));
-                    LOGGER.lock().unwrap().log("close DataSrcA: start");
+                    LOGGER.lock().unwrap().log("close DaxSrcA: start");
                     thread::sleep(time::Duration::from_millis(100));
-                    LOGGER.lock().unwrap().log("close DataSrcA: end");
+                    LOGGER.lock().unwrap().log("close DaxSrcA: end");
                     Ok(())
                 });
             }
-            fn create_data_conn(&self) -> Result<Box<dyn DataConn>, Err> {
-                LOGGER.lock().unwrap().log("create DataConn of DataSrcA");
-                Ok(Box::new(NoopDataConn {}))
+            fn create_dax_conn(&self) -> Result<Box<dyn DaxConn>, Err> {
+                LOGGER.lock().unwrap().log("create DaxConn of DaxSrcA");
+                Ok(Box::new(NoopDaxConn {}))
             }
         }
 
-        impl Drop for DataSrcA {
+        impl Drop for DaxSrcA {
             fn drop(&mut self) {
-                LOGGER.lock().unwrap().log("drop DataSrcA");
+                LOGGER.lock().unwrap().log("drop DaxSrcA");
             }
         }
 
-        struct DataSrcB {}
+        struct DaxSrcB {}
 
-        impl DataSrcB {
+        impl DaxSrcB {
             fn new() -> Self {
-                LOGGER.lock().unwrap().log("create DataSrcB");
+                LOGGER.lock().unwrap().log("create DaxSrcB");
                 Self {}
             }
         }
-        impl DataSrc for DataSrcB {
+        impl DaxSrc for DaxSrcB {
             fn setup(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err> {
                 ag.add(|| {
                     thread::sleep(time::Duration::from_millis(10));
-                    LOGGER.lock().unwrap().log("setup DataSrcB: start");
+                    LOGGER.lock().unwrap().log("setup DaxSrcB: start");
                     thread::sleep(time::Duration::from_millis(20));
-                    LOGGER.lock().unwrap().log("setup DataSrcB: end");
+                    LOGGER.lock().unwrap().log("setup DaxSrcB: end");
                     Ok(())
                 });
                 Ok(())
             }
             fn close(&mut self, ag: &mut dyn AsyncGroup) {
                 ag.add(|| {
-                    LOGGER.lock().unwrap().log("close DataSrcB: start");
+                    LOGGER.lock().unwrap().log("close DaxSrcB: start");
                     thread::sleep(time::Duration::from_millis(20));
-                    LOGGER.lock().unwrap().log("close DataSrcB: end");
+                    LOGGER.lock().unwrap().log("close DaxSrcB: end");
                     Ok(())
                 });
             }
-            fn create_data_conn(&self) -> Result<Box<dyn DataConn>, Err> {
-                LOGGER.lock().unwrap().log("create DataConn of DataSrcB");
-                Ok(Box::new(NoopDataConn {}))
+            fn create_dax_conn(&self) -> Result<Box<dyn DaxConn>, Err> {
+                LOGGER.lock().unwrap().log("create DaxConn of DaxSrcB");
+                Ok(Box::new(NoopDaxConn {}))
             }
         }
 
-        impl Drop for DataSrcB {
+        impl Drop for DaxSrcB {
             fn drop(&mut self) {
-                LOGGER.lock().unwrap().log("drop DataSrcB");
+                LOGGER.lock().unwrap().log("drop DaxSrcB");
             }
         }
 
-        fn data_src_list() {
-            let mut ds_list = DataSrcList::new();
+        fn dax_src_list() {
+            let mut ds_list = DaxSrcList::new();
 
-            let ds_a = DataSrcA::new();
+            let ds_a = DaxSrcA::new();
             ds_list.add("a".to_string(), ds_a);
 
-            let ds_b = DataSrcB::new();
+            let ds_b = DaxSrcB::new();
             ds_list.add("b".to_string(), ds_b);
 
             let err_map = ds_list.setup();
@@ -523,21 +523,21 @@ mod tests_of_data_src_list {
 
         #[test]
         fn test() {
-            data_src_list();
+            dax_src_list();
 
             LOGGER.lock().unwrap().assert_logs(&[
-                "create DataSrcA",
-                "create DataSrcB",
-                "setup DataSrcA: start",
-                "setup DataSrcB: start",
-                "setup DataSrcB: end",
-                "setup DataSrcA: end",
-                "close DataSrcB: start",
-                "close DataSrcA: start",
-                "close DataSrcB: end",
-                "close DataSrcA: end",
-                "drop DataSrcB",
-                "drop DataSrcA",
+                "create DaxSrcA",
+                "create DaxSrcB",
+                "setup DaxSrcA: start",
+                "setup DaxSrcB: start",
+                "setup DaxSrcB: end",
+                "setup DaxSrcA: end",
+                "close DaxSrcB: start",
+                "close DaxSrcA: start",
+                "close DaxSrcB: end",
+                "close DaxSrcA: end",
+                "drop DaxSrcB",
+                "drop DaxSrcA",
             ]);
         }
     }
