@@ -11,7 +11,7 @@ use crate::Err;
 /// The variants of this enum indicates the possible errors that may occur with `AsyncGroup`.
 #[derive(Debug)]
 pub enum AsyncGroup {
-    /// The enum variant which indicates that at least one thread to setup a `DataSrc` has
+    /// The enum variant which indicates that at least one thread to setup a `DaxSrc` has
     /// panicked.
     ThreadPanicked {
         /// The message which is the argument of `panic!`.
@@ -19,15 +19,15 @@ pub enum AsyncGroup {
     },
 }
 
-/// The enum type for errors by `DataSrc`.
+/// The enum type for errors by `DaxSrc`.
 ///
-/// The variants of this enum indicates the possible errors that may occur with `DataSrc`
+/// The variants of this enum indicates the possible errors that may occur with `DaxSrc`
 #[derive(Debug)]
 pub enum DaxSrc {
-    /// The error reason which indicates that some DataSrc(s) failed to set up.
+    /// The error reason which indicates that some `DaxSrc`(s) failed to set up.
     FailToSetupGlobal {
-        /// The map of which keys are the registered names of DataSrc(s) that failed, and of which
-        /// values are Err having their error reasons.
+        /// The map of which keys are the registered names of `DaxSrc`(s) that failed, and of which
+        /// values are `Err` having their error reasons.
         errors: HashMap<String, Err>,
     },
 }
