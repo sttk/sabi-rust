@@ -3,6 +3,7 @@
 // See the file LICENSE in this distribution for more details.
 
 mod async_group;
+mod dax_conn;
 mod dax_src;
 mod errs;
 
@@ -10,12 +11,9 @@ mod errs;
 pub mod errors;
 
 pub use errs::Err;
-
 pub use async_group::AsyncGroup;
-
-pub use dax_src::DaxConn;
+pub use dax_conn::DaxConn;
 pub use dax_src::DaxSrc;
-
 pub use dax_src::close;
 pub use dax_src::setup;
 pub use dax_src::start_app;
