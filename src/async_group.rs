@@ -204,7 +204,6 @@ mod tests_async_group {
                 .unwrap()
             {
                 errors::AsyncGroup::ThreadPanicked { message } => assert_eq!(message, "panic 1"),
-                _ => panic!(),
             }
         }
     }

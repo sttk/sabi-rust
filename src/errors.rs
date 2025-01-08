@@ -44,3 +44,9 @@ pub enum DaxConn {
         errors: HashMap<String, Err>,
     },
 }
+
+#[derive(Debug)]
+pub enum DaxBase {
+    FailToCastDaxConn { name: String, to_type: &'static str },
+    FailToGetDaxConn { name: String, to_type: &'static str },
+}
