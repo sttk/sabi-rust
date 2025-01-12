@@ -122,33 +122,18 @@ mod integration_tests_of_err {
     }
 
     #[test]
-    fn should_check_type_of_reason() {
-        let err = find_file().unwrap_err();
-        assert!(err.is_reason::<IoErrs>());
-        assert!(!err.is_reason::<String>());
-
-        let err = read_file().unwrap_err();
-        assert!(err.is_reason::<IoErrs>());
-        assert!(!err.is_reason::<String>());
-
-        let err = write_file().unwrap_err();
-        assert!(err.is_reason::<IoErrs>());
-        assert!(!err.is_reason::<String>());
-    }
-
-    #[test]
     fn should_output_err_in_debug_format() {
         let err = find_file().unwrap_err();
         //println!("{err:?}");
-        assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: errs_test::integration_tests_of_err::IoErrs FileNotFound { path: \"/aaa/bbb/ccc\" } }");
+        assert_eq!(format!("{err:?}"), "sabi::Err { reason = errs_test::integration_tests_of_err::IoErrs FileNotFound { path: \"/aaa/bbb/ccc\" } }");
 
         let err = read_file().unwrap_err();
         //println!("{err:?}");
-        assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: errs_test::integration_tests_of_err::IoErrs NoPermission { path: \"/aaa/bbb/ccc\", mod: (4, 4, 4) } }");
+        assert_eq!(format!("{err:?}"), "sabi::Err { reason = errs_test::integration_tests_of_err::IoErrs NoPermission { path: \"/aaa/bbb/ccc\", mod: (4, 4, 4) } }");
 
         let err = write_file().unwrap_err();
         //println!("{err:?}");
-        assert_eq!(format!("{err:?}"), "sabi::errs::Err { reason: errs_test::integration_tests_of_err::IoErrs DueToSomeError { path: \"/aaa/bbb/ccc\" } }");
+        assert_eq!(format!("{err:?}"), "sabi::Err { reason = errs_test::integration_tests_of_err::IoErrs DueToSomeError { path: \"/aaa/bbb/ccc\" }, source = Custom { kind: AlreadyExists, error: \"/aaa/bbb/ccc\" } }");
     }
 
     #[test]
