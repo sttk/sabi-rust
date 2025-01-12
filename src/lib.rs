@@ -2,88 +2,46 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-mod async_group;
-mod dax;
-mod errs;
+mod err;
 
-/// Enums for errors that can occur in this `sabi` crate.
-pub mod errors;
+use std::any;
+use std::error;
+use std::fmt;
+use std::ptr;
 
-pub use async_group::AsyncGroup;
-pub use dax::DaxBaseImpl;
-pub use dax::{close, setup, start_app, uses};
-pub use errs::Err;
-
-/// The trait for a set of data access methods.
+/// `Err` is the struct that represents an error used commonly in across the Sabi
+/// Framework.
 ///
-/// This trait is inherited by `Dax` implementations for data stores, and each `Dax` implementation
-/// defines data access methods to each data store.
-/// In data access methods, `DaxConn` instances connected to data stores can be obtained with
-/// `get_dax_conn` method.
-pub trait Dax {
-    /// Gets a `DaxConn` instances by the registered name and casts it to the specified type.
-    fn get_dax_conn<C: DaxConn + 'static>(&mut self, name: &str) -> Result<&C, Err>;
-}
-
-/// Represents a data source which creates connections to a data store like database, etc.
-pub trait DaxSrc {
-    /// Connects to a data store and prepares to create `DaxConn` instances.
-    ///
-    /// If the setup procedure is asynchronous, use the `AsyncGroup` argument.
-    fn setup(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err>;
-
-    /// Disconnects to a data store.
-    ///
-    /// If the closing procedure is asynchronous, use the `AsyncGroup` argument.
-    fn close(&mut self, ag: &mut dyn AsyncGroup);
-
-    /// Creates a `DaxConn` instance.
-    fn create_dax_conn(&mut self) -> Result<Box<dyn DaxConn>, Err>;
-}
-
-struct NoopDaxSrc {}
-
-impl DaxSrc for NoopDaxSrc {
-    fn setup(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
-        Ok(())
-    }
-    fn close(&mut self, _ag: &mut dyn AsyncGroup) {}
-    fn create_dax_conn(&mut self) -> Result<Box<dyn DaxConn>, Err> {
-        Ok(Box::new(NoopDaxConn {}))
-    }
-}
-
-/// Represents a connection to a data store.
+/// It encapsulates the reason for the error, which can be any data type.
+/// Typically, the reason is an enum variant, which makes it easy to uniquely identify
+/// the error kind and location in the source code.
+/// In addition, since an enum variant can store additional informations as their fields,
+/// it is possible to provide more detailed information about the error.
 ///
-/// This trait provides method interfaces to work in a transaction process.
-pub trait DaxConn {
-    /// Commits the updates in a transaction.
-    fn commit(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err>;
-
-    /// Checks whether updates are already committed.
-    fn is_committed(&self) -> bool;
-
-    /// Rollbacks updates in a transaction.
-    fn rollback(&mut self, ag: &mut dyn AsyncGroup);
-
-    /// Reverts updates forcely even if updates are already committed or this connection does not
-    /// have rollback mechanism.
-    fn force_back(&mut self, ag: &mut dyn AsyncGroup);
-
-    /// Closes this connection.
-    fn close(&mut self);
+/// The reason for the error can be distinguished with switch statements, and type
+/// casting, so it is easy to handle the error in a type-safe manner.
+///
+/// This struct also contains an optional cause error, which is the error caused the
+/// current error. This is useful for chaining errors.
+///
+/// This struct is implements the `std::errors::Error` trait, so it can be used as an
+/// common error type in Rust programs.
+pub struct Err {
+    reason_container: ptr::NonNull<ReasonContainer>,
+    source: Option<Box<dyn error::Error>>,
 }
 
-struct NoopDaxConn {}
+#[derive(Debug)]
+struct DummyReason {}
 
-impl DaxConn for NoopDaxConn {
-    fn commit(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
-        Ok(())
-    }
-    fn is_committed(&self) -> bool {
-        false
-    }
-    fn rollback(&mut self, _ag: &mut dyn AsyncGroup) {}
-    fn force_back(&mut self, _ag: &mut dyn AsyncGroup) {}
-    fn close(&mut self) {}
+#[repr(C)]
+struct ReasonContainer<R = DummyReason>
+where
+    R: fmt::Debug + Send + Sync + 'static,
+{
+    is_fn: fn(any::TypeId) -> bool,
+    drop_fn: fn(*const ReasonContainer),
+    debug_fn: fn(*const ReasonContainer, f: &mut fmt::Formatter<'_>) -> fmt::Result,
+    display_fn: fn(*const ReasonContainer, f: &mut fmt::Formatter<'_>) -> fmt::Result,
+    reason: R,
 }
