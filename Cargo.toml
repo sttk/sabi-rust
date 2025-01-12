@@ -16,4 +16,5 @@ categories = []
 name = "sabi"
 
 [dependencies]
+chrono = "0.4.39"
 trybuild = "1.0.101"
