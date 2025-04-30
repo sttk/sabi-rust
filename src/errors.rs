@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::Err;
+use errs::Err;
 
 /// The enum type for errors by `AsyncGroup`.
 ///

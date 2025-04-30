@@ -13,8 +13,9 @@ use std::ptr;
 
 use crate::async_group::{AsyncGroup, AsyncGroupAsync};
 use crate::errors;
-use crate::errs::Err;
 use crate::{DaxConn, DaxSrc, NoopDaxConn, NoopDaxSrc};
+
+use errs::Err;
 
 #[repr(C)]
 struct DaxSrcContainer<S = NoopDaxSrc>

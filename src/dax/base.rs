@@ -7,8 +7,9 @@ use std::any;
 use super::*;
 use crate::async_group::AsyncGroupSync;
 use crate::errors;
-use crate::errs::Err;
 use crate::{Dax, DaxConn, DaxSrc};
+
+use errs::Err;
 
 static mut GLOBAL_DAX_SRC_LIST: DaxSrcList = DaxSrcList::new(false);
 

@@ -16,4 +16,7 @@ categories = []
 name = "sabi"
 
 [dependencies]
-trybuild = "1.0.101"
+errs = "0.2"
+
+[dev-dependencies]
+trybuild = "1"
