@@ -7,7 +7,7 @@ use std::thread;
 
 use crate::errors;
 
-use crate::Err;
+use errs::Err;
 
 /// Executes added functions asynchronously.
 ///

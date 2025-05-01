@@ -4,7 +4,6 @@
 
 mod async_group;
 mod dax;
-mod errs;
 
 /// Enums for errors that can occur in this `sabi` crate.
 pub mod errors;
@@ -12,7 +11,8 @@ pub mod errors;
 pub use async_group::AsyncGroup;
 pub use dax::DaxBaseImpl;
 pub use dax::{close, setup, start_app, uses};
-pub use errs::Err;
+
+use errs::Err;
 
 /// The trait for a set of data access methods.
 ///
