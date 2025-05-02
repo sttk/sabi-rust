@@ -30,12 +30,12 @@ pub trait DaxSrc {
     /// Connects to a data store and prepares to create `DaxConn` instances.
     ///
     /// If the setup procedure is asynchronous, use the `AsyncGroup` argument.
-    fn setup(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err>;
+    fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err>;
 
     /// Disconnects to a data store.
     ///
     /// If the closing procedure is asynchronous, use the `AsyncGroup` argument.
-    fn close(&mut self, ag: &mut dyn AsyncGroup);
+    fn close(&mut self, ag: &mut AsyncGroup);
 
     /// Creates a `DaxConn` instance.
     fn create_dax_conn(&mut self) -> Result<Box<dyn DaxConn>, Err>;
@@ -44,10 +44,10 @@ pub trait DaxSrc {
 struct NoopDaxSrc {}
 
 impl DaxSrc for NoopDaxSrc {
-    fn setup(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
+    fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
         Ok(())
     }
-    fn close(&mut self, _ag: &mut dyn AsyncGroup) {}
+    fn close(&mut self, _ag: &mut AsyncGroup) {}
     fn create_dax_conn(&mut self) -> Result<Box<dyn DaxConn>, Err> {
         Ok(Box::new(NoopDaxConn {}))
     }
@@ -58,17 +58,17 @@ impl DaxSrc for NoopDaxSrc {
 /// This trait provides method interfaces to work in a transaction process.
 pub trait DaxConn {
     /// Commits the updates in a transaction.
-    fn commit(&mut self, ag: &mut dyn AsyncGroup) -> Result<(), Err>;
+    fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err>;
 
     /// Checks whether updates are already committed.
     fn is_committed(&self) -> bool;
 
     /// Rollbacks updates in a transaction.
-    fn rollback(&mut self, ag: &mut dyn AsyncGroup);
+    fn rollback(&mut self, ag: &mut AsyncGroup);
 
     /// Reverts updates forcely even if updates are already committed or this connection does not
     /// have rollback mechanism.
-    fn force_back(&mut self, ag: &mut dyn AsyncGroup);
+    fn force_back(&mut self, ag: &mut AsyncGroup);
 
     /// Closes this connection.
     fn close(&mut self);
@@ -77,13 +77,13 @@ pub trait DaxConn {
 struct NoopDaxConn {}
 
 impl DaxConn for NoopDaxConn {
-    fn commit(&mut self, _ag: &mut dyn AsyncGroup) -> Result<(), Err> {
+    fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
         Ok(())
     }
     fn is_committed(&self) -> bool {
         false
     }
-    fn rollback(&mut self, _ag: &mut dyn AsyncGroup) {}
-    fn force_back(&mut self, _ag: &mut dyn AsyncGroup) {}
+    fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+    fn force_back(&mut self, _ag: &mut AsyncGroup) {}
     fn close(&mut self) {}
 }
