@@ -367,7 +367,7 @@ impl DaxConnMap {
         }
 
         let mut err_map = HashMap::new();
-        ag.join(&err_map);
+        ag.join(&mut err_map);
     }
 
     fn close(&self) {
