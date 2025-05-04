@@ -244,7 +244,7 @@ impl DaxSrcList {
             ptr = next;
         }
 
-        let err_map = ag.join();
+        ag.join(&mut err_map);
 
         err_map
     }
@@ -264,7 +264,8 @@ impl DaxSrcList {
             ptr = prev;
         }
 
-        let _ = ag.join();
+        let mut err_map = HashMap::new();
+        ag.join(&mut err_map);
     }
 }
 
@@ -322,6 +323,7 @@ impl DaxConnMap {
         }
 
         let mut ag = AsyncGroup::new();
+        let mut err_map = HashMap::new();
 
         let mut ptr = self.head;
         while !ptr.is_null() {
@@ -329,12 +331,12 @@ impl DaxConnMap {
             let name = unsafe { &(*ptr).name };
             let next = unsafe { (*ptr).next };
             if let Err(err) = commit_fn(ptr, &mut ag) {
-                //err_map.insert(name.to_string(), err);
+                err_map.insert(name.to_string(), err);
             }
             ptr = next;
         }
 
-        let err_map = ag.join();
+        ag.join(&mut err_map);
 
         if err_map.is_empty() {
             return Ok(());
@@ -364,7 +366,8 @@ impl DaxConnMap {
             ptr = next;
         }
 
-        let _ = ag.join();
+        let mut err_map = HashMap::new();
+        ag.join(&mut err_map);
     }
 
     fn close(&self) {
