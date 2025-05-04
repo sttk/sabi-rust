@@ -3,7 +3,7 @@
 // See the file LICENSE in this distribution for more details.
 
 use futures::future;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use tokio::runtime;
 
@@ -22,8 +22,8 @@ pub enum AsyncGroupError {
 /// If an error occurs during any of these operations, it collects and stores the errors for lator
 /// retrieval.
 pub struct AsyncGroup<'a> {
-    func_vec: Vec<Box<dyn Fn() -> future::BoxFuture<'static, Result<(), Err>>>>,
-    name_vec: Vec<String>,
+    func_vec: VecDeque<Box<dyn Fn() -> future::BoxFuture<'static, Result<(), Err>>>>,
+    name_vec: VecDeque<String>,
     pub(crate) name: &'a str,
 }
 
@@ -31,8 +31,8 @@ impl<'a> AsyncGroup<'_> {
     /// Creates a new `AsyncGroup`.
     pub(crate) fn new() -> Self {
         Self {
-            func_vec: Vec::new(),
-            name_vec: Vec::new(),
+            func_vec: VecDeque::new(),
+            name_vec: VecDeque::new(),
             name: "",
         }
     }
@@ -50,14 +50,14 @@ impl<'a> AsyncGroup<'_> {
         F: Fn() -> Fut + 'static,
         Fut: Future<Output = Result<(), Err>> + Send + Sync + 'static,
     {
-        self.func_vec.push(Box::new(move || Box::pin(func_ptr())));
-        self.name_vec.push(self.name.to_string());
+        self.func_vec
+            .push_back(Box::new(move || Box::pin(func_ptr())));
+        self.name_vec.push_back(self.name.to_string());
     }
 
     pub(crate) fn join(&mut self, err_map: &mut HashMap<String, Err>) {
         let mut fut_vec = Vec::new();
-        while self.func_vec.len() > 0 {
-            let func = self.func_vec.remove(0);
+        while let Some(func) = self.func_vec.pop_front() {
             fut_vec.push(func());
         }
 
@@ -66,9 +66,10 @@ impl<'a> AsyncGroup<'_> {
                 rt.block_on(async {
                     let result_all = future::join_all(fut_vec).await;
                     for result in result_all.into_iter() {
-                        let name = self.name_vec.remove(0);
-                        if let Err(err) = result {
-                            err_map.insert(name, err);
+                        if let Some(name) = self.name_vec.pop_front() {
+                            if let Err(err) = result {
+                                err_map.insert(name, err);
+                            }
                         }
                     }
                 });
@@ -132,12 +133,12 @@ mod tests_async_group {
         #[cfg(unix)]
         assert_eq!(
             format!("{:?}", *(m.get("foo").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = 127 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = 128 }"
         );
         #[cfg(windows)]
         assert_eq!(
             format!("{:?}", *(m.get("foo").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = 127 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = 128 }"
         );
     }
 
@@ -168,12 +169,12 @@ mod tests_async_group {
         #[cfg(unix)]
         assert_eq!(
             format!("{:?}", *(m.get("foo0").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = 152 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = 153 }"
         );
         #[cfg(window)]
         assert_eq!(
             format!("{:?}", *(m.get("foo0").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = 152 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = 153 }"
         );
 
         #[cfg(unix)]
