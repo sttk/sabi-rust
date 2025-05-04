@@ -180,23 +180,23 @@ mod tests_async_group {
         #[cfg(unix)]
         assert_eq!(
             format!("{:?}", *(m.get("foo1").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadString(\"hello\"), file = src/async_group.rs, line = 157 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadString(\"hello\"), file = src/async_group.rs, line = 158 }"
         );
         #[cfg(windows)]
         assert_eq!(
             format!("{:?}", *(m.get("foo1").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadString(\"hello\"), file = src\\async_group.rs, line = 157 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadString(\"hello\"), file = src\\async_group.rs, line = 158 }"
         );
 
         #[cfg(unix)]
         assert_eq!(
             format!("{:?}", *(m.get("foo2").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadFlag(true), file = src/async_group.rs, line = 162 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadFlag(true), file = src/async_group.rs, line = 163 }"
         );
         #[cfg(windows)]
         assert_eq!(
             format!("{:?}", *(m.get("foo2").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadFlag(true), file = src\\async_group.rs, line = 162 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadFlag(true), file = src\\async_group.rs, line = 163 }"
         );
     }
 }
