@@ -54,9 +54,7 @@ impl<'a> AsyncGroup<'_> {
         self.name_vec.push(self.name.to_string());
     }
 
-    pub(crate) fn join(&mut self) -> HashMap<String, Err> {
-        let mut err_map = HashMap::<String, Err>::new();
-
+    pub(crate) fn join(&mut self, err_map: &mut HashMap<String, Err>) {
         let mut fut_vec = Vec::new();
         while self.func_vec.len() > 0 {
             let func = self.func_vec.remove(0);
@@ -82,8 +80,6 @@ impl<'a> AsyncGroup<'_> {
                 );
             }
         }
-
-        err_map
     }
 }
 
@@ -96,18 +92,20 @@ mod tests_async_group {
     #[test]
     fn zero() {
         let mut ag = AsyncGroup::new();
+        let mut m = HashMap::<String, Err>::new();
 
-        let m = ag.join();
+        ag.join(&mut m);
         assert_eq!(m.len(), 0);
     }
 
     #[test]
     fn ok() {
         let mut ag = AsyncGroup::new();
+        let mut m = HashMap::<String, Err>::new();
 
         ag.name = "foo";
         ag.add(async || Ok(()));
-        let m = ag.join();
+        ag.join(&mut m);
         assert_eq!(m.len(), 0);
     }
 
@@ -121,6 +119,7 @@ mod tests_async_group {
     #[test]
     fn error() {
         let mut ag = AsyncGroup::new();
+        let mut m = HashMap::<String, Err>::new();
 
         ag.name = "foo";
         ag.add(async || {
@@ -128,23 +127,24 @@ mod tests_async_group {
             Err(Err::new(Reasons::BadNumber(123u32)))
         });
 
-        let m = ag.join();
+        ag.join(&mut m);
         assert_eq!(m.len(), 1);
         #[cfg(unix)]
         assert_eq!(
             format!("{:?}", *(m.get("foo").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = 128 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = 127 }"
         );
         #[cfg(windows)]
         assert_eq!(
             format!("{:?}", *(m.get("foo").unwrap())),
-            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = 128 }"
+            "errs::Err { reason = sabi::async_group::tests_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = 127 }"
         );
     }
 
     #[test]
     fn multiple_errors() {
         let mut ag = AsyncGroup::new();
+        let mut m = HashMap::<String, Err>::new();
 
         ag.name = "foo0";
         ag.add(async || {
@@ -162,7 +162,7 @@ mod tests_async_group {
             Err(Err::new(Reasons::BadFlag(true)))
         });
 
-        let m = ag.join();
+        ag.join(&mut m);
         assert_eq!(m.len(), 3);
 
         #[cfg(unix)]
