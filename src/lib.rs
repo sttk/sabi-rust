@@ -3,14 +3,14 @@
 // See the file LICENSE in this distribution for more details.
 
 mod async_group;
-//mod dax;
+mod dax;
 
 /// Enums for errors that can occur in this `sabi` crate.
 pub mod errors;
 
 pub use async_group::AsyncGroup;
-//pub use dax::DaxBaseImpl;
-//pub use dax::{close, setup, start_app, uses};
+pub use dax::DaxBaseImpl;
+pub use dax::{close, setup, start_app, uses};
 
 use errs::Err;
 
