@@ -16,10 +16,11 @@ categories = []
 name = "sabi"
 
 [dependencies]
-chrono = "0.4"
 errs = "0.2"
 futures = "0.3"
-tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+hashbrown = "0.15"
+tokio = "1"
 
 [dev-dependencies]
 trybuild = "1"
+override_macro = "0.1"
