@@ -19,7 +19,7 @@ impl DataAcc for DataHub {
 mod tests_of_data_acc {
     use super::*;
     use crate::data_hub::{clear_global_data_srcs_fixed, TEST_SEQ};
-    use crate::{setup, shutdown_later, uses, AsyncGroup, DataSrc};
+    use crate::{setup, shutdown_later, uses, AsyncGroup, DataHubError, DataSrc};
     use override_macro::{overridable, override_with};
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -29,14 +29,16 @@ mod tests_of_data_acc {
         id: i8,
         text: String,
         logger: Arc<Mutex<Vec<String>>>,
+        will_fail: bool,
     }
 
     impl FooDataSrc {
-        fn new(id: i8, s: &str, logger: Arc<Mutex<Vec<String>>>) -> Self {
+        fn new(id: i8, s: &str, logger: Arc<Mutex<Vec<String>>>, will_fail: bool) -> Self {
             Self {
                 id,
                 text: s.to_string(),
                 logger,
+                will_fail,
             }
         }
     }
@@ -51,6 +53,10 @@ mod tests_of_data_acc {
     impl DataSrc<FooDataConn> for FooDataSrc {
         fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
             let mut logger = self.logger.lock().unwrap();
+            if self.will_fail {
+                logger.push(format!("FooDataSrc {} failed to setup", self.id));
+                return Err(Err::new("XXX".to_string()));
+            }
             logger.push(format!("FooDataSrc {} setupped", self.id));
             Ok(())
         }
@@ -284,7 +290,7 @@ mod tests_of_data_acc {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                uses("foo", FooDataSrc::new(1, "hello", logger.clone()));
+                uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
                 uses("bar", BarDataSrc::new(2, logger.clone()));
 
                 assert!(setup().is_ok());
@@ -368,7 +374,7 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                uses("foo", FooDataSrc::new(1, "Hello", logger.clone()));
+                uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
                 uses("bar", BarDataSrc::new(2, logger.clone()));
                 assert!(setup().is_ok());
                 let _later = shutdown_later();
@@ -452,7 +458,7 @@ mod tests_of_data_acc {
                 let _later = shutdown_later();
 
                 let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone()));
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
                 hub.uses("bar", BarDataSrc::new(2, logger.clone()));
 
                 assert!(hub.run(sample_logic).is_ok());
@@ -475,6 +481,56 @@ mod tests_of_data_acc {
                     "BarDataSrc 2 dropped",
                     "FooDataSrc 1 closed",
                     "FooDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[test]
+        fn test_not_run_logic_if_fail_to_setup_local_data_src() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                assert!(setup().is_ok());
+                let _later = shutdown_later();
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                if let Err(err) = hub.run(sample_logic) {
+                    match err.reason::<DataHubError>() {
+                        Ok(r) => match r {
+                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
+                                assert_eq!(errors.len(), 1);
+                                if let Some(err) = errors.get("foo") {
+                                    match err.reason::<String>() {
+                                        Ok(s) => assert_eq!(s, "XXX"),
+                                        Err(_) => panic!(),
+                                    }
+                                } else {
+                                    panic!();
+                                }
+                            }
+                            _ => panic!(),
+                        },
+                        Err(_) => panic!(),
+                    }
+                } else {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 failed to setup",
+                    "BarDataSrc 2 setupped",
+                    "FooDataSrc 1 dropped",
+                    "BarDataSrc.text = ",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
                 ],
             );
         }
@@ -533,7 +589,7 @@ mod tests_of_data_acc {
                 let _later = shutdown_later();
 
                 let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone()));
+                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
 
                 assert!(hub.run(sample_logic).is_ok());
             }
@@ -609,7 +665,7 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                uses("foo", FooDataSrc::new(1, "Hello", logger.clone()));
+                uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
                 uses("bar", BarDataSrc::new(2, logger.clone()));
                 assert!(setup().is_ok());
                 let _later = shutdown_later();
@@ -697,7 +753,7 @@ mod tests_of_data_acc {
                 let _later = shutdown_later();
 
                 let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone()));
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
                 hub.uses("bar", BarDataSrc::new(2, logger.clone()));
 
                 assert!(hub.txn(sample_logic).is_ok());
@@ -720,6 +776,98 @@ mod tests_of_data_acc {
                     "FooDataConn 1 closed",
                     "FooDataConn 1 dropped",
                     "BarDataSrc.text = Hello",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 closed",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[test]
+        fn test_not_run_logic_in_txn_if_fail_to_setup_local_data_src() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                assert!(setup().is_ok());
+                let _later = shutdown_later();
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                if let Err(err) = hub.txn(sample_logic) {
+                    match err.reason::<DataHubError>() {
+                        Ok(r) => match r {
+                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
+                                assert_eq!(errors.len(), 1);
+                                if let Some(err) = errors.get("foo") {
+                                    match err.reason::<String>() {
+                                        Ok(s) => assert_eq!(s, "XXX"),
+                                        Err(_) => panic!(),
+                                    }
+                                } else {
+                                    panic!();
+                                }
+                            }
+                            _ => panic!(),
+                        },
+                        Err(_) => panic!(),
+                    }
+                } else {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 failed to setup",
+                    "BarDataSrc 2 setupped",
+                    "FooDataSrc 1 dropped",
+                    "BarDataSrc.text = ",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                ],
+            );
+        }
+
+        fn failing_logic(_data: &mut impl SampleData) -> Result<(), Err> {
+            Err(Err::new("ZZZ".to_string()))
+        }
+
+        #[test]
+        fn test_fail_to_run_logic_in_txn_and_rollback() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                assert!(setup().is_ok());
+                let _later = shutdown_later();
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                if let Err(err) = hub.txn(failing_logic) {
+                    match err.reason::<String>() {
+                        Ok(s) => assert_eq!(s, "ZZZ"),
+                        Err(_) => panic!(),
+                    }
+                } else {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 setupped",
+                    "BarDataSrc 2 setupped",
+                    "BarDataSrc.text = ",
                     "BarDataSrc 2 closed",
                     "BarDataSrc 2 dropped",
                     "FooDataSrc 1 closed",
@@ -783,7 +931,7 @@ mod tests_of_data_acc {
                 let _later = shutdown_later();
 
                 let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone()));
+                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
 
                 assert!(hub.txn(sample_logic).is_ok());
             }

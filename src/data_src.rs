@@ -331,7 +331,6 @@ impl Drop for DataSrcList {
 mod tests_of_data_src {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use tokio::time;
 
     struct SyncDataSrc {
         id: i8,
@@ -375,7 +374,7 @@ mod tests_of_data_src {
         fn create_data_conn(&mut self) -> Result<Box<SyncDataConn>, Err> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("SyncDataSrc {} created DataConn", self.id));
-            let conn = SyncDataConn::new(self.id, self.logger.clone(), false);
+            let conn = SyncDataConn::new();
             Ok(Box::new(conn))
         }
     }
@@ -422,170 +421,41 @@ mod tests_of_data_src {
         fn create_data_conn(&mut self) -> Result<Box<AsyncDataConn>, Err> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("AsyncDataSrc {} created DataConn", self.id));
-            let conn = AsyncDataConn::new(self.id, self.logger.clone(), false);
+            let conn = AsyncDataConn::new();
             Ok(Box::new(conn))
         }
     }
 
-    struct SyncDataConn {
-        id: i8,
-        committed: bool,
-        will_fail: bool,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
+    struct SyncDataConn {}
 
     impl SyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, will_fail: bool) -> Self {
-            Self {
-                id,
-                committed: false,
-                will_fail,
-                logger,
-            }
-        }
-    }
-
-    impl Drop for SyncDataConn {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} dropped", self.id));
+        fn new() -> Self {
+            Self {}
         }
     }
 
     impl DataConn for SyncDataConn {
         fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.will_fail {
-                logger.push(format!("SyncDataConn {} failed to commit", self.id));
-                return Err(Err::new("XX".to_string()));
-            }
-            self.committed = true;
-            logger.push(format!("SyncDataConn {} committed", self.id));
             Ok(())
         }
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} post-committed", self.id));
-        }
-        fn should_force_back(&self) -> bool {
-            self.committed
-        }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} rollbacked", self.id));
-        }
-        fn force_back(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} forced back", self.id));
-        }
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} closed", self.id));
-        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+        fn close(&mut self) {}
     }
 
-    struct AsyncDataConn {
-        id: i8,
-        committed: Arc<Mutex<bool>>,
-        logger: Arc<Mutex<Vec<String>>>,
-        will_fail: bool,
-    }
+    struct AsyncDataConn {}
 
     impl AsyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, will_fail: bool) -> Self {
-            Self {
-                id,
-                committed: Arc::new(Mutex::new(false)),
-                logger: logger,
-                will_fail,
-            }
-        }
-    }
-
-    impl Drop for AsyncDataConn {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataConn {} dropped", self.id));
+        fn new() -> Self {
+            Self {}
         }
     }
 
     impl DataConn for AsyncDataConn {
-        fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> {
-            let will_fail = self.will_fail;
-            let logger = self.logger.clone();
-            let committed = self.committed.clone();
-            let id = self.id;
-
-            ag.add(async move || {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(100)).await;
-
-                if will_fail {
-                    logger
-                        .lock()
-                        .unwrap()
-                        .push(format!("AsyncDataConn {} failed to commit", id));
-                    return Err(Err::new("YYY".to_string()));
-                }
-
-                let mut commit_flag = committed.lock().unwrap();
-                *commit_flag = true;
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn {} committed", id));
-                Ok(())
-            });
+        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
             Ok(())
         }
-        fn post_commit(&mut self, ag: &mut AsyncGroup) {
-            let logger = self.logger.clone();
-            let id = self.id;
-            ag.add(async move || {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(100)).await;
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn {} post-committed", id));
-                Ok(())
-            });
-        }
-        fn should_force_back(&self) -> bool {
-            *self.committed.lock().unwrap()
-        }
-        fn rollback(&mut self, ag: &mut AsyncGroup) {
-            let logger = self.logger.clone();
-            let id = self.id;
-            ag.add(async move || {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(100)).await;
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn {} rollbacked", id));
-                Ok(())
-            });
-        }
-        fn force_back(&mut self, ag: &mut AsyncGroup) {
-            let logger = self.logger.clone();
-            let id = self.id;
-            ag.add(async move || {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(100)).await;
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn {} forced back", id));
-                Ok(())
-            });
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("AsyncDataConn {} closed", self.id));
-        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+        fn close(&mut self) {}
     }
 
     mod tests_of_data_src_list {
