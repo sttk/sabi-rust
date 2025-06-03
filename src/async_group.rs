@@ -10,11 +10,20 @@ use errs::Err;
 use futures::future;
 use tokio::runtime;
 
+/// The enum type representing the reasons for errors that can occur within an `AsyncGroup`.
 #[derive(Debug)]
 pub enum AsyncGroupError {
+    /// Indicates a failure to create a new asynchronous runtime, which is necessary
+    /// for executing the tasks within the `AsyncGroup`.
     FailToCreateAsyncRuntime,
 }
 
+/// The structure that allows for the asynchronous execution of multiple functions
+/// and waits for all of them to complete.
+///
+/// Functions are added using the `add` method and are then run concurrently.
+/// The `AsyncGroup` ensures that all tasks finish before proceeding,
+/// optionally collecting any errors that occur.
 pub struct AsyncGroup<'a> {
     task_vec: VecDeque<Pin<Box<dyn Future<Output = Result<(), Err>> + Send + 'static>>>,
     name_vec: VecDeque<String>,
@@ -30,6 +39,20 @@ impl<'a> AsyncGroup<'_> {
         }
     }
 
+    /// Adds an asynchronous function (a future-producing closure) to the group.
+    ///
+    /// The provided function will be executed asynchronously when `join_and_put_errors_into`
+    /// or `join_and_ignore_errors` is called.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be `FnOnce` and `Send + 'static`.
+    /// * `Fut`: The type of the future returned by the closure, which must be
+    ///   `Future<Output = Result<(), Err>> + Send + 'static`.
+    ///
+    /// # Arguments
+    ///
+    /// * `future_fn`: A closure that, when called, returns a future to be executed.
     pub fn add<F, Fut>(&mut self, future_fn: F)
     where
         F: FnOnce() -> Fut + Send + 'static,
@@ -82,7 +105,7 @@ mod tests_of_async_group {
     use std::sync::{Arc, Mutex};
     use tokio::time;
 
-    const BASE_LINE: u32 = 85;
+    const BASE_LINE: u32 = 108;
 
     #[derive(Debug, PartialEq)]
     enum Reasons {
