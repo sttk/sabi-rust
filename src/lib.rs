@@ -88,7 +88,7 @@ where
     C: DataConn + 'static,
 {
     drop_fn: fn(*const DataSrcContainer),
-    setup_fn: fn(*const DataSrcContainer, ag: &mut AsyncGroup) -> Result<(), Err>,
+    setup_fn: fn(*const DataSrcContainer, &mut AsyncGroup) -> Result<(), Err>,
     close_fn: fn(*const DataSrcContainer),
     create_data_conn_fn: fn(*const DataSrcContainer) -> Result<Box<DataConnContainer<C>>, Err>,
     is_data_conn_fn: fn(any::TypeId) -> bool,
