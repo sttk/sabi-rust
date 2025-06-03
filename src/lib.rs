@@ -1,89 +1,102 @@
-// Copyright (C) 2024 Takayuki Sato. All Rights Reserved.
+// Copyright (C) 2024-2025 Takayuki Sato. All Rights Reserved.
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-mod async_group;
-mod dax;
-
-/// Enums for errors that can occur in this `sabi` crate.
-pub mod errors;
-
-pub use async_group::AsyncGroup;
-pub use dax::DaxBaseImpl;
-pub use dax::{close, setup, start_app, uses};
+use std::any;
 
 use errs::Err;
 
-/// The trait for a set of data access methods.
-///
-/// This trait is inherited by `Dax` implementations for data stores, and each `Dax` implementation
-/// defines data access methods to each data store.
-/// In data access methods, `DaxConn` instances connected to data stores can be obtained with
-/// `get_dax_conn` method.
-pub trait Dax {
-    /// Gets a `DaxConn` instances by the registered name and casts it to the specified type.
-    fn get_dax_conn<C: DaxConn + 'static>(&mut self, name: &str) -> Result<&C, Err>;
-}
+mod async_group;
+pub use async_group::{AsyncGroup, AsyncGroupError};
 
-/// Represents a data source which creates connections to a data store like database, etc.
-pub trait DaxSrc {
-    /// Connects to a data store and prepares to create `DaxConn` instances.
-    ///
-    /// If the setup procedure is asynchronous, use the `AsyncGroup` argument.
-    fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err>;
+mod data_acc;
+mod data_conn;
+mod data_hub;
+mod data_src;
+pub use data_acc::DataAcc;
+pub use data_hub::{setup, shutdown, shutdown_later, uses, DataHub, DataHubError};
 
-    /// Disconnects to a data store.
-    ///
-    /// If the closing procedure is asynchronous, use the `AsyncGroup` argument.
-    fn close(&mut self, ag: &mut AsyncGroup);
-
-    /// Creates a `DaxConn` instance.
-    fn create_dax_conn(&mut self) -> Result<Box<dyn DaxConn>, Err>;
-}
-
-struct NoopDaxSrc {}
-
-impl DaxSrc for NoopDaxSrc {
-    fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-        Ok(())
-    }
-    fn close(&mut self, _ag: &mut AsyncGroup) {}
-    fn create_dax_conn(&mut self) -> Result<Box<dyn DaxConn>, Err> {
-        Ok(Box::new(NoopDaxConn {}))
-    }
-}
-
-/// Represents a connection to a data store.
-///
-/// This trait provides method interfaces to work in a transaction process.
-pub trait DaxConn {
-    /// Commits the updates in a transaction.
+#[allow(unused_variables)] // for rustdoc
+pub trait DataConn {
     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err>;
-
-    /// Checks whether updates are already committed.
-    fn is_committed(&self) -> bool;
-
-    /// Rollbacks updates in a transaction.
+    fn post_commit(&mut self, ag: &mut AsyncGroup) {}
+    fn should_force_back(&self) -> bool {
+        false
+    }
     fn rollback(&mut self, ag: &mut AsyncGroup);
-
-    /// Reverts updates forcely even if updates are already committed or this connection does not
-    /// have rollback mechanism.
-    fn force_back(&mut self, ag: &mut AsyncGroup);
-
-    /// Closes this connection.
+    fn force_back(&mut self, ag: &mut AsyncGroup) {}
     fn close(&mut self);
 }
 
-struct NoopDaxConn {}
+struct NoopDataConn {}
 
-impl DaxConn for NoopDaxConn {
+impl DataConn for NoopDataConn {
     fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
         Ok(())
     }
-    fn is_committed(&self) -> bool {
-        false
-    }
     fn rollback(&mut self, _ag: &mut AsyncGroup) {}
-    fn force_back(&mut self, _ag: &mut AsyncGroup) {}
     fn close(&mut self) {}
+}
+
+#[repr(C)]
+struct DataConnContainer<C = NoopDataConn>
+where
+    C: DataConn + 'static,
+{
+    drop_fn: fn(*const DataConnContainer),
+    is_fn: fn(any::TypeId) -> bool,
+
+    commit_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> Result<(), Err>,
+    post_commit_fn: fn(*const DataConnContainer, &mut AsyncGroup),
+    should_force_back_fn: fn(*const DataConnContainer) -> bool,
+    rollback_fn: fn(*const DataConnContainer, &mut AsyncGroup),
+    force_back_fn: fn(*const DataConnContainer, &mut AsyncGroup),
+    close_fn: fn(*const DataConnContainer),
+
+    prev: *mut DataConnContainer,
+    next: *mut DataConnContainer,
+    name: String,
+    data_conn: Box<C>,
+}
+
+#[allow(unused_variables)] // for rustdoc
+pub trait DataSrc<C>
+where
+    C: DataConn + 'static,
+{
+    fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err>;
+    fn close(&mut self);
+    fn create_data_conn(&mut self) -> Result<Box<C>, Err>;
+}
+
+struct NoopDataSrc {}
+
+impl DataSrc<NoopDataConn> for NoopDataSrc {
+    fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+        Ok(())
+    }
+    fn close(&mut self) {}
+    fn create_data_conn(&mut self) -> Result<Box<NoopDataConn>, Err> {
+        Ok(Box::new(NoopDataConn {}))
+    }
+}
+
+#[repr(C)]
+struct DataSrcContainer<S = NoopDataSrc, C = NoopDataConn>
+where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    drop_fn: fn(*const DataSrcContainer),
+    setup_fn: fn(*const DataSrcContainer, &mut AsyncGroup) -> Result<(), Err>,
+    close_fn: fn(*const DataSrcContainer),
+    create_data_conn_fn: fn(*const DataSrcContainer) -> Result<Box<DataConnContainer<C>>, Err>,
+    is_data_conn_fn: fn(any::TypeId) -> bool,
+
+    prev: *mut DataSrcContainer,
+    next: *mut DataSrcContainer,
+    local: bool,
+    name: String,
+
+    data_src: S,
 }
