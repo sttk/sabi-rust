@@ -92,7 +92,7 @@ pub trait DataConn {
     /// # Arguments
     ///
     /// * `ag`: A mutable reference to an `AsyncGroup` for potentially offloading
-    ///   asynchronous force-back operations.
+    ///   asynchronous force back operations.
     fn force_back(&mut self, ag: &mut AsyncGroup) {}
 
     /// Closes the connection to the external data service.
