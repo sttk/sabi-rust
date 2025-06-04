@@ -137,7 +137,7 @@ where
 /// to external data services, such as databases, file systems, or messaging services.
 ///
 /// It receives configuration for connecting to an external data service and then
-/// creates and supplies `DataConn` object which is connections per session.
+/// creates and supplies `DataConn` instance, representing a single session connection.
 #[allow(unused_variables)] // for rustdoc
 pub trait DataSrc<C>
 where
