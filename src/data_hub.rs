@@ -26,21 +26,21 @@ pub enum DataHubError {
     /// Indicates a failure during the setup process of one or more global data sources.
     /// Contains a map of data source names to their corresponding errors.
     FailToSetupGlobalDataSrcs {
-        /// The map contains errors that occarred in each `DataSrc` object.
+        /// The map contains errors that occurred in each `DataSrc` object.
         errors: HashMap<String, Err>,
     },
 
     /// Indicates a failure during the setup process of one or more session-local data sources.
     /// Contains a map of data source names to their corresponding errors.
     FailToSetupLocalDataSrcs {
-        /// The map contains errors that occarred in each `DataSrc` object.
+        /// The map contains errors that occurred in each `DataSrc` object.
         errors: HashMap<String, Err>,
     },
 
     /// Indicates a failure during the commit process of one or more `DataConn` instances
     /// involved in a transaction. Contains a map of data connection names to their errors.
     FailToCommitDataConn {
-        /// The map contains errors that occarred in each `DataConn` object.
+        /// The map contains errors that occurred in each `DataConn` object.
         errors: HashMap<String, Err>,
     },
 
