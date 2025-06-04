@@ -105,7 +105,7 @@ mod tests_of_async_group {
     use std::sync::{Arc, Mutex};
     use tokio::time;
 
-    const BASE_LINE: u32 = 108;
+    const BASE_LINE: u32 = line!();
 
     #[derive(Debug, PartialEq)]
     enum Reasons {
