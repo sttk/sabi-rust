@@ -50,7 +50,7 @@ impl<'a> AsyncGroup<'_> {
     /// * `Fut`: The type of the future returned by the closure, which must be
     ///   `Future<Output = Result<(), Err>> + Send + 'static`.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `future_fn`: A closure that, when called, returns a future to be executed.
     pub fn add<F, Fut>(&mut self, future_fn: F)

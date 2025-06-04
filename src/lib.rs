@@ -33,7 +33,7 @@ pub trait DataConn {
     /// This method should encapsulate the logic required to finalize the transaction
     /// for the specific external data service.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag`: A mutable reference to an `AsyncGroup` for potentially offloading
     ///   time-consuming commit operations to an asynchronous runtime.
@@ -51,7 +51,7 @@ pub trait DataConn {
     /// For example, after a database commit, a messaging service's `DataConn` might use this
     /// method to send a "transaction completed" message.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag`: A mutable reference to an `AsyncGroup` for potentially offloading
     ///   asynchronous post-commit operations.
@@ -76,7 +76,7 @@ pub trait DataConn {
     /// This method undoes all operations performed since the beginning of the transaction,
     /// restoring the data service to its state before the transaction began.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag`: A mutable reference to an `AsyncGroup` for potentially offloading
     ///   time-consuming rollback operations to an asynchronous runtime.
@@ -89,7 +89,7 @@ pub trait DataConn {
     /// within the same distributed transaction, necessitating a rollback of already committed
     /// changes.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag`: A mutable reference to an `AsyncGroup` for potentially offloading
     ///   asynchronous force back operations.
