@@ -9,7 +9,7 @@ documentation = "https://docs.rs/sabi-rust"
 readme = "README.md"
 repository = "https://github.com/sttk/sabi-rust"
 license = "MIT"
-keywords = ["framework", "logic", "dataaccess", "dax"]
+keywords = ["framework", "logic", "separation", "transaction"]
 categories = []
 
 [lib]
