@@ -20,27 +20,63 @@ static GLOBAL_DATA_SRCS_FIXED: sync::OnceLock<()> = sync::OnceLock::new();
 #[cfg(test)]
 static GLOBAL_DATA_SRCS_FIXED: sync::atomic::AtomicBool = sync::atomic::AtomicBool::new(false);
 
+/// An enum type representing the reasons for errors that can occur within `DataHub` operations.
 #[derive(Debug)]
 pub enum DataHubError {
+    /// Indicates a failure during the setup process of one or more global data sources.
+    /// Contains a map of data source names to their corresponding errors.
     FailToSetupGlobalDataSrcs {
+        /// The map contains errors that occurred in each `DataSrc` object.
         errors: HashMap<String, Err>,
     },
+
+    /// Indicates a failure during the setup process of one or more session-local data sources.
+    /// Contains a map of data source names to their corresponding errors.
     FailToSetupLocalDataSrcs {
+        /// The map contains errors that occurred in each `DataSrc` object.
         errors: HashMap<String, Err>,
     },
+
+    /// Indicates a failure during the commit process of one or more `DataConn` instances
+    /// involved in a transaction. Contains a map of data connection names to their errors.
     FailToCommitDataConn {
+        /// The map contains errors that occurred in each `DataConn` object.
         errors: HashMap<String, Err>,
     },
+
+    /// Indicates that no `DataSrc` was found to create a `DataConn` for the specified name
+    /// and type.
     NoDataSrcToCreateDataConn {
+        /// The name of the data source that could not be found.
         name: String,
+
+        /// The type name of the `DataConn` that was requested.
         data_conn_type: &'static str,
     },
+
+    /// Indicates a failure to cast a retrieved `DataConn` to the expected type.
     FailToCastDataConn {
+        /// The name of the data connection that failed to cast.
         name: String,
+
+        /// The type name to which the `DataConn` attempted to cast.
         cast_to_type: &'static str,
     },
 }
 
+/// Registers a global data source that can be used throughout the application.
+///
+/// This function associates a given `DataSrc` implementation with a unique name.
+/// This name will later be used to retrieve session-specific `DataConn` instances
+/// from this data source.
+///
+/// Global data sources are set up once via the `setup` function and are available
+/// to all `DataHub` instances.
+///
+/// # Parameters
+///
+/// * `name`: The unique name for the data source.
+/// * `ds`: The `DataSrc` instance to register.
 pub fn uses<S, C>(name: &str, ds: S)
 where
     S: DataSrc<C>,
@@ -59,6 +95,22 @@ where
     }
 }
 
+/// Executes the setup process for all globally registered data sources.
+///
+/// This setup typically involves tasks such as creating connection pools,
+/// opening global connections, or performing initial configurations necessary
+/// for creating session-specific connections. The setup can run synchronously
+/// or asynchronously using an `AsyncGroup` if operations are time-consuming.
+///
+/// If any data source fails to set up, this function returns an `Err` with
+/// `DataHubError::FailToSetupGlobalDataSrcs`, containing a map of the names
+/// of the failed data sources and their corresponding `Err` objects. In such a case,
+/// all global data sources that were successfully set up are also closed and dropped.
+///
+/// # Returns
+///
+/// * `Result<(), Err>`: `Ok(())` if all global data sources are set up successfully,
+///   or an `Err` if any setup fails.
 pub fn setup() -> Result<(), Err> {
     #[cfg(not(test))]
     let ok = GLOBAL_DATA_SRCS_FIXED.set(()).is_ok();
@@ -88,6 +140,10 @@ pub fn setup() -> Result<(), Err> {
     Ok(())
 }
 
+/// Executes the close and drop process for all globally registered data sources.
+///
+/// This function cleans up all resources associated with the global data sources
+/// that were registered via `uses` and set up by `setup`.
 pub fn shutdown() {
     #[allow(static_mut_refs)]
     unsafe {
@@ -95,6 +151,18 @@ pub fn shutdown() {
     }
 }
 
+/// Provides an object that, when it goes out of scope,
+/// automatically triggers the `shutdown` process for global data sources.
+///
+/// This leverages Rust's ownership system to ensure global data source cleanup
+/// happens reliably at the end of a scope, typically at the end of the application's
+/// main function or a test.
+///
+/// # Returns
+///
+/// * `impl any::Any`: An opaque object that implements `Drop` and will call `shutdown()`
+///   when dropped.
+#[must_use = "call `shutdown_later()` and bind its result to a variable to defer cleanup until the variable goes out of scope"]
 pub fn shutdown_later() -> impl any::Any {
     AutoShutdown {}
 }
@@ -107,6 +175,18 @@ impl Drop for AutoShutdown {
     }
 }
 
+/// The struct that acts as a central hub for data input/output operations, integrating
+/// multiple *Data* traits (which are passed to business logic functions as their arguments) with
+/// `DataAcc` traits (which implement default data I/O methods for external services).
+///
+/// It facilitates data access by providing `DataConn` objects, created from
+/// both global data sources (registered via the global `uses` function) and
+/// session-local data sources (registered via `DataHub::uses` method).
+///
+/// The `DataHub` is capable of performing aggregated transactional operations
+/// on all `DataConn` objects created from its registered `DataSrc` instances.
+/// The `run` method executes logic without transaction control, while the `txn`
+/// method executes logic within a controlled transaction.
 pub struct DataHub {
     local_data_src_list: DataSrcList,
     data_src_map: hashbrown::HashMap<String, *mut DataSrcContainer>,
@@ -116,6 +196,11 @@ pub struct DataHub {
 }
 
 impl DataHub {
+    /// Creates a new `DataHub` instance.
+    ///
+    /// Upon creation, it attempts to "fix" the global data sources (making them immutable
+    /// for further registration) and copies references to already set-up global data
+    /// sources into its internal map for quick access.
     pub fn new() -> Self {
         #[cfg(not(test))]
         let _ = GLOBAL_DATA_SRCS_FIXED.set(());
@@ -138,6 +223,19 @@ impl DataHub {
         }
     }
 
+    /// Registers a session-local data source with this `DataHub` instance.
+    ///
+    /// This method is similar to the global `uses` function but registers a data source
+    /// that is local to this specific `DataHub` session. Once the `DataHub`'s state is
+    /// "fixed" (after `begin` is called internally by `run` or `txn`), further calls
+    /// to `uses` are ignored. However, after `run` or `txn` completes, the `DataHub`'s
+    /// `fixed` state is reset, allowing for new data sources to be registered or removed
+    /// via `disuses` in subsequent operations.
+    ///
+    /// # Parameters
+    ///
+    /// * `name`: The unique name for the local data source.
+    /// * `ds`: The `DataSrc` instance to register.
     pub fn uses<S, C>(&mut self, name: &str, ds: S)
     where
         S: DataSrc<C>,
@@ -150,6 +248,14 @@ impl DataHub {
         self.local_data_src_list.add_data_src(name.to_string(), ds);
     }
 
+    /// Unregisters and drops a session-local data source by its name.
+    ///
+    /// This method removes a data source that was previously registered via `DataHub::uses`.
+    /// This operation is ignored if the `DataHub`'s state is already "fixed".
+    ///
+    /// # Parameters
+    ///
+    /// * `name`: The name of the local data source to unregister.
     pub fn disuses(&mut self, name: &str) {
         if self.fixed {
             return;
@@ -262,7 +368,22 @@ impl DataHub {
         self.fixed = false;
     }
 
-    pub fn run<F>(&mut self, f: F) -> Result<(), Err>
+    /// Executes a given logic function without transaction control.
+    ///
+    /// This method sets up local data sources, runs the provided closure,
+    /// and then cleans up the `DataHub`'s session resources. It does not
+    /// perform commit or rollback operations.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+    ///   It takes a mutable reference to `DataHub` as an argument.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), Err>`: The result of the logic function's execution,
+    ///   or an error if the `DataHub`'s setup fails.
+    pub fn run<F>(&mut self, logic_fn: F) -> Result<(), Err>
     where
         F: FnOnce(&mut DataHub) -> Result<(), Err>,
     {
@@ -272,12 +393,29 @@ impl DataHub {
             return r;
         }
 
-        let r = f(self);
+        let r = logic_fn(self);
         self.end();
         r
     }
 
-    pub fn txn<F>(&mut self, f: F) -> Result<(), Err>
+    /// Executes a given logic function within a transaction.
+    ///
+    /// This method first sets up local data sources, then runs the provided closure.
+    /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
+    /// or if the logic function itself returns an `Err`, a rollback operation
+    /// is performed. On successful commit, `post_commit` actions are executed.
+    /// Finally, it cleans up the `DataHub`'s session resources.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+    ///   It takes a mutable reference to `DataHub` as an argument.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), Err>`: The final result of the transaction (success or failure of logic/commit),
+    ///   or an error if the `DataHub`'s setup fails.
+    pub fn txn<F>(&mut self, logic_fn: F) -> Result<(), Err>
     where
         F: FnOnce(&mut DataHub) -> Result<(), Err>,
     {
@@ -287,7 +425,7 @@ impl DataHub {
             return r;
         }
 
-        let mut r = f(self);
+        let mut r = logic_fn(self);
 
         if r.is_ok() {
             r = self.commit();
@@ -303,6 +441,26 @@ impl DataHub {
         r
     }
 
+    /// Retrieves a mutable reference to a `DataConn` object by name, creating it if necessary.
+    ///
+    /// This is the core method used by `DataAcc` implementations to obtain connections
+    /// to external data services. It first checks if a `DataConn` with the given name
+    /// already exists in the `DataHub`'s session. If not, it attempts to find a
+    /// corresponding `DataSrc` and create a new `DataConn` from it.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `C`: The concrete type of `DataConn` expected.
+    ///
+    /// # Parameters
+    ///
+    /// * `name`: The name of the data source/connection to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<&mut C, Err>`: A mutable reference to the `DataConn` instance if successful,
+    ///   or an `Err` if the data source is not found, or if the retrieved/created `DataConn`
+    ///   cannot be cast to the specified type `C`.
     pub fn get_data_conn<C>(&mut self, name: &str) -> Result<&mut C, Err>
     where
         C: DataConn + 'static,

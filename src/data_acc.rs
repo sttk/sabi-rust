@@ -5,7 +5,36 @@
 use crate::{DataConn, DataHub};
 use errs::Err;
 
+/// The trait that aggregates data access operations to external data services
+/// into logical units, with methods providing default implementations.
+///
+/// The organization of these units is flexible; it can be per data service, per
+/// functional area, or any other meaningful grouping. Implementations of this trait
+/// use the `get_data_conn` method to obtain a `DataConn` object by the name specified
+/// during data source registration (via the global `uses` function or `DataHub::uses` method).
+/// This `DataConn` then facilitates data access operations to the associated data service.
+///
+/// Methods declared in `DataAcc` traits can be overridden by *Data* traits which will be
+/// passed to logic functions as their arguments using the `override_macro` crate.
+/// This design allows for the separation of data input/output logic into specific `DataAcc`
+/// implementations, while `DataHub` aggregates all these methods.
+/// Logic functions, however, only see the methods declared in the *Data* trait,
+/// enabling a clear separation and aggregation of data input/output methods.
 pub trait DataAcc {
+    /// Retrieves a mutable reference to a `DataConn` object associated with the given name.
+    ///
+    /// This method is used in default method implementations of `DataAcc` to obtain connections to specific
+    /// external data services to perform data access operations.
+    ///
+    /// # Parameters
+    ///
+    /// * `name`: The name of the data source, as registered with `uses` (global or `DataHub`'s method).
+    ///
+    /// # Returns
+    ///
+    /// * `Result<&mut C, Err>`: A mutable reference to the `DataConn` if found and castable
+    ///   to the requested type `C`, or an `Err` if the data source is not found,
+    ///   or the `DataConn` cannot be cast to the specified type.
     fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> Result<&mut C, Err>;
 }
 
