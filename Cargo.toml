@@ -1,6 +1,6 @@
 [package]
 name = "sabi-rust"
-version = "0.0.2"
+version = "0.1.0"
 authors = ["Takayuki Sato <sttk.xslet@gmail.com>"]
 edition = "2021"
 rust-version = "1.85.1"
