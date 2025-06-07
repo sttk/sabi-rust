@@ -24,19 +24,19 @@ or by functional concern.
 
 This is achieved through the following mechanism:
 * A `DataHub` struct aggregates all data access methods.
-`DataAcc` derived traits are attached to `DataHub`, giving `DataHub` the implementations of
-the data access methods.
+  `DataAcc` derived traits are attached to `DataHub`, giving `DataHub` the implementations of
+  the data access methods.
 * Additionally, the data access traits that logic functions take as arguments are also attached
-to `DataHub`. But that alone wouldn't work in Rust because methods aren't overridden across traits,
-even if they have the same name and arguments, leaving the logic-facing data access trait methods
-without implementations.
+  to `DataHub`. But that alone wouldn't work in Rust because methods aren't overridden across traits,
+  even if they have the same name and arguments, leaving the logic-facing data access trait methods
+  without implementations.
 * This is where the `override_macro` crate comes in: it adds the method implementations of the
-logic-facing data access traits by calling the corresponding methods from the `DataAcc` derived traits.
-(While it's possible to implement this by hand without `override_macro` crate, it becomes very
-cumbersome for a large number of methods.)
+  logic-facing data access traits by calling the corresponding methods from the `DataAcc` derived traits.
+  (While it's possible to implement this by hand without `override_macro` crate, it becomes very
+  cumbersome for a large number of methods.)
 
 
-## Install
+## Installation
 
 In Cargo.toml, write this crate as a dependency:
 
