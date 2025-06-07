@@ -35,65 +35,41 @@
 //!
 //! // (1) Implements DataSrc(s) and DataConn(s).
 //!
-//! struct CertainGlobalDataSrc { /* ... */ }
+//! struct FooDataSrc { /* ... */ }
 //!
-//! impl DataSrc<CertainGlobalDataConn> for CertainGlobalDataSrc {
+//! impl DataSrc<FooDataConn> for FooDataSrc {
 //!     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
 //!     fn close(&mut self) { /* ... */ }
-//!     fn create_data_conn(&mut self) -> Result<Box<CertainGlobalDataConn>, Err> {
-//!         Ok(Box::new(CertainGlobalDataConn{ /* ... */ }))
+//!     fn create_data_conn(&mut self) -> Result<Box<FooDataConn>, Err> {
+//!         Ok(Box::new(FooDataConn{ /* ... */ }))
 //!     }
 //! }
 //!
-//! struct CertainGlobalDataConn { /* ... */ }
+//! struct FooDataConn { /* ... */ }
 //!
-//! impl CertainGlobalDataConn { /* .. */ }
+//! impl FooDataConn { /* ... */ }
 //!
-//! impl DataConn for CertainGlobalDataConn {
+//! impl DataConn for FooDataConn {
 //!     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
 //!     fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
 //!     fn close(&mut self) { /* ... */ }
 //! }
 //!
-//! struct GettingDataSrc { /* ... */ }
+//! struct BarDataSrc { /* ... */ }
 //!
-//! impl DataSrc<GettingDataConn> for GettingDataSrc {
+//! impl DataSrc<BarDataConn> for BarDataSrc {
 //!     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
 //!     fn close(&mut self) { /* ... */ }
-//!     fn create_data_conn(&mut self) -> Result<Box<GettingDataConn>, Err> {
-//!         Ok(Box::new(GettingDataConn{ /* ... */ }))
+//!     fn create_data_conn(&mut self) -> Result<Box<BarDataConn>, Err> {
+//!         Ok(Box::new(BarDataConn{ /* ... */ }))
 //!     }
 //! }
 //!
-//! struct GettingDataConn { /* ... */ }
+//! struct BarDataConn { /* ... */ }
 //!
-//! impl GettingDataConn {
-//!     fn get_text(&self) -> Result<String, Err> { /* ... */ Ok("...".to_string()) }
-//! }
+//! impl BarDataConn { /* ... */ }
 //!
-//! impl DataConn for GettingDataConn {
-//!     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
-//!     fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
-//!     fn close(&mut self) { /* ... */ }
-//! }
-//!
-//! struct SettingDataSrc { /* ... */ }
-//!
-//! impl DataSrc<SettingDataConn> for SettingDataSrc {
-//!     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
-//!     fn close(&mut self) { /* ... */ }
-//!     fn create_data_conn(&mut self) -> Result<Box<SettingDataConn>, Err> {
-//!         Ok(Box::new(SettingDataConn{ /* ... */ }))
-//!     }
-//! }
-//!
-//! struct SettingDataConn { /* ... */ }
-//!
-//! impl SettingDataConn {
-//!     fn set_text(&self, text: String) -> Result<(), Err> { /* ... */ Ok(()) }
-//! }
-//!
-//! impl DataConn for SettingDataConn {
+//! impl DataConn for BarDataConn {
 //!     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
 //!     fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
 //!     fn close(&mut self) { /* ... */ }
@@ -116,44 +92,48 @@
 //! // (3) Implements DataAcc(s)
 //!
 //! #[overridable]
-//! trait CertainGlobalDataAcc: DataAcc { /* ... */ }
-//!
-//! #[overridable]
 //! trait GettingDataAcc: DataAcc {
 //!     fn get_text(&mut self) -> Result<String, Err> {
-//!         let conn = self.get_data_conn::<GettingDataConn>("bar")?;
-//!         conn.get_text()
+//!         let conn = self.get_data_conn::<FooDataConn>("foo")?;
+//!         /* ... */
+//!         Ok("output text".to_string())
 //!     }
 //! }
 //!
 //! #[overridable]
 //! trait SettingDataAcc: DataAcc {
 //!     fn set_text(&mut self, text: String) -> Result<(), Err> {
-//!         let conn = self.get_data_conn::<SettingDataConn>("baz")?;
-//!         conn.set_text(text)
+//!         let conn = self.get_data_conn::<BarDataConn>("bar")?;
+//!         /* ... */
+//!         Ok(())
 //!     }
 //! }
 //!
 //! // (4) Consolidate data traits and DataAcc traits to a DataHub.
 //!
-//! impl CertainGlobalDataAcc for DataHub {}
 //! impl GettingDataAcc for DataHub {}
 //! impl SettingDataAcc for DataHub {}
 //!
-//! #[override_with(CertainGlobalDataAcc, GettingDataAcc, SettingDataAcc)]
+//! #[override_with(GettingDataAcc, SettingDataAcc)]
 //! impl MyData for DataHub {}
 //!
 //! // (5) Use the logic functions and the DataHub
 //!
 //! fn main() {
-//!     uses("foo", CertainGlobalDataSrc{});
+//!     // Register global DataSrc
+//!     uses("foo", FooDataSrc{});
+//!     // Set up the sabi framework
 //!     let _ = setup().unwrap();
+//!     // Automatically shut down DataSrc when the application exits
 //!     let _later = shutdown_later();
 //!
+//!     // Create a new instance of DataHub
 //!     let mut data = DataHub::new();
-//!     data.uses("bar", GettingDataSrc{});
-//!     data.uses("baz", SettingDataSrc{});
+//!     // Register session-local DataSrc with DataHub
+//!     data.uses("bar", BarDataSrc{});
 //!
+//!     // Execute application logic within a transaction
+//!     // my_logic performs data operations via DataHub
 //!     let _ = data.txn(my_logic).unwrap();
 //! }
 //! ```
