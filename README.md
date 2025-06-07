@@ -99,7 +99,7 @@ impl DataConn for BarDataConn {
 }
 ```
 
-### 2. Implementing logic Functions and data traits
+### 2. Implementing logic functions and data traits
 
 Define traits and functions that express your application logic.
 These traits are independent of specific data source implementations, improving testability.
@@ -213,7 +213,7 @@ fn main() {
 }
 ```
 
-## Supporting Rust versions
+## Supported Rust versions
 
 This crate supports Rust 1.85.1 or later.
 
