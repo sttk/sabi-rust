@@ -83,7 +83,7 @@ where
     C: DataConn + 'static,
 {
     #[cfg(not(test))]
-    let fixed = GLOBAL_DATA_SRCS_FIXED.get().is_none();
+    let fixed = GLOBAL_DATA_SRCS_FIXED.get().is_some();
     #[cfg(test)]
     let fixed = GLOBAL_DATA_SRCS_FIXED.load(sync::atomic::Ordering::Relaxed);
 
