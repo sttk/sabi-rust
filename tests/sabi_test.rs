@@ -1,45 +1,67 @@
 mod data_src {
-    use sabi::{AsyncGroup, DataSrc, DataConn};
     use errs::Err;
+    use sabi::{AsyncGroup, DataConn, DataSrc};
 
-    pub struct FooDataSrc { /* ... */ }
+    pub struct FooDataSrc {/* ... */}
 
     impl DataSrc<FooDataConn> for FooDataSrc {
-        fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
-        fn close(&mut self) { /* ... */ }
+        fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            /* ... */
+            Ok(())
+        }
+        fn close(&mut self) { /* ... */
+        }
         fn create_data_conn(&mut self) -> Result<Box<FooDataConn>, Err> {
             Ok(Box::new(FooDataConn{ /* ... */ }))
         }
     }
 
-    pub struct FooDataConn { /* ... */ }
+    pub struct FooDataConn {/* ... */}
 
-    impl FooDataConn { /* ... */ }
-
-    impl DataConn for FooDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) { /* ... */ }
-        fn close(&mut self) { /* ... */ }
+    impl FooDataConn {
+        /* ... */
     }
 
-    pub struct BarDataSrc { /* ... */ }
+    impl DataConn for FooDataConn {
+        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            /* ... */
+            Ok(())
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) { /* ... */
+        }
+        fn close(&mut self) { /* ... */
+        }
+    }
+
+    pub struct BarDataSrc {/* ... */}
 
     impl DataSrc<BarDataConn> for BarDataSrc {
-        fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
-        fn close(&mut self) { /* ... */ }
+        fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            /* ... */
+            Ok(())
+        }
+        fn close(&mut self) { /* ... */
+        }
         fn create_data_conn(&mut self) -> Result<Box<BarDataConn>, Err> {
             Ok(Box::new(BarDataConn{ /* ... */ }))
         }
     }
 
-    pub struct BarDataConn { /* ... */ }
+    pub struct BarDataConn {/* ... */}
 
-    impl BarDataConn { /* ... */ }
+    impl BarDataConn {
+        /* ... */
+    }
 
     impl DataConn for BarDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) { /* ... */ }
-        fn close(&mut self) { /* ... */ }
+        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            /* ... */
+            Ok(())
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) { /* ... */
+        }
+        fn close(&mut self) { /* ... */
+        }
     }
 }
 
@@ -55,17 +77,17 @@ mod logic_layer {
 
     pub fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
         let text = data.get_text()?;
-        let _ = data.set_text(text)?;
+        data.set_text(text)?;
         Ok(())
     }
 }
 
 mod data_access_layer {
-    use sabi::DataAcc;
     use errs::Err;
     use override_macro::overridable;
+    use sabi::DataAcc;
 
-    use crate::data_src::{FooDataConn, BarDataConn};
+    use crate::data_src::{BarDataConn, FooDataConn};
 
     #[overridable]
     pub trait GettingDataAcc: DataAcc {
@@ -88,12 +110,12 @@ mod data_access_layer {
 }
 
 mod hub {
-    use sabi::DataHub;
-    use override_macro::override_with;
     use errs::Err;
+    use override_macro::override_with;
+    use sabi::DataHub;
 
-    use crate::logic_layer::MyData;
     use crate::data_access_layer::{GettingDataAcc, SettingDataAcc};
+    use crate::logic_layer::MyData;
 
     impl GettingDataAcc for DataHub {}
     impl SettingDataAcc for DataHub {}
@@ -103,15 +125,15 @@ mod hub {
 }
 
 mod app {
-    use sabi::{uses, setup, shutdown_later, DataHub};
+    use sabi::{setup, shutdown_later, uses, DataHub};
 
-    use crate::data_src::{FooDataSrc, BarDataSrc};
+    use crate::data_src::{BarDataSrc, FooDataSrc};
     use crate::logic_layer::my_logic;
 
     #[test]
-    fn main_test() {
+    fn test_datahub_transaction_flow() {
         // Register global DataSrc
-        uses("foo", FooDataSrc{});
+        uses("foo", FooDataSrc {});
         // Set up the sabi framework
         let _ = setup().unwrap();
         // Automatically shut down DataSrc when the application exits
@@ -120,10 +142,10 @@ mod app {
         // Create a new instance of DataHub
         let mut data = DataHub::new();
         // Register session-local DataSrc with DataHub
-        data.uses("bar", BarDataSrc{});
+        data.uses("bar", BarDataSrc {});
 
         // Execute application logic within a transaction
         // my_logic performs data operations via DataHub
-        let _ = data.txn(my_logic).unwrap();
+        assert!(data.txn(my_logic).is_ok());
     }
 }
