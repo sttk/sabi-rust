@@ -192,7 +192,7 @@ use sabi::DataHub;
 use errs::Err;
 
 use crate::data_src::{FooDataSrc, BarDataSrc};
-use crate::logic_layer::myLlogic;
+use crate::logic_layer::my_logic;
 
 fn main() {
     // Register global DataSrc
