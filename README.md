@@ -58,7 +58,7 @@ transactional operations.
 use sabi::{AsyncGroup, DataSrc, DataConn};
 use errs::Err;
 
-struct FooDataSrc { /* ... */ }
+pub struct FooDataSrc { /* ... */ }
 
 impl DataSrc<FooDataConn> for FooDataSrc {
     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
@@ -68,7 +68,7 @@ impl DataSrc<FooDataConn> for FooDataSrc {
     }
 }
 
-struct FooDataConn { /* ... */ }
+pub struct FooDataConn { /* ... */ }
 
 impl FooDataConn { /* ... */ }
 
@@ -78,7 +78,7 @@ impl DataConn for FooDataConn {
     fn close(&mut self) { /* ... */ }
 }
 
-struct BarDataSrc { /* ... */ }
+pub struct BarDataSrc { /* ... */ }
 
 impl DataSrc<BarDataConn> for BarDataSrc {
     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
@@ -88,7 +88,7 @@ impl DataSrc<BarDataConn> for BarDataSrc {
     }
 }
 
-struct BarDataConn { /* ... */ }
+pub struct BarDataConn { /* ... */ }
 
 impl BarDataConn { /* ... */ }
 
@@ -110,12 +110,12 @@ use errs::Err;
 use override_macro::overridable;
 
 #[overridable]
-trait MyData {
+pub trait MyData {
     fn get_text(&mut self) -> Result<String, Err>;
     fn set_text(&mut self, text: String) -> Result<(), Err>;
 }
 
-fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
+pub fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
     let text = data.get_text()?;
     let _ = data.set_text(text)?;
     Ok(())
@@ -137,7 +137,7 @@ use override_macro::overridable;
 use crate::data_src::{FooDataConn, BarDataConn};
 
 #[overridable]
-trait GettingDataAcc: DataAcc {
+pub trait GettingDataAcc: DataAcc {
     fn get_text(&mut self) -> Result<String, Err> {
         let conn = self.get_data_conn::<FooDataConn>("foo")?;
         /* ... */
@@ -146,7 +146,7 @@ trait GettingDataAcc: DataAcc {
 }
 
 #[overridable]
-trait SettingDataAcc: DataAcc {
+pub trait SettingDataAcc: DataAcc {
     fn set_text(&mut self, text: String) -> Result<(), Err> {
         let conn = self.get_data_conn::<BarDataConn>("bar")?;
         /* ... */
@@ -167,6 +167,7 @@ will be provided by the corresponding methods of the `DataAcc` derived traits.
 ```rust
 use sabi::DataHub;
 use override_macro::override_with;
+use errs::Err;
 
 use crate::logic_layer::MyData;
 use crate::data_access_layer::{GettingDataAcc, SettingDataAcc};
@@ -189,7 +190,6 @@ This automatically handles transaction commits and rollbacks.
 
 ```rust
 use sabi::{uses, setup, shutdown_later, DataHub};
-use errs::Err;
 
 use crate::data_src::{FooDataSrc, BarDataSrc};
 use crate::logic_layer::my_logic;
