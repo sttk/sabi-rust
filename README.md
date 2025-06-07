@@ -19,7 +19,7 @@ This trait declares all the data access methods that specific logic will use.
 
 On the data access layer side, implementations can be provided in the form of default methods
 on `DataAcc` derived traits.
-This allows for implementation in any arbitrary unit —- whether by external data service, by table,
+This allows for implementation in any arbitrary unit — whether by external data service, by table,
 or by functional concern.
 
 This is achieved through the following mechanism:
@@ -141,7 +141,7 @@ trait GettingDataAcc: DataAcc {
     fn get_text(&mut self) -> Result<String, Err> {
         let conn = self.get_data_conn::<FooDataConn>("foo")?;
         /* ... */
-        "output text".to_string()
+        Ok("output text".to_string())
     }
 }
 
