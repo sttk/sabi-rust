@@ -40,7 +40,7 @@ cumbersome for a large number of methods.)
 
 In Cargo.toml, write this crate as a dependency:
 
-```
+```toml
 [dependencies]
 sabi = "0.0.2"
 ```
@@ -188,7 +188,7 @@ function (`my_logic`) within a transaction.
 This automatically handles transaction commits and rollbacks.
 
 ```rust
-use sabi::DataHub;
+use sabi::{uses, setup, shutdown_later, DataHub};
 use errs::Err;
 
 use crate::data_src::{FooDataSrc, BarDataSrc};
@@ -217,7 +217,7 @@ fn main() {
 
 This crate supports Rust 1.85.1 or later.
 
-```
+```bash
 % cargo msrv find
   [Meta]   cargo-msrv 0.18.4
         ~~~~~~(omission)~~~~~
