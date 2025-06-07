@@ -204,7 +204,7 @@ fn main() {
 
     // Create a new instance of DataHub
     let mut data = DataHub::new();
-    // Register specific DataSrc with DataHub
+    // Register session-local DataSrc with DataHub
     data.uses("bar", BarDataSrc{});
 
     // Execute application logic within a transaction
