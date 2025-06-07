@@ -2,6 +2,162 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
+//! This crate provides a small framework for Rust, designed to separate application logic
+//! from data access.
+//!
+//! In this framework, the logic exclusively takes a data access trait as its argument,
+//! and all necessary data access is defined by a single data access trait.
+//! Conversely, the concrete implementations of data access methods are provided as default methods
+//! of DataAcc derived traits, allowing for flexible grouping, often by data service.
+//!
+//! The `DataHub` bridges these two parts.
+//! It attaches all DataAcc derived traits, and then, using the
+//! [override_macro](https://github.com/sttk/override_macro-rust) crate, it overrides
+//! the methods of the data access trait used by the logic to point to the implementations
+//! found in the `DataAcc` derived traits.
+//! This clever use of this macro compensates for Rust's lack of native method overriding,
+//! allowing the logic to interact with data through an abstract interface.
+//!
+//! Furthermore, the `DataHub` provides transaction control for data operations performed
+//! within the logic.
+//! You can execute logic functions with transaction control using the `DataHub#txn` method,
+//! or without it using the `DataHub#run` method.
+//! This framework brings clear separation and robustness to Rust application design.
+//!
+//! ## Example
+//!
+//! The following is a sample code using this framework:
+//!
+//! ```
+//! use sabi::{uses, setup, shutdown_later, AsyncGroup, DataSrc, DataConn, DataAcc, DataHub};
+//! use errs::Err;
+//! use override_macro::{overridable, override_with};
+//!
+//! // (1) Implements DataSrc(s) and DataConn(s).
+//!
+//! struct CertainGlobalDataSrc { /* ... */ }
+//!
+//! impl DataSrc<CertainGlobalDataConn> for CertainGlobalDataSrc {
+//!     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+//!     fn close(&mut self) { /* ... */ }
+//!     fn create_data_conn(&mut self) -> Result<Box<CertainGlobalDataConn>, Err> {
+//!         Ok(Box::new(CertainGlobalDataConn{ /* ... */ }))
+//!     }
+//! }
+//!
+//! struct CertainGlobalDataConn { /* ... */ }
+//!
+//! impl CertainGlobalDataConn { /* .. */ }
+//!
+//! impl DataConn for CertainGlobalDataConn {
+//!     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+//!     fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
+//!     fn close(&mut self) { /* ... */ }
+//! }
+//!
+//! struct GettingDataSrc { /* ... */ }
+//!
+//! impl DataSrc<GettingDataConn> for GettingDataSrc {
+//!     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+//!     fn close(&mut self) { /* ... */ }
+//!     fn create_data_conn(&mut self) -> Result<Box<GettingDataConn>, Err> {
+//!         Ok(Box::new(GettingDataConn{ /* ... */ }))
+//!     }
+//! }
+//!
+//! struct GettingDataConn { /* ... */ }
+//!
+//! impl GettingDataConn {
+//!     fn get_text(&self) -> Result<String, Err> { /* ... */ Ok("...".to_string()) }
+//! }
+//!
+//! impl DataConn for GettingDataConn {
+//!     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+//!     fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
+//!     fn close(&mut self) { /* ... */ }
+//! }
+//!
+//! struct SettingDataSrc { /* ... */ }
+//!
+//! impl DataSrc<SettingDataConn> for SettingDataSrc {
+//!     fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+//!     fn close(&mut self) { /* ... */ }
+//!     fn create_data_conn(&mut self) -> Result<Box<SettingDataConn>, Err> {
+//!         Ok(Box::new(SettingDataConn{ /* ... */ }))
+//!     }
+//! }
+//!
+//! struct SettingDataConn { /* ... */ }
+//!
+//! impl SettingDataConn {
+//!     fn set_text(&self, text: String) -> Result<(), Err> { /* ... */ Ok(()) }
+//! }
+//!
+//! impl DataConn for SettingDataConn {
+//!     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+//!     fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
+//!     fn close(&mut self) { /* ... */ }
+//! }
+//!
+//! // (2) Implements logic functions and data traits
+//!
+//! #[overridable]
+//! trait MyData {
+//!     fn get_text(&mut self) -> Result<String, Err>;
+//!     fn set_text(&mut self, text: String) -> Result<(), Err>;
+//! }
+//!
+//! fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
+//!     let text = data.get_text()?;
+//!     let _ = data.set_text(text)?;
+//!     Ok(())
+//! }
+//!
+//! // (3) Implements DataAcc(s)
+//!
+//! #[overridable]
+//! trait CertainGlobalDataAcc: DataAcc { /* ... */ }
+//!
+//! #[overridable]
+//! trait GettingDataAcc: DataAcc {
+//!     fn get_text(&mut self) -> Result<String, Err> {
+//!         let conn = self.get_data_conn::<GettingDataConn>("bar")?;
+//!         conn.get_text()
+//!     }
+//! }
+//!
+//! #[overridable]
+//! trait SettingDataAcc: DataAcc {
+//!     fn set_text(&mut self, text: String) -> Result<(), Err> {
+//!         let conn = self.get_data_conn::<SettingDataConn>("baz")?;
+//!         conn.set_text(text)
+//!     }
+//! }
+//!
+//! // (4) Consolidate data traits and DataAcc traits to a DataHub.
+//!
+//! impl CertainGlobalDataAcc for DataHub {}
+//! impl GettingDataAcc for DataHub {}
+//! impl SettingDataAcc for DataHub {}
+//!
+//! #[override_with(CertainGlobalDataAcc, GettingDataAcc, SettingDataAcc)]
+//! impl MyData for DataHub {}
+//!
+//! // (5) Use the logic functions and the DataHub
+//!
+//! fn main() {
+//!     uses("foo", CertainGlobalDataSrc{});
+//!     let _ = setup().unwrap();
+//!     let _later = shutdown_later();
+//!
+//!     let mut data = DataHub::new();
+//!     data.uses("bar", GettingDataSrc{});
+//!     data.uses("baz", SettingDataSrc{});
+//!
+//!     let _ = data.txn(my_logic).unwrap();
+//! }
+//! ```
+
 use std::any;
 
 use errs::Err;
