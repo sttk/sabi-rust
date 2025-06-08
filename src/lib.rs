@@ -123,9 +123,9 @@
 //!     // Register global DataSrc.
 //!     uses("foo", FooDataSrc{});
 //!     // Set up the sabi framework.
-//!     // _shutdown_later automatically closes and drops global DataSrc at the end of the scope.
+//!     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
 //!     // NOTE: Don't write as `let _ =` because the return variable is dropped immediately.
-//!     let _shutdown_later = setup().unwrap();
+//!     let _auto_shutdown = setup().unwrap();
 //!
 //!     // Create a new instance of DataHub.
 //!     let mut data = DataHub::new();
@@ -150,7 +150,7 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 pub use data_acc::DataAcc;
-pub use data_hub::{setup, uses, DataHub, DataHubError};
+pub use data_hub::{setup, uses, AutoShutdown, DataHub, DataHubError};
 
 /// The trait that abstracts a connection per session to an external data service,
 /// such as a database, file system, or messaging service.

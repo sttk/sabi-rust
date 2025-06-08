@@ -484,7 +484,7 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                if let Ok(_shutdown_later) = setup() {
+                if let Ok(_auto_shutdown) = setup() {
                     let mut hub = DataHub::new();
                     hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
                     hub.uses("bar", BarDataSrc::new(2, logger.clone()));

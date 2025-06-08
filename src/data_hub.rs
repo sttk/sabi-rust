@@ -114,14 +114,14 @@ where
 /// automatically cleaned up when the return value goes out of scope.
 ///
 /// **NOTE:** Do not receive the `Result` or its inner object into an anonymous
-/// variable using `let _ =`.
+/// variable using `let _ = ...`.
 /// If you do, the inner object is dropped immediately at that point.
 ///
 /// # Returns
 ///
-/// * `Result<impl any::Any, Err>`: `impl any::Any` if all global data sources are
+/// * `Result<AutoShutdown, Err>`: An `AutoShutdown` if all global data sources are
 ///   set up successfully, or an `Err` if any setup fails.
-pub fn setup() -> Result<impl any::Any, Err> {
+pub fn setup() -> Result<AutoShutdown, Err> {
     #[cfg(not(test))]
     let ok = GLOBAL_DATA_SRCS_FIXED.set(()).is_ok();
     #[cfg(test)]
@@ -151,7 +151,16 @@ pub fn setup() -> Result<impl any::Any, Err> {
     Ok(AutoShutdown {})
 }
 
-struct AutoShutdown {}
+/// A utility struct that ensure to close and drop global data sources when it goes out scope.
+///
+/// This struct implements the `Drop` trait, and its `drop` method handles the closing and
+/// dropping of registered global data sources.
+/// Therefore this ensures that these operations are automatically executed at the end of
+/// the scope.
+///
+/// **NOTE:** Do not receive this an instance of this struct into an anonymous variable
+/// (`let _ = ...`), because an anonymous variable dropped immediately at that point.
+pub struct AutoShutdown {}
 
 impl Drop for AutoShutdown {
     fn drop(&mut self) {
@@ -1174,7 +1183,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 #[allow(static_mut_refs)]
                 unsafe {
                     let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
@@ -1243,7 +1252,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
 
                 assert!(hub.local_data_src_list.not_setup_head().is_null());
@@ -1338,7 +1347,7 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
 
                 let ptr = hub.local_data_src_list.not_setup_head();
@@ -1455,7 +1464,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
 
                 hub.uses("baz", SyncDataSrc::new(3, logger.clone(), false, false));
@@ -1531,7 +1540,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), true, false));
@@ -1600,7 +1609,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(1, logger.clone(), true, false));
                 hub.uses("qux", SyncDataSrc::new(2, logger.clone(), false, false));
@@ -1669,7 +1678,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -1794,7 +1803,7 @@ mod tests_data_hub {
 
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
@@ -1863,7 +1872,7 @@ mod tests_data_hub {
 
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
@@ -1955,7 +1964,7 @@ mod tests_data_hub {
 
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
@@ -2031,7 +2040,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2075,7 +2084,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, true));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2187,7 +2196,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, true));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2298,7 +2307,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, true));
@@ -2412,7 +2421,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, true));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2525,7 +2534,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2618,7 +2627,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2716,7 +2725,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_shutdown_later) = setup() {
+            if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
