@@ -555,11 +555,8 @@ mod tests_of_data_acc {
                 *logger.lock().unwrap(),
                 vec![
                     "FooDataSrc 1 failed to setup",
-                    "BarDataSrc 2 setupped",
-                    "FooDataSrc 1 dropped",
-                    "BarDataSrc.text = ",
-                    "BarDataSrc 2 closed",
                     "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 dropped",
                 ],
             );
         }
@@ -854,11 +851,8 @@ mod tests_of_data_acc {
                 *logger.lock().unwrap(),
                 vec![
                     "FooDataSrc 1 failed to setup",
-                    "BarDataSrc 2 setupped",
-                    "FooDataSrc 1 dropped",
-                    "BarDataSrc.text = ",
-                    "BarDataSrc 2 closed",
                     "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 dropped",
                 ],
             );
         }

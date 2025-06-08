@@ -274,22 +274,22 @@ impl DataSrcList {
             ag.name = unsafe { &(*ptr).name };
             if let Err(err) = setup_fn(ptr, &mut ag) {
                 err_map.insert(ag.name.to_string(), err);
+                break;
             }
             ptr = next;
         }
 
         ag.join_and_put_errors_into(&mut err_map);
 
-        let mut ptr = self.not_setup_head;
-        while !ptr.is_null() {
+        let last_ptr_may_setup = ptr;
+
+        ptr = self.not_setup_head;
+        while !ptr.is_null() && ptr != last_ptr_may_setup {
             let next = unsafe { (*ptr).next };
             let name = unsafe { &(*ptr).name };
-            self.remove_container_ptr_not_setup(ptr);
             if !err_map.contains_key(name) {
+                self.remove_container_ptr_not_setup(ptr);
                 self.append_container_ptr_did_setup(ptr);
-            } else {
-                let drop_fn = unsafe { (*ptr).drop_fn };
-                drop_fn(ptr);
             }
             ptr = next;
         }
@@ -403,13 +403,19 @@ mod tests_of_data_src {
     }
 
     impl DataSrc<AsyncDataConn> for AsyncDataSrc {
-        fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.will_fail {
-                logger.push(format!("AsyncDataSrc {} failed to setup", self.id));
-                return Err(Err::new("XXX".to_string()));
-            }
-            logger.push(format!("AsyncDataSrc {} setupped", self.id));
+        fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> {
+            let logger = self.logger.clone();
+            let will_fail = self.will_fail;
+            let id = self.id;
+            ag.add(async move || {
+                let mut logger = logger.lock().unwrap();
+                if will_fail {
+                    logger.push(format!("AsyncDataSrc {} failed to setup", id));
+                    return Err(Err::new("XXX".to_string()));
+                }
+                logger.push(format!("AsyncDataSrc {} setupped", id));
+                Ok(())
+            });
             Ok(())
         }
 
@@ -1271,8 +1277,8 @@ mod tests_of_data_src {
             assert_eq!(
                 *logger.lock().unwrap(),
                 vec![
-                    "AsyncDataSrc 1 setupped",
                     "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
                     "AsyncDataSrc 1 created DataConn",
                     "SyncDataSrc 2 created DataConn",
                     "SyncDataSrc 2 closed",
@@ -1315,11 +1321,11 @@ mod tests_of_data_src {
             assert_eq!(
                 *logger.lock().unwrap(),
                 vec![
-                    "AsyncDataSrc 1 setupped",
                     "SyncDataSrc 2 failed to setup",
-                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 setupped",
                     "AsyncDataSrc 1 closed",
                     "AsyncDataSrc 1 dropped",
+                    "SyncDataSrc 2 dropped",
                 ],
             );
         }
@@ -1356,11 +1362,11 @@ mod tests_of_data_src {
             assert_eq!(
                 *logger.lock().unwrap(),
                 vec![
-                    "AsyncDataSrc 1 failed to setup",
                     "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 dropped",
+                    "AsyncDataSrc 1 failed to setup",
                     "SyncDataSrc 2 closed",
                     "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 dropped",
                 ],
             );
         }
