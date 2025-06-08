@@ -1064,8 +1064,8 @@ mod tests_data_hub {
                 vec![
                     "SyncDataSrc 2 failed to setup",
                     "AsyncDataSrc 1 failed to setup",
-                    "AsyncDataSrc 1 dropped",
                     "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 dropped",
                 ]
             );
         }
@@ -1638,7 +1638,10 @@ mod tests_data_hub {
                     panic!();
                 }
 
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
+                let mut ptr = hub.local_data_src_list.not_setup_head();
+                assert!(!ptr.is_null());
+                ptr = unsafe { (*ptr).next };
+                assert!(ptr.is_null());
                 let mut ptr = hub.local_data_src_list.did_setup_head();
                 assert!(!ptr.is_null());
                 ptr = unsafe { (*ptr).next };
@@ -1650,7 +1653,10 @@ mod tests_data_hub {
 
                 hub.end();
 
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
+                let mut ptr = hub.local_data_src_list.not_setup_head();
+                assert!(!ptr.is_null());
+                ptr = unsafe { (*ptr).next };
+                assert!(ptr.is_null());
                 let mut ptr = hub.local_data_src_list.did_setup_head();
                 assert!(!ptr.is_null());
                 ptr = unsafe { (*ptr).next };
@@ -1703,7 +1709,10 @@ mod tests_data_hub {
                     panic!();
                 }
 
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
+                let mut ptr = hub.local_data_src_list.not_setup_head();
+                assert!(!ptr.is_null());
+                ptr = unsafe { (*ptr).next };
+                assert!(ptr.is_null());
                 let mut ptr = hub.local_data_src_list.did_setup_head();
                 assert!(!ptr.is_null());
                 ptr = unsafe { (*ptr).next };
@@ -1715,7 +1724,10 @@ mod tests_data_hub {
 
                 hub.end();
 
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
+                let mut ptr = hub.local_data_src_list.not_setup_head();
+                assert!(!ptr.is_null());
+                ptr = unsafe { (*ptr).next };
+                assert!(ptr.is_null());
                 let mut ptr = hub.local_data_src_list.did_setup_head();
                 assert!(!ptr.is_null());
                 ptr = unsafe { (*ptr).next };
