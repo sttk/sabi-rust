@@ -107,11 +107,21 @@ where
 /// of the failed data sources and their corresponding `Err` objects. In such a case,
 /// all global data sources that were successfully set up are also closed and dropped.
 ///
+/// If all data source setups are successful, the `Result::Ok` which contains an object
+/// is returned. This object is designed to close and drop global data sources when
+/// it's dropped.
+/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
+/// automatically cleaned up when the return value goes out of scope.
+///
+/// **NOTE:** Do not receive the `Result` or its inner object into an anonymous
+/// variable using `let _ =`.
+/// If you do, the inner object is dropped immediately at that point.
+///
 /// # Returns
 ///
-/// * `Result<(), Err>`: `Ok(())` if all global data sources are set up successfully,
-///   or an `Err` if any setup fails.
-pub fn setup() -> Result<(), Err> {
+/// * `Result<impl any::Any, Err>`: `impl any::Any` if all global data sources are
+///   set up successfully, or an `Err` if any setup fails.
+pub fn setup() -> Result<impl any::Any, Err> {
     #[cfg(not(test))]
     let ok = GLOBAL_DATA_SRCS_FIXED.set(()).is_ok();
     #[cfg(test)]
@@ -126,52 +136,29 @@ pub fn setup() -> Result<(), Err> {
 
     if ok {
         #[allow(static_mut_refs)]
-        unsafe {
-            let err_map = GLOBAL_DATA_SRC_LIST.setup_data_srcs();
-            if err_map.len() > 0 {
+        let err_map = unsafe { GLOBAL_DATA_SRC_LIST.setup_data_srcs() };
+        if err_map.len() > 0 {
+            #[allow(static_mut_refs)]
+            unsafe {
                 GLOBAL_DATA_SRC_LIST.close_and_drop_data_srcs();
-                return Err(Err::new(DataHubError::FailToSetupGlobalDataSrcs {
-                    errors: err_map,
-                }));
             }
+            return Err(Err::new(DataHubError::FailToSetupGlobalDataSrcs {
+                errors: err_map,
+            }));
         }
     }
 
-    Ok(())
-}
-
-/// Executes the close and drop process for all globally registered data sources.
-///
-/// This function cleans up all resources associated with the global data sources
-/// that were registered via `uses` and set up by `setup`.
-pub fn shutdown() {
-    #[allow(static_mut_refs)]
-    unsafe {
-        GLOBAL_DATA_SRC_LIST.close_and_drop_data_srcs();
-    }
-}
-
-/// Provides an object that, when it goes out of scope,
-/// automatically triggers the `shutdown` process for global data sources.
-///
-/// This leverages Rust's ownership system to ensure global data source cleanup
-/// happens reliably at the end of a scope, typically at the end of the application's
-/// main function or a test.
-///
-/// # Returns
-///
-/// * `impl any::Any`: An opaque object that implements `Drop` and will call `shutdown()`
-///   when dropped.
-#[must_use = "call `shutdown_later()` and bind its result to a variable to defer cleanup until the variable goes out of scope"]
-pub fn shutdown_later() -> impl any::Any {
-    AutoShutdown {}
+    Ok(AutoShutdown {})
 }
 
 struct AutoShutdown {}
 
 impl Drop for AutoShutdown {
     fn drop(&mut self) {
-        shutdown();
+        #[allow(static_mut_refs)]
+        unsafe {
+            GLOBAL_DATA_SRC_LIST.close_and_drop_data_srcs();
+        }
     }
 }
 
@@ -788,57 +775,6 @@ mod tests_data_hub {
         use super::*;
 
         #[test]
-        fn test_uses_and_shutdown() {
-            let _unsed = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "bar");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            shutdown();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec!["SyncDataSrc 2 dropped", "AsyncDataSrc 1 dropped"],
-            );
-        }
-
-        #[test]
         fn test_setup_and_shutdown() {
             let _unused = TEST_SEQ.lock().unwrap();
             clear_global_data_srcs_fixed();
@@ -872,25 +808,25 @@ mod tests_data_hub {
                 assert!(ptr.is_null());
             }
 
-            let result = setup();
-            assert!(result.is_ok());
+            {
+                let result = setup();
+                assert!(result.is_ok());
 
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
 
-                let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "bar");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "bar");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
             }
-
-            shutdown();
 
             #[allow(static_mut_refs)]
             unsafe {
@@ -922,8 +858,6 @@ mod tests_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let _later = shutdown_later();
-
                 #[allow(static_mut_refs)]
                 unsafe {
                     let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
@@ -996,8 +930,6 @@ mod tests_data_hub {
         fn test_fail_to_setup() {
             let _unused = TEST_SEQ.lock().unwrap();
             clear_global_data_srcs_fixed();
-
-            let _later = shutdown_later();
 
             #[allow(static_mut_refs)]
             unsafe {
@@ -1100,36 +1032,36 @@ mod tests_data_hub {
                 assert!(ptr.is_null());
             }
 
-            let result = setup();
-            assert!(result.is_ok());
+            {
+                let result = setup();
+                assert!(result.is_ok());
 
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
 
-                let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+
+                uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
             }
-
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-            }
-
-            shutdown();
 
             assert_eq!(
                 *logger.lock().unwrap(),
@@ -1172,37 +1104,37 @@ mod tests_data_hub {
                 assert!(ptr.is_null());
             }
 
-            let result = setup();
-            assert!(result.is_ok());
+            {
+                let result = setup();
+                assert!(result.is_ok());
 
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
 
-                let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+
+                let result = setup();
+                assert!(result.is_ok());
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
             }
-
-            let result = setup();
-            assert!(result.is_ok());
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-            }
-
-            shutdown();
 
             assert_eq!(
                 logger.lock().unwrap().clone(),
@@ -1221,8 +1153,6 @@ mod tests_data_hub {
         #[test]
         fn test_new_and_close_with_no_global_data_srcs() {
             let _unused = TEST_SEQ.lock().unwrap();
-
-            let _later = shutdown_later();
 
             let hub = DataHub::new();
 
@@ -1244,9 +1174,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 #[allow(static_mut_refs)]
                 unsafe {
                     let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
@@ -1315,9 +1243,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
 
                 assert!(hub.local_data_src_list.not_setup_head().is_null());
@@ -1412,9 +1338,7 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
 
                 let ptr = hub.local_data_src_list.not_setup_head();
@@ -1531,9 +1455,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
 
                 hub.uses("baz", SyncDataSrc::new(3, logger.clone(), false, false));
@@ -1609,9 +1531,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), true, false));
@@ -1680,9 +1600,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(1, logger.clone(), true, false));
                 hub.uses("qux", SyncDataSrc::new(2, logger.clone(), false, false));
@@ -1751,9 +1669,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -1878,9 +1794,7 @@ mod tests_data_hub {
 
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
@@ -1949,9 +1863,7 @@ mod tests_data_hub {
 
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
@@ -2043,9 +1955,7 @@ mod tests_data_hub {
 
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
@@ -2121,9 +2031,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2167,9 +2075,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, true));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2281,9 +2187,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, true));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2394,9 +2298,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, true));
@@ -2510,9 +2412,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, true));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2625,9 +2525,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2720,9 +2618,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
@@ -2820,9 +2716,7 @@ mod tests_data_hub {
             uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
             uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
 
-            if let Ok(_) = setup() {
-                let _later = shutdown_later();
-
+            if let Ok(_shutdown_later) = setup() {
                 let mut hub = DataHub::new();
                 hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
                 hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
