@@ -125,27 +125,27 @@ mod hub {
 }
 
 mod app {
-    use sabi::{setup, shutdown_later, uses, DataHub};
+    use sabi::{setup, uses, DataHub};
 
     use crate::data_src::{BarDataSrc, FooDataSrc};
     use crate::logic_layer::my_logic;
 
     #[test]
     fn test_datahub_transaction_flow() {
-        // Register global DataSrc
+        // Register global DataSrc.
         uses("foo", FooDataSrc {});
-        // Set up the sabi framework
-        let _ = setup().unwrap();
-        // Automatically shut down DataSrc when the application exits
-        let _later = shutdown_later();
+        // Set up the sabi framework.
+        // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
+        // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
+        let _auto_shutdown = setup().unwrap();
 
-        // Create a new instance of DataHub
+        // Create a new instance of DataHub.
         let mut data = DataHub::new();
-        // Register session-local DataSrc with DataHub
+        // Register session-local DataSrc with DataHub.
         data.uses("bar", BarDataSrc {});
 
-        // Execute application logic within a transaction
-        // my_logic performs data operations via DataHub
+        // Execute application logic within a transaction.
+        // my_logic performs data operations via DataHub.
         assert!(data.txn(my_logic).is_ok());
     }
 }

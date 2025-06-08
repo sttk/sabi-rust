@@ -29,7 +29,7 @@
 //! The following is a sample code using this framework:
 //!
 //! ```
-//! use sabi::{uses, setup, shutdown_later, AsyncGroup, DataSrc, DataConn, DataAcc, DataHub};
+//! use sabi::{uses, setup, AsyncGroup, DataSrc, DataConn, DataAcc, DataHub};
 //! use errs::Err;
 //! use override_macro::{overridable, override_with};
 //!
@@ -120,20 +120,20 @@
 //! // (5) Use the logic functions and the DataHub
 //!
 //! fn main() {
-//!     // Register global DataSrc
+//!     // Register global DataSrc.
 //!     uses("foo", FooDataSrc{});
-//!     // Set up the sabi framework
-//!     let _ = setup().unwrap();
-//!     // Automatically shut down DataSrc when the application exits
-//!     let _later = shutdown_later();
+//!     // Set up the sabi framework.
+//!     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
+//!     // NOTE: Don't write as `let _ =` because the return variable is dropped immediately.
+//!     let _auto_shutdown = setup().unwrap();
 //!
-//!     // Create a new instance of DataHub
+//!     // Create a new instance of DataHub.
 //!     let mut data = DataHub::new();
-//!     // Register session-local DataSrc with DataHub
+//!     // Register session-local DataSrc with DataHub.
 //!     data.uses("bar", BarDataSrc{});
 //!
-//!     // Execute application logic within a transaction
-//!     // my_logic performs data operations via DataHub
+//!     // Execute application logic within a transaction.
+//!     // my_logic performs data operations via DataHub.
 //!     let _ = data.txn(my_logic).unwrap();
 //! }
 //! ```
@@ -150,7 +150,7 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 pub use data_acc::DataAcc;
-pub use data_hub::{setup, shutdown, shutdown_later, uses, DataHub, DataHubError};
+pub use data_hub::{setup, uses, AutoShutdown, DataHub, DataHubError};
 
 /// The trait that abstracts a connection per session to an external data service,
 /// such as a database, file system, or messaging service.

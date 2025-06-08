@@ -48,7 +48,7 @@ impl DataAcc for DataHub {
 mod tests_of_data_acc {
     use super::*;
     use crate::data_hub::{clear_global_data_srcs_fixed, TEST_SEQ};
-    use crate::{setup, shutdown_later, uses, AsyncGroup, DataHubError, DataSrc};
+    use crate::{setup, uses, AsyncGroup, DataHubError, DataSrc};
     use override_macro::{overridable, override_with};
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -322,8 +322,8 @@ mod tests_of_data_acc {
                 uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
                 uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
 
@@ -405,8 +405,9 @@ mod tests_of_data_acc {
             {
                 uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
                 uses("bar", BarDataSrc::new(2, logger.clone()));
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 assert!(hub.run(sample_logic).is_ok());
@@ -483,14 +484,15 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+                if let Ok(_auto_shutdown) = setup() {
+                    let mut hub = DataHub::new();
+                    hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                    hub.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
-
-                assert!(hub.run(sample_logic).is_ok());
+                    assert!(hub.run(sample_logic).is_ok());
+                } else {
+                    panic!();
+                }
             }
 
             assert_eq!(
@@ -521,8 +523,8 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
@@ -611,8 +613,8 @@ mod tests_of_data_acc {
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
                 uses("bar", BarDataSrc::new(1, logger.clone()));
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
@@ -693,8 +695,9 @@ mod tests_of_data_acc {
             {
                 uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
                 uses("bar", BarDataSrc::new(2, logger.clone()));
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 assert!(hub.txn(sample_logic).is_ok());
@@ -775,8 +778,8 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
@@ -817,8 +820,8 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
@@ -868,8 +871,8 @@ mod tests_of_data_acc {
 
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
@@ -950,8 +953,9 @@ mod tests_of_data_acc {
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
                 uses("bar", BarDataSrc::new(1, logger.clone()));
-                assert!(setup().is_ok());
-                let _later = shutdown_later();
+
+                let result = setup();
+                assert!(result.is_ok());
 
                 let mut hub = DataHub::new();
                 hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
