@@ -7,7 +7,7 @@ Dependency Injection (DI).
 This reduces the dependency between the two, allowing them to be implemented and tested independently.
 
 However, traditional DI often presented an inconvenience in how methods were grouped.
-Typically, methods were grouped by external data service (like a database) or by database table.
+Typically, methods were grouped by external data service like a database or by database table.
 This meant the logic layer had to depend on units defined by the data access layer's concerns.
 Furthermore, such traits often contained more methods than a specific piece of logic needed, making it
 difficult to tell which methods were actually used in the logic without tracing the code.
@@ -198,9 +198,9 @@ fn main() {
     // Register global DataSrc
     uses("foo", FooDataSrc{});
     // Set up the sabi framework
-    let _ = setup().unwrap();
-    // Automatically shut down DataSrc when the application exits
-    let _later = shutdown_later();
+    // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
+    // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
+    let _auto_shutdown = setup().unwrap();
 
     // Create a new instance of DataHub
     let mut data = DataHub::new();

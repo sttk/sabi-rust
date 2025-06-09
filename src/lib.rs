@@ -124,7 +124,7 @@
 //!     uses("foo", FooDataSrc{});
 //!     // Set up the sabi framework.
 //!     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
-//!     // NOTE: Don't write as `let _ =` because the return variable is dropped immediately.
+//!     // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
 //!     let _auto_shutdown = setup().unwrap();
 //!
 //!     // Create a new instance of DataHub.
