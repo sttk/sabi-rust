@@ -138,6 +138,11 @@ mod tests_of_data_acc {
             logger.push(format!("FooDataConn {} committed", self.id));
             Ok(())
         }
+        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            let mut logger = self.logger.lock().unwrap();
+            logger.push(format!("FooDataConn {} pre committed", self.id));
+            Ok(())
+        }
         fn post_commit(&mut self, _ag: &mut AsyncGroup) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("FooDataConn {} post committed", self.id));
@@ -248,6 +253,11 @@ mod tests_of_data_acc {
                 .lock()
                 .unwrap()
                 .push(format!("BarDataConn {} committed", self.id));
+            Ok(())
+        }
+        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            let mut logger = self.logger.lock().unwrap();
+            logger.push(format!("BarDataConn {} pre committed", self.id));
             Ok(())
         }
         fn post_commit(&mut self, _ag: &mut AsyncGroup) {
@@ -710,6 +720,8 @@ mod tests_of_data_acc {
                     "BarDataSrc 2 setupped",
                     "FooDataSrc 1 created FooDataConn",
                     "BarDataSrc 2 created BarDataConn",
+                    "FooDataConn 1 pre committed",
+                    "BarDataConn 2 pre committed",
                     "FooDataConn 1 committed",
                     "BarDataConn 2 committed",
                     "FooDataConn 1 post committed",
@@ -795,6 +807,8 @@ mod tests_of_data_acc {
                     "BarDataSrc 2 setupped",
                     "FooDataSrc 1 created FooDataConn",
                     "BarDataSrc 2 created BarDataConn",
+                    "FooDataConn 1 pre committed",
+                    "BarDataConn 2 pre committed",
                     "FooDataConn 1 committed",
                     "BarDataConn 2 committed",
                     "FooDataConn 1 post committed",
@@ -970,6 +984,8 @@ mod tests_of_data_acc {
                     "FooDataSrc 2 setupped",
                     "FooDataSrc 2 created FooDataConn",
                     "BarDataSrc 1 created BarDataConn",
+                    "FooDataConn 2 pre committed",
+                    "BarDataConn 1 pre committed",
                     "FooDataConn 2 committed",
                     "BarDataConn 1 committed",
                     "FooDataConn 2 post committed",

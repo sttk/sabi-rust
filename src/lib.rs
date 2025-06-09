@@ -180,10 +180,21 @@ pub trait DataConn {
     ///   if the commit fails.
     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err>;
 
+    /// This method is executed before the transaction commit process for all `DataConn` instance
+    /// involved in the transaction.
+    ///
+    /// This method provides a timing to execute unusual commit processes or update operations not
+    /// supported by transactions beforehand.
+    /// This allows other update operations to be rolled back if the operations in this method
+    /// fail.
+    fn pre_commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> {
+        Ok(())
+    }
+
     /// This method is executed after the transaction commit process has successfully completed
     /// for all `DataConn` instances involved in the transaction.
     ///
-    /// It provides a moment to perform follow-up actions that depend on a successful commit.
+    /// It provides a timing to perform follow-up actions that depend on a successful commit.
     /// For example, after a database commit, a messaging service's `DataConn` might use this
     /// method to send a "transaction completed" message.
     ///
@@ -257,6 +268,7 @@ where
     is_fn: fn(any::TypeId) -> bool,
 
     commit_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> Result<(), Err>,
+    pre_commit_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> Result<(), Err>,
     post_commit_fn: fn(*const DataConnContainer, &mut AsyncGroup),
     should_force_back_fn: fn(*const DataConnContainer) -> bool,
     rollback_fn: fn(*const DataConnContainer, &mut AsyncGroup),
