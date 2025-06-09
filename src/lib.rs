@@ -180,7 +180,7 @@ pub trait DataConn {
     ///   if the commit fails.
     fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err>;
 
-    /// This method is executed before the transaction commit process for all `DataConn` instance
+    /// This method is executed before the transaction commit process for all `DataConn` instances
     /// involved in the transaction.
     ///
     /// This method provides a timing to execute unusual commit processes or update operations not
@@ -194,7 +194,7 @@ pub trait DataConn {
     /// This method is executed after the transaction commit process has successfully completed
     /// for all `DataConn` instances involved in the transaction.
     ///
-    /// It provides a timing to perform follow-up actions that depend on a successful commit.
+    /// It provides a moment to perform follow-up actions that depend on a successful commit.
     /// For example, after a database commit, a messaging service's `DataConn` might use this
     /// method to send a "transaction completed" message.
     ///
