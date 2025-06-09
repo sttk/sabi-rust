@@ -42,7 +42,7 @@ In Cargo.toml, write this crate as a dependency:
 
 ```toml
 [dependencies]
-sabi = "0.1.0"
+sabi = "0.2.0"
 ```
 
 ## Usage
@@ -237,7 +237,7 @@ See the file LICENSE in this distribution for more details.
 
 
 [repo-url]: https://github.com/sttk/sabi-rust
-[crateio-img]: https://img.shields.io/badge/crate.io-ver.0.1.0-fc8d62?logo=rust
+[crateio-img]: https://img.shields.io/badge/crate.io-ver.0.2.0-fc8d62?logo=rust
 [crateio-url]: https://crates.io/crates/sabi-rust
 [docrs-img]: https://img.shields.io/badge/doc.rs-sabi_rust-66c2a5?logo=docs.rs
 [docrs-url]: https://docs.rs/sabi-rust
