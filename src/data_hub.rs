@@ -44,6 +44,13 @@ pub enum DataHubError {
         errors: HashMap<String, Err>,
     },
 
+    /// Indicates a failure during the pre commit process of one or more `DataConn` instances
+    /// involved in a transaction. Contains a map of data connection names to their errors.
+    FailToPreCommitDataConn {
+        /// The map contains errors that occurred in each `DataConn` object.
+        errors: HashMap<String, Err>,
+    },
+
     /// Indicates that no `DataSrc` was found to create a `DataConn` for the specified name
     /// and type.
     NoDataSrcToCreateDataConn {
@@ -285,6 +292,33 @@ impl DataHub {
 
     fn commit(&mut self) -> Result<(), Err> {
         let mut err_map = HashMap::new();
+
+        let mut ag = AsyncGroup::new();
+
+        let mut ptr = self.data_conn_list.head();
+        while !ptr.is_null() {
+            let pre_commit_fn = unsafe { (*ptr).pre_commit_fn };
+            let name = unsafe { &(*ptr).name };
+            let next = unsafe { (*ptr).next };
+
+            ag.name = name;
+
+            if let Err(err) = pre_commit_fn(ptr, &mut ag) {
+                err_map.insert(name.to_string(), err);
+                break;
+            }
+
+            ptr = next;
+        }
+
+        ag.join_and_put_errors_into(&mut err_map);
+
+        if !err_map.is_empty() {
+            return Err(Err::new(DataHubError::FailToPreCommitDataConn {
+                errors: err_map,
+            }));
+        }
+
         let mut ag = AsyncGroup::new();
 
         let mut ptr = self.data_conn_list.head();
@@ -305,13 +339,13 @@ impl DataHub {
 
         ag.join_and_put_errors_into(&mut err_map);
 
-        if err_map.is_empty() {
-            return Ok(());
+        if !err_map.is_empty() {
+            return Err(Err::new(DataHubError::FailToCommitDataConn {
+                errors: err_map,
+            }));
         }
 
-        Err(Err::new(DataHubError::FailToCommitDataConn {
-            errors: err_map,
-        }))
+        return Ok(());
     }
 
     fn rollback(&mut self) {
@@ -534,8 +568,9 @@ mod tests_data_hub {
 
     struct SyncDataSrc {
         id: i8,
-        will_fail_ds: bool,
-        will_fail_dc: bool,
+        will_fail_setup: bool,
+        will_fail_commit: bool,
+        will_fail_pre_commit: bool,
         logger: Arc<Mutex<Vec<String>>>,
     }
 
@@ -543,13 +578,15 @@ mod tests_data_hub {
         fn new(
             id: i8,
             logger: Arc<Mutex<Vec<String>>>,
-            will_fail_ds: bool,
-            will_fail_dc: bool,
+            will_fail_setup: bool,
+            will_fail_commit: bool,
+            will_fail_pre_commit: bool,
         ) -> Self {
             Self {
                 id,
-                will_fail_ds,
-                will_fail_dc,
+                will_fail_setup,
+                will_fail_commit,
+                will_fail_pre_commit,
                 logger,
             }
         }
@@ -565,7 +602,7 @@ mod tests_data_hub {
     impl DataSrc<SyncDataConn> for SyncDataSrc {
         fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
             let mut logger = self.logger.lock().unwrap();
-            if self.will_fail_ds {
+            if self.will_fail_setup {
                 logger.push(format!("SyncDataSrc {} failed to setup", self.id));
                 return Err(Err::new("XXX".to_string()));
             }
@@ -581,15 +618,21 @@ mod tests_data_hub {
         fn create_data_conn(&mut self) -> Result<Box<SyncDataConn>, Err> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("SyncDataSrc {} created DataConn", self.id));
-            let conn = SyncDataConn::new(self.id, self.logger.clone(), self.will_fail_dc.clone());
+            let conn = SyncDataConn::new(
+                self.id,
+                self.logger.clone(),
+                self.will_fail_commit.clone(),
+                self.will_fail_pre_commit.clone(),
+            );
             Ok(Box::new(conn))
         }
     }
 
     struct AsyncDataSrc {
         id: i8,
-        will_fail_ds: bool,
-        will_fail_dc: bool,
+        will_fail_setup: bool,
+        will_fail_commit: bool,
+        will_fail_pre_commit: bool,
         logger: Arc<Mutex<Vec<String>>>,
     }
 
@@ -597,13 +640,15 @@ mod tests_data_hub {
         fn new(
             id: i8,
             logger: Arc<Mutex<Vec<String>>>,
-            will_fail_ds: bool,
-            will_fail_dc: bool,
+            will_fail_setup: bool,
+            will_fail_commit: bool,
+            will_fail_pre_commit: bool,
         ) -> Self {
             Self {
                 id,
-                will_fail_ds,
-                will_fail_dc,
+                will_fail_setup,
+                will_fail_commit,
+                will_fail_pre_commit,
                 logger,
             }
         }
@@ -618,7 +663,7 @@ mod tests_data_hub {
 
     impl DataSrc<AsyncDataConn> for AsyncDataSrc {
         fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> {
-            let will_fail_ds = self.will_fail_ds;
+            let will_fail_setup = self.will_fail_setup;
             let logger = self.logger.clone();
             let id = self.id;
 
@@ -626,7 +671,7 @@ mod tests_data_hub {
                 // The `.await` must be executed outside the Mutex lock.
                 let _ = time::sleep(time::Duration::from_millis(100)).await;
 
-                if will_fail_ds {
+                if will_fail_setup {
                     logger
                         .lock()
                         .unwrap()
@@ -651,7 +696,12 @@ mod tests_data_hub {
         fn create_data_conn(&mut self) -> Result<Box<AsyncDataConn>, Err> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("AsyncDataSrc {} created DataConn", self.id));
-            let conn = AsyncDataConn::new(self.id, self.logger.clone(), self.will_fail_dc);
+            let conn = AsyncDataConn::new(
+                self.id,
+                self.logger.clone(),
+                self.will_fail_commit,
+                self.will_fail_pre_commit,
+            );
             Ok(Box::new(conn))
         }
     }
@@ -659,16 +709,23 @@ mod tests_data_hub {
     struct SyncDataConn {
         id: i8,
         committed: bool,
-        will_fail_dc: bool,
+        will_fail_commit: bool,
+        will_fail_pre_commit: bool,
         logger: Arc<Mutex<Vec<String>>>,
     }
 
     impl SyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, will_fail_dc: bool) -> Self {
+        fn new(
+            id: i8,
+            logger: Arc<Mutex<Vec<String>>>,
+            will_fail_commit: bool,
+            will_fail_pre_commit: bool,
+        ) -> Self {
             Self {
                 id,
                 committed: false,
-                will_fail_dc,
+                will_fail_commit,
+                will_fail_pre_commit,
                 logger,
             }
         }
@@ -684,12 +741,22 @@ mod tests_data_hub {
     impl DataConn for SyncDataConn {
         fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
             let mut logger = self.logger.lock().unwrap();
-            if self.will_fail_dc {
+            if self.will_fail_commit {
                 logger.push(format!("SyncDataConn {} failed to commit", self.id));
                 return Err(Err::new("ZZZ".to_string()));
             }
             self.committed = true;
             logger.push(format!("SyncDataConn {} committed", self.id));
+            Ok(())
+        }
+
+        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            let mut logger = self.logger.lock().unwrap();
+            if self.will_fail_pre_commit {
+                logger.push(format!("SyncDataConn {} failed to pre commit", self.id));
+                return Err(Err::new("ZZZ".to_string()));
+            }
+            logger.push(format!("SyncDataConn {} pre committed", self.id));
             Ok(())
         }
 
@@ -721,16 +788,23 @@ mod tests_data_hub {
     struct AsyncDataConn {
         id: i8,
         committed: bool,
-        will_fail_dc: bool,
+        will_fail_commit: bool,
+        will_fail_pre_commit: bool,
         logger: Arc<Mutex<Vec<String>>>,
     }
 
     impl AsyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, will_fail_dc: bool) -> Self {
+        fn new(
+            id: i8,
+            logger: Arc<Mutex<Vec<String>>>,
+            will_fail_commit: bool,
+            will_fail_pre_commit: bool,
+        ) -> Self {
             Self {
                 id,
                 committed: false,
-                will_fail_dc,
+                will_fail_commit,
+                will_fail_pre_commit,
                 logger,
             }
         }
@@ -746,12 +820,22 @@ mod tests_data_hub {
     impl DataConn for AsyncDataConn {
         fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
             let mut logger = self.logger.lock().unwrap();
-            if self.will_fail_dc {
+            if self.will_fail_commit {
                 logger.push(format!("AsyncDataConn {} failed to commit", self.id));
                 return Err(Err::new("VVV".to_string()));
             }
             self.committed = true;
             logger.push(format!("AsyncDataConn {} committed", self.id));
+            Ok(())
+        }
+
+        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+            let mut logger = self.logger.lock().unwrap();
+            if self.will_fail_pre_commit {
+                logger.push(format!("AsyncDataConn {} failed to pre commit", self.id));
+                return Err(Err::new("VVV".to_string()));
+            }
+            logger.push(format!("AsyncDataConn {} pre committed", self.id));
             Ok(())
         }
 
@@ -799,8 +883,14 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             #[allow(static_mut_refs)]
             unsafe {
@@ -876,8 +966,14 @@ mod tests_data_hub {
                     assert!(ptr.is_null());
                 }
 
-                uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-                uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+                uses(
+                    "foo",
+                    AsyncDataSrc::new(1, logger.clone(), false, false, false),
+                );
+                uses(
+                    "bar",
+                    SyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 #[allow(static_mut_refs)]
                 unsafe {
@@ -951,8 +1047,14 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), true, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), true, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), true, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), true, false, false),
+            );
 
             #[allow(static_mut_refs)]
             unsafe {
@@ -1027,7 +1129,10 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
 
             #[allow(static_mut_refs)]
             unsafe {
@@ -1057,7 +1162,10 @@ mod tests_data_hub {
                     assert!(ptr.is_null());
                 }
 
-                uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+                uses(
+                    "bar",
+                    SyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 #[allow(static_mut_refs)]
                 unsafe {
@@ -1099,7 +1207,10 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
 
             #[allow(static_mut_refs)]
             unsafe {
@@ -1180,8 +1291,14 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 #[allow(static_mut_refs)]
@@ -1249,8 +1366,14 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
@@ -1262,7 +1385,10 @@ mod tests_data_hub {
                 assert_eq!(hub.data_conn_map.len(), 0);
                 assert_eq!(hub.fixed, false);
 
-                hub.uses("baz", SyncDataSrc::new(3, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    SyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
                 let mut ptr = hub.local_data_src_list.not_setup_head();
                 assert!(!ptr.is_null());
                 ptr = unsafe { (*ptr).next };
@@ -1273,7 +1399,10 @@ mod tests_data_hub {
                 assert_eq!(hub.data_conn_map.len(), 0);
                 assert_eq!(hub.fixed, false);
 
-                hub.uses("qux", AsyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "qux",
+                    AsyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
                 let mut ptr = hub.local_data_src_list.not_setup_head();
                 assert!(!ptr.is_null());
                 ptr = unsafe { (*ptr).next };
@@ -1359,7 +1488,10 @@ mod tests_data_hub {
                 assert_eq!(hub.data_conn_map.len(), 0);
                 assert_eq!(hub.fixed, false);
 
-                hub.uses("baz", SyncDataSrc::new(1, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    SyncDataSrc::new(1, logger.clone(), false, false, false),
+                );
 
                 let mut ptr = hub.local_data_src_list.not_setup_head();
                 assert!(!ptr.is_null());
@@ -1385,7 +1517,10 @@ mod tests_data_hub {
                 assert_eq!(hub.data_conn_map.len(), 0);
                 assert_eq!(hub.fixed, true);
 
-                hub.uses("foo", AsyncDataSrc::new(2, logger.clone(), false, false));
+                hub.uses(
+                    "foo",
+                    AsyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 let ptr = hub.local_data_src_list.not_setup_head();
                 assert!(ptr.is_null());
@@ -1424,7 +1559,10 @@ mod tests_data_hub {
                 assert_eq!(hub.data_conn_map.len(), 0);
                 assert_eq!(hub.fixed, false);
 
-                hub.uses("foo", AsyncDataSrc::new(2, logger.clone(), false, false));
+                hub.uses(
+                    "foo",
+                    AsyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 let mut ptr = hub.local_data_src_list.not_setup_head();
                 assert!(!ptr.is_null());
@@ -1461,14 +1599,26 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
 
-                hub.uses("baz", SyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", AsyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    SyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    AsyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 let mut ptr = hub.local_data_src_list.not_setup_head();
                 assert!(!ptr.is_null());
@@ -1537,13 +1687,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), true, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), true, false, false),
+                );
 
                 if let Err(err) = hub.begin() {
                     match err.reason::<DataHubError>() {
@@ -1606,13 +1768,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(1, logger.clone(), true, false));
-                hub.uses("qux", SyncDataSrc::new(2, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(1, logger.clone(), true, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 if let Err(err) = hub.begin() {
                     match err.reason::<DataHubError>() {
@@ -1675,13 +1849,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -1770,6 +1956,10 @@ mod tests_data_hub {
                     "SyncDataSrc 2 created DataConn",
                     "AsyncDataSrc 3 created DataConn",
                     "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 pre committed",
+                    "SyncDataConn 4 pre committed",
                     "AsyncDataConn 1 committed",
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 committed",
@@ -1801,11 +1991,17 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+                hub.uses(
+                    "bar",
+                    SyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Err(err) = hub.get_data_conn::<SyncDataConn>("foo") {
@@ -1870,11 +2066,17 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+                hub.uses(
+                    "bar",
+                    SyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -1962,11 +2164,17 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+                hub.uses(
+                    "bar",
+                    SyncDataSrc::new(2, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Err(err) = hub.get_data_conn::<SyncDataConn>("baz") {
@@ -2037,13 +2245,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     assert!(hub.commit().is_ok());
@@ -2081,13 +2301,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, true));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, true, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -2164,6 +2396,10 @@ mod tests_data_hub {
                     "SyncDataSrc 2 created DataConn",
                     "AsyncDataSrc 3 created DataConn",
                     "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 pre committed",
+                    "SyncDataConn 4 pre committed",
                     "AsyncDataConn 1 committed",
                     "SyncDataConn 2 failed to commit",
                     "SyncDataConn 4 closed",
@@ -2193,13 +2429,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, true));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, true, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -2276,6 +2524,10 @@ mod tests_data_hub {
                     "SyncDataSrc 2 created DataConn",
                     "AsyncDataSrc 3 created DataConn",
                     "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 pre committed",
+                    "SyncDataConn 4 pre committed",
                     "AsyncDataConn 1 failed to commit",
                     "SyncDataConn 4 closed",
                     "SyncDataConn 4 dropped",
@@ -2304,13 +2556,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, true));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, true, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -2387,6 +2651,10 @@ mod tests_data_hub {
                     "SyncDataSrc 2 created DataConn",
                     "AsyncDataSrc 3 created DataConn",
                     "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 pre committed",
+                    "SyncDataConn 4 pre committed",
                     "AsyncDataConn 1 committed",
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 committed",
@@ -2418,13 +2686,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, true));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, true, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -2501,9 +2781,511 @@ mod tests_data_hub {
                     "SyncDataSrc 2 created DataConn",
                     "AsyncDataSrc 3 created DataConn",
                     "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 pre committed",
+                    "SyncDataConn 4 pre committed",
                     "AsyncDataConn 1 committed",
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 failed to commit",
+                    "SyncDataConn 4 closed",
+                    "SyncDataConn 4 dropped",
+                    "AsyncDataConn 3 closed",
+                    "AsyncDataConn 3 dropped",
+                    "SyncDataConn 2 closed",
+                    "SyncDataConn 2 dropped",
+                    "AsyncDataConn 1 closed",
+                    "AsyncDataConn 1 dropped",
+                    "SyncDataSrc 4 closed",
+                    "SyncDataSrc 4 dropped",
+                    "AsyncDataSrc 3 closed",
+                    "AsyncDataSrc 3 dropped",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[test]
+        fn test_pre_commit_but_fail_global_sync() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, true),
+            );
+
+            if let Ok(_auto_shutdown) = setup() {
+                let mut hub = DataHub::new();
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
+
+                if let Ok(_) = hub.begin() {
+                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
+                        assert_eq!(
+                            any::type_name_of_val(conn1),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
+                        assert_eq!(
+                            any::type_name_of_val(conn2),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
+                        assert_eq!(
+                            any::type_name_of_val(conn3),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
+                        assert_eq!(
+                            any::type_name_of_val(conn4),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+
+                    match hub.commit() {
+                        Ok(_) => panic!(),
+                        Err(err) => match err.reason::<DataHubError>() {
+                            Ok(r) => match r {
+                                DataHubError::FailToPreCommitDataConn { errors } => {
+                                    assert_eq!(errors.len(), 1);
+                                    if let Some(e) = errors.get("bar") {
+                                        if let Ok(s) = e.reason::<String>() {
+                                            assert_eq!(s, "ZZZ");
+                                        } else {
+                                            panic!();
+                                        }
+                                    } else {
+                                        panic!();
+                                    }
+                                }
+                                _ => panic!(),
+                            },
+                            Err(_) => panic!(),
+                        },
+                    }
+
+                    hub.end();
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
+                    "SyncDataSrc 4 setupped",
+                    "AsyncDataSrc 3 setupped",
+                    "AsyncDataSrc 1 created DataConn",
+                    "SyncDataSrc 2 created DataConn",
+                    "AsyncDataSrc 3 created DataConn",
+                    "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 failed to pre commit",
+                    "SyncDataConn 4 closed",
+                    "SyncDataConn 4 dropped",
+                    "AsyncDataConn 3 closed",
+                    "AsyncDataConn 3 dropped",
+                    "SyncDataConn 2 closed",
+                    "SyncDataConn 2 dropped",
+                    "AsyncDataConn 1 closed",
+                    "AsyncDataConn 1 dropped",
+                    "SyncDataSrc 4 closed",
+                    "SyncDataSrc 4 dropped",
+                    "AsyncDataSrc 3 closed",
+                    "AsyncDataSrc 3 dropped",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[test]
+        fn test_pre_commit_but_fail_global_async() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, true),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
+
+            if let Ok(_auto_shutdown) = setup() {
+                let mut hub = DataHub::new();
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
+
+                if let Ok(_) = hub.begin() {
+                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
+                        assert_eq!(
+                            any::type_name_of_val(conn1),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
+                        assert_eq!(
+                            any::type_name_of_val(conn2),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
+                        assert_eq!(
+                            any::type_name_of_val(conn3),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
+                        assert_eq!(
+                            any::type_name_of_val(conn4),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+
+                    match hub.commit() {
+                        Ok(_) => panic!(),
+                        Err(err) => match err.reason::<DataHubError>() {
+                            Ok(r) => match r {
+                                DataHubError::FailToPreCommitDataConn { errors } => {
+                                    assert_eq!(errors.len(), 1);
+                                    if let Some(e) = errors.get("foo") {
+                                        if let Ok(s) = e.reason::<String>() {
+                                            assert_eq!(s, "VVV");
+                                        } else {
+                                            panic!();
+                                        }
+                                    } else {
+                                        panic!();
+                                    }
+                                }
+                                _ => panic!(),
+                            },
+                            Err(_) => panic!(),
+                        },
+                    }
+
+                    hub.end();
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
+                    "SyncDataSrc 4 setupped",
+                    "AsyncDataSrc 3 setupped",
+                    "AsyncDataSrc 1 created DataConn",
+                    "SyncDataSrc 2 created DataConn",
+                    "AsyncDataSrc 3 created DataConn",
+                    "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 failed to pre commit",
+                    "SyncDataConn 4 closed",
+                    "SyncDataConn 4 dropped",
+                    "AsyncDataConn 3 closed",
+                    "AsyncDataConn 3 dropped",
+                    "SyncDataConn 2 closed",
+                    "SyncDataConn 2 dropped",
+                    "AsyncDataConn 1 closed",
+                    "AsyncDataConn 1 dropped",
+                    "SyncDataSrc 4 closed",
+                    "SyncDataSrc 4 dropped",
+                    "AsyncDataSrc 3 closed",
+                    "AsyncDataSrc 3 dropped",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[test]
+        fn test_pre_commit_but_fail_local_sync() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
+
+            if let Ok(_auto_shutdown) = setup() {
+                let mut hub = DataHub::new();
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, true),
+                );
+
+                if let Ok(_) = hub.begin() {
+                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
+                        assert_eq!(
+                            any::type_name_of_val(conn1),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
+                        assert_eq!(
+                            any::type_name_of_val(conn2),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
+                        assert_eq!(
+                            any::type_name_of_val(conn3),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
+                        assert_eq!(
+                            any::type_name_of_val(conn4),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+
+                    match hub.commit() {
+                        Ok(_) => panic!(),
+                        Err(err) => match err.reason::<DataHubError>() {
+                            Ok(r) => match r {
+                                DataHubError::FailToPreCommitDataConn { errors } => {
+                                    assert_eq!(errors.len(), 1);
+                                    if let Some(e) = errors.get("qux") {
+                                        if let Ok(s) = e.reason::<String>() {
+                                            assert_eq!(s, "ZZZ");
+                                        } else {
+                                            panic!();
+                                        }
+                                    } else {
+                                        panic!();
+                                    }
+                                }
+                                _ => panic!(),
+                            },
+                            Err(_) => panic!(),
+                        },
+                    }
+
+                    hub.end();
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
+                    "SyncDataSrc 4 setupped",
+                    "AsyncDataSrc 3 setupped",
+                    "AsyncDataSrc 1 created DataConn",
+                    "SyncDataSrc 2 created DataConn",
+                    "AsyncDataSrc 3 created DataConn",
+                    "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 pre committed",
+                    "SyncDataConn 4 failed to pre commit",
+                    "SyncDataConn 4 closed",
+                    "SyncDataConn 4 dropped",
+                    "AsyncDataConn 3 closed",
+                    "AsyncDataConn 3 dropped",
+                    "SyncDataConn 2 closed",
+                    "SyncDataConn 2 dropped",
+                    "AsyncDataConn 1 closed",
+                    "AsyncDataConn 1 dropped",
+                    "SyncDataSrc 4 closed",
+                    "SyncDataSrc 4 dropped",
+                    "AsyncDataSrc 3 closed",
+                    "AsyncDataSrc 3 dropped",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[test]
+        fn test_pre_commit_but_fail_local_async() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
+
+            if let Ok(_auto_shutdown) = setup() {
+                let mut hub = DataHub::new();
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, true),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
+
+                if let Ok(_) = hub.begin() {
+                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
+                        assert_eq!(
+                            any::type_name_of_val(conn1),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
+                        assert_eq!(
+                            any::type_name_of_val(conn2),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
+                        assert_eq!(
+                            any::type_name_of_val(conn3),
+                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
+                        assert_eq!(
+                            any::type_name_of_val(conn4),
+                            "sabi::data_hub::tests_data_hub::SyncDataConn"
+                        );
+                    } else {
+                        panic!();
+                    }
+
+                    match hub.commit() {
+                        Ok(_) => panic!(),
+                        Err(err) => match err.reason::<DataHubError>() {
+                            Ok(r) => match r {
+                                DataHubError::FailToPreCommitDataConn { errors } => {
+                                    assert_eq!(errors.len(), 1);
+                                    if let Some(e) = errors.get("baz") {
+                                        if let Ok(s) = e.reason::<String>() {
+                                            assert_eq!(s, "VVV");
+                                        } else {
+                                            panic!();
+                                        }
+                                    } else {
+                                        panic!();
+                                    }
+                                }
+                                _ => panic!(),
+                            },
+                            Err(_) => panic!(),
+                        },
+                    }
+
+                    hub.end();
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
+                    "SyncDataSrc 4 setupped",
+                    "AsyncDataSrc 3 setupped",
+                    "AsyncDataSrc 1 created DataConn",
+                    "SyncDataSrc 2 created DataConn",
+                    "AsyncDataSrc 3 created DataConn",
+                    "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 failed to pre commit",
                     "SyncDataConn 4 closed",
                     "SyncDataConn 4 dropped",
                     "AsyncDataConn 3 closed",
@@ -2531,13 +3313,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -2624,13 +3418,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
@@ -2687,6 +3493,10 @@ mod tests_data_hub {
                     "SyncDataSrc 2 created DataConn",
                     "AsyncDataSrc 3 created DataConn",
                     "SyncDataSrc 4 created DataConn",
+                    "AsyncDataConn 1 pre committed",
+                    "SyncDataConn 2 pre committed",
+                    "AsyncDataConn 3 pre committed",
+                    "SyncDataConn 4 pre committed",
                     "AsyncDataConn 1 committed",
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 committed",
@@ -2722,13 +3532,25 @@ mod tests_data_hub {
 
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), false, false));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), false, false));
+            uses(
+                "foo",
+                AsyncDataSrc::new(1, logger.clone(), false, false, false),
+            );
+            uses(
+                "bar",
+                SyncDataSrc::new(2, logger.clone(), false, false, false),
+            );
 
             if let Ok(_auto_shutdown) = setup() {
                 let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), false, false));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), false, false));
+                hub.uses(
+                    "baz",
+                    AsyncDataSrc::new(3, logger.clone(), false, false, false),
+                );
+                hub.uses(
+                    "qux",
+                    SyncDataSrc::new(4, logger.clone(), false, false, false),
+                );
 
                 if let Ok(_) = hub.begin() {
                     if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {

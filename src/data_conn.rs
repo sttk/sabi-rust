@@ -19,6 +19,7 @@ where
             is_fn: is_data_conn::<C>,
 
             commit_fn: commit_data_conn::<C>,
+            pre_commit_fn: pre_commit_data_conn::<C>,
             post_commit_fn: post_commit_data_conn::<C>,
             should_force_back_fn: should_force_back_data_conn::<C>,
             rollback_fn: rollback_data_conn::<C>,
@@ -56,6 +57,14 @@ where
 {
     let typed_ptr = ptr as *mut DataConnContainer<C>;
     unsafe { (*typed_ptr).data_conn.commit(ag) }
+}
+
+fn pre_commit_data_conn<C>(ptr: *const DataConnContainer, ag: &mut AsyncGroup) -> Result<(), Err>
+where
+    C: DataConn + 'static,
+{
+    let typed_ptr = ptr as *mut DataConnContainer<C>;
+    unsafe { (*typed_ptr).data_conn.pre_commit(ag) }
 }
 
 fn post_commit_data_conn<C>(ptr: *const DataConnContainer, ag: &mut AsyncGroup)
