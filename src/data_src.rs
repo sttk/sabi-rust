@@ -281,10 +281,10 @@ impl DataSrcList {
 
         ag.join_and_put_errors_into(&mut err_map);
 
-        let last_ptr_may_setup = ptr;
+        let first_ptr_not_setup_yet = ptr;
 
         ptr = self.not_setup_head;
-        while !ptr.is_null() && ptr != last_ptr_may_setup {
+        while !ptr.is_null() && ptr != first_ptr_not_setup_yet {
             let next = unsafe { (*ptr).next };
             let name = unsafe { &(*ptr).name };
             if !err_map.contains_key(name) {
