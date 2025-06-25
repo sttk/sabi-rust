@@ -275,7 +275,8 @@ impl DataHub {
 
         let _ = self
             .data_src_map
-            .extract_if(|nm, p| unsafe { (*(*p)).local } && nm == name);
+            .extract_if(|nm, p| unsafe { (*(*p)).local } && nm == name)
+            .count(); // Exhausts the elements which are true under the given predicate
         self.local_data_src_list
             .remove_and_drop_local_container_ptr_did_setup_by_name(name);
         self.local_data_src_list
@@ -1518,7 +1519,7 @@ mod tests_data_hub {
                 let ptr = hub.local_data_src_list.did_setup_head();
                 assert!(ptr.is_null());
                 assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
+                assert_eq!(hub.data_src_map.len(), 0);
                 assert_eq!(hub.data_conn_map.len(), 0);
                 assert_eq!(hub.fixed, false);
             }
