@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync;
 
 use errs::Err;
-use hashbrown;
 
 use crate::data_conn::DataConnList;
 use crate::data_src::DataSrcList;
@@ -201,9 +200,9 @@ impl Drop for AutoShutdown {
 /// method executes logic within a controlled transaction.
 pub struct DataHub {
     local_data_src_list: DataSrcList,
-    data_src_map: hashbrown::HashMap<String, *mut DataSrcContainer>,
+    data_src_map: HashMap<String, *mut DataSrcContainer>,
     data_conn_list: DataConnList,
-    data_conn_map: hashbrown::HashMap<String, *mut DataConnContainer>,
+    data_conn_map: HashMap<String, *mut DataConnContainer>,
     fixed: bool,
 }
 
@@ -219,7 +218,7 @@ impl DataHub {
         #[cfg(test)]
         GLOBAL_DATA_SRCS_FIXED.store(true, sync::atomic::Ordering::Relaxed);
 
-        let mut data_src_map = hashbrown::HashMap::new();
+        let mut data_src_map = HashMap::new();
 
         #[allow(static_mut_refs)]
         unsafe {
@@ -230,7 +229,7 @@ impl DataHub {
             local_data_src_list: DataSrcList::new(true),
             data_src_map,
             data_conn_list: DataConnList::new(),
-            data_conn_map: hashbrown::HashMap::new(),
+            data_conn_map: HashMap::new(),
             fixed: false,
         }
     }
@@ -274,8 +273,7 @@ impl DataHub {
         }
 
         self.data_src_map
-            .extract_if(|nm, p| unsafe { (*(*p)).local } && nm == name)
-            .count(); // Exhausts the elements which are true under the given predicate
+            .retain(|nm, p| unsafe { !(*(*p)).local } || nm != name);
         self.local_data_src_list
             .remove_and_drop_local_container_ptr_did_setup_by_name(name);
         self.local_data_src_list
