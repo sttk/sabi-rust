@@ -273,8 +273,7 @@ impl DataHub {
             return;
         }
 
-        let _ = self
-            .data_src_map
+        self.data_src_map
             .extract_if(|nm, p| unsafe { (*(*p)).local } && nm == name)
             .count(); // Exhausts the elements which are true under the given predicate
         self.local_data_src_list
