@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::ptr;
 
 use errs::Err;
-use hashbrown;
 
 use crate::{AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer};
 
@@ -236,7 +235,7 @@ impl DataSrcList {
 
     pub(crate) fn copy_container_ptrs_did_setup_into(
         &self,
-        map: &mut hashbrown::HashMap<String, *mut DataSrcContainer>,
+        map: &mut HashMap<String, *mut DataSrcContainer>,
     ) {
         let mut ptr = self.did_setup_head;
         while !ptr.is_null() {
@@ -1194,7 +1193,7 @@ mod tests_of_data_src {
         fn test_of_copy_container_ptrs_did_setup_into() {
             let mut ds_list = DataSrcList::new(false);
 
-            let mut map = hashbrown::HashMap::<String, *mut DataSrcContainer>::new();
+            let mut map = HashMap::<String, *mut DataSrcContainer>::new();
             ds_list.copy_container_ptrs_did_setup_into(&mut map);
             assert_eq!(map.len(), 0);
 
@@ -1233,7 +1232,7 @@ mod tests_of_data_src {
 
             ds_list.append_container_ptr_did_setup(ptr3);
 
-            let mut map = hashbrown::HashMap::<String, *mut DataSrcContainer>::new();
+            let mut map = HashMap::<String, *mut DataSrcContainer>::new();
             ds_list.copy_container_ptrs_did_setup_into(&mut map);
             assert_eq!(map.len(), 3);
             assert_eq!(map.get("foo").unwrap(), &ptr1);

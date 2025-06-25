@@ -18,7 +18,6 @@ name = "sabi"
 [dependencies]
 errs = "0.2"
 futures = "0.3"
-hashbrown = "0.15"
 tokio = "1"
 
 [dev-dependencies]
