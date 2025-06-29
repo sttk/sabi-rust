@@ -238,7 +238,7 @@ impl DataHub {
     ///
     /// This method is similar to the global `uses` function but registers a data source
     /// that is local to this specific `DataHub` session. Once the `DataHub`'s state is
-    /// "fixed" (while `run` method or `txn` method is executing), further calls
+    /// "fixed" (while `run` or `txn` method is executing), further calls
     /// to `uses` are ignored. However, after `run` or `txn` completes, the `DataHub`'s
     /// "fixed" state is reset, allowing for new data sources to be registered or removed
     /// via `disuses` method in subsequent operations.
