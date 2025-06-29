@@ -238,10 +238,10 @@ impl DataHub {
     ///
     /// This method is similar to the global `uses` function but registers a data source
     /// that is local to this specific `DataHub` session. Once the `DataHub`'s state is
-    /// "fixed" (after `begin` is called internally by `run` or `txn`), further calls
+    /// "fixed" (while `run` or `txn` method is executing), further calls
     /// to `uses` are ignored. However, after `run` or `txn` completes, the `DataHub`'s
-    /// `fixed` state is reset, allowing for new data sources to be registered or removed
-    /// via `disuses` in subsequent operations.
+    /// "fixed" state is reset, allowing for new data sources to be registered or removed
+    /// via `disuses` method in subsequent operations.
     ///
     /// # Parameters
     ///
@@ -440,7 +440,8 @@ impl DataHub {
     /// This method first sets up local data sources, then runs the provided closure.
     /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
     /// or if the logic function itself returns an `Err`, a rollback operation
-    /// is performed. On successful commit, `post_commit` actions are executed.
+    /// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
+    /// `post_commit` methods of all `DataConn`s are executed.
     /// Finally, it cleans up the `DataHub`'s session resources.
     ///
     /// # Parameters
@@ -450,8 +451,8 @@ impl DataHub {
     ///
     /// # Returns
     ///
-    /// * `Result<(), Err>`: The final result of the transaction (success or failure of logic/commit),
-    ///   or an error if the `DataHub`'s setup fails.
+    /// * `Result<(), Err>`: The final result of the transaction (success or failure of
+    ///   logic/commit), or an error if the `DataHub`'s setup fails.
     pub fn txn<F>(&mut self, logic_fn: F) -> Result<(), Err>
     where
         F: FnOnce(&mut DataHub) -> Result<(), Err>,
