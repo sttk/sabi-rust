@@ -441,7 +441,7 @@ impl DataHub {
     /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
     /// or if the logic function itself returns an `Err`, a rollback operation
     /// is performed. On successful `pre_commit` and `commit` methods, `post_commit` method
-    /// are executed.
+    /// is executed.
     /// Finally, it cleans up the `DataHub`'s session resources.
     ///
     /// # Parameters

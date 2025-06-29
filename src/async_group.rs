@@ -23,7 +23,7 @@ pub enum AsyncGroupError {
 ///
 /// Functions are added using the `add` method and are then run concurrently.
 /// The `AsyncGroup` ensures that all tasks finish before proceeding,
-/// collecting any errors that occur.
+/// and can collect any errors that occur.
 pub struct AsyncGroup<'a> {
     task_vec: VecDeque<Pin<Box<dyn Future<Output = Result<(), Err>> + Send + 'static>>>,
     name_vec: VecDeque<String>,
@@ -41,10 +41,8 @@ impl<'a> AsyncGroup<'_> {
 
     /// Adds an asynchronous function (a future-producing closure) to the group.
     ///
-    /// This given function will be executed asynchronously.
-    /// And this function, along with other similarly given functions, is awaited until
-    /// completion.
-    /// If an error occurs during the function's execution, the error is collected internally.
+    /// This given function is executed asynchronously with other similarly given functions, 
+    /// awaiting completion and collecing errors internally..
     ///
     /// # Type Parameters
     ///
