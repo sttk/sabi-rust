@@ -440,8 +440,8 @@ impl DataHub {
     /// This method first sets up local data sources, then runs the provided closure.
     /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
     /// or if the logic function itself returns an `Err`, a rollback operation
-    /// is performed. On successful `pre_commit` and `commit` methods, `post_commit` method
-    /// is executed.
+    /// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
+    /// `post_commit` methods of all `DataConn`s are executed.
     /// Finally, it cleans up the `DataHub`'s session resources.
     ///
     /// # Parameters
