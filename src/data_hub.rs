@@ -275,9 +275,9 @@ impl DataHub {
         self.data_src_map
             .retain(|nm, p| unsafe { !(*(*p)).local } || nm != name);
         self.local_data_src_list
-            .remove_and_drop_local_container_ptr_did_setup_by_name(name);
+            .remove_and_drop_container_ptr_did_setup_by_name(name);
         self.local_data_src_list
-            .remove_and_drop_local_container_ptr_not_setup_by_name(name);
+            .remove_and_drop_container_ptr_not_setup_by_name(name);
     }
 
     fn begin(&mut self) -> Result<(), Err> {
