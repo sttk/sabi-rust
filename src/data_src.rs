@@ -150,14 +150,13 @@ impl DataSrcList {
         }
     }
 
-    pub(crate) fn remove_and_drop_local_container_ptr_not_setup_by_name(&mut self, name: &str) {
+    pub(crate) fn remove_and_drop_container_ptr_not_setup_by_name(&mut self, name: &str) {
         let mut ptr = self.not_setup_head;
         while !ptr.is_null() {
             let next = unsafe { (*ptr).next };
             let nm = unsafe { &(*ptr).name };
-            let local = unsafe { (*ptr).local };
 
-            if local && nm == name {
+            if nm == name {
                 let close_fn = unsafe { (*ptr).close_fn };
                 let drop_fn = unsafe { (*ptr).drop_fn };
 
@@ -212,14 +211,13 @@ impl DataSrcList {
         }
     }
 
-    pub(crate) fn remove_and_drop_local_container_ptr_did_setup_by_name(&mut self, name: &str) {
+    pub(crate) fn remove_and_drop_container_ptr_did_setup_by_name(&mut self, name: &str) {
         let mut ptr = self.did_setup_head;
         while !ptr.is_null() {
             let next = unsafe { (*ptr).next };
             let nm = unsafe { &(*ptr).name };
-            let local = unsafe { (*ptr).local };
 
-            if local && nm == name {
+            if nm == name {
                 let close_fn = unsafe { (*ptr).close_fn };
                 let drop_fn = unsafe { (*ptr).drop_fn };
 
