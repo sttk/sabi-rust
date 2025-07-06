@@ -832,6 +832,135 @@ mod tests_of_data_src {
         }
 
         #[test]
+        fn test_of_remove_and_drop_container_ptr_not_setup_by_name() {
+            let mut ds_list = DataSrcList::new(false);
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "foo".to_string(),
+                    ds1,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr1 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_not_setup(ptr1);
+
+                let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "bar".to_string(),
+                    ds2,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr2 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_not_setup(ptr2);
+
+                let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "baz".to_string(),
+                    ds3,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr3 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_not_setup(ptr3);
+
+                let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "qux".to_string(),
+                    ds4,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr4 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_not_setup(ptr4);
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr1);
+                assert_eq!(ds_list.not_setup_last, ptr4);
+                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+
+                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr1).next }, ptr2);
+                assert_eq!(unsafe { (*ptr2).prev }, ptr1);
+                assert_eq!(unsafe { (*ptr2).next }, ptr3);
+                assert_eq!(unsafe { (*ptr3).prev }, ptr2);
+                assert_eq!(unsafe { (*ptr3).next }, ptr4);
+                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
+                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_not_setup_by_name("bar");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr1);
+                assert_eq!(ds_list.not_setup_last, ptr4);
+                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+
+                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr1).next }, ptr3);
+                assert_eq!(unsafe { (*ptr3).prev }, ptr1);
+                assert_eq!(unsafe { (*ptr3).next }, ptr4);
+                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
+                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_not_setup_by_name("foo");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr3);
+                assert_eq!(ds_list.not_setup_last, ptr4);
+                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+
+                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr3).next }, ptr4);
+                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
+                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_not_setup_by_name("qux");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr3);
+                assert_eq!(ds_list.not_setup_last, ptr3);
+                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+
+                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_not_setup_by_name("baz");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "SyncDataSrc 1 closed",
+                    "SyncDataSrc 1 dropped",
+                    "SyncDataSrc 4 closed",
+                    "SyncDataSrc 4 dropped",
+                    "SyncDataSrc 3 closed",
+                    "SyncDataSrc 3 dropped",
+                ]
+            );
+        }
+
+        #[test]
         fn test_of_append_container_ptr_did_setup() {
             let mut ds_list = DataSrcList::new(false);
 
@@ -1185,6 +1314,135 @@ mod tests_of_data_src {
             assert_eq!(ds_list.not_setup_last, ptr::null_mut());
             assert_eq!(ds_list.did_setup_head, ptr::null_mut());
             assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+        }
+
+        #[test]
+        fn test_of_remove_and_drop_container_ptr_did_setup_by_name() {
+            let mut ds_list = DataSrcList::new(false);
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "foo".to_string(),
+                    ds1,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr1 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_did_setup(ptr1);
+
+                let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "bar".to_string(),
+                    ds2,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr2 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_did_setup(ptr2);
+
+                let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "baz".to_string(),
+                    ds3,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr3 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_did_setup(ptr3);
+
+                let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
+                    false,
+                    "qux".to_string(),
+                    ds4,
+                ));
+                let typed_ptr = Box::into_raw(boxed);
+                let ptr4 = typed_ptr.cast::<DataSrcContainer>();
+
+                ds_list.append_container_ptr_did_setup(ptr4);
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_head, ptr1);
+                assert_eq!(ds_list.did_setup_last, ptr4);
+
+                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr1).next }, ptr2);
+                assert_eq!(unsafe { (*ptr2).prev }, ptr1);
+                assert_eq!(unsafe { (*ptr2).next }, ptr3);
+                assert_eq!(unsafe { (*ptr3).prev }, ptr2);
+                assert_eq!(unsafe { (*ptr3).next }, ptr4);
+                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
+                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_did_setup_by_name("bar");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_head, ptr1);
+                assert_eq!(ds_list.did_setup_last, ptr4);
+
+                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr1).next }, ptr3);
+                assert_eq!(unsafe { (*ptr3).prev }, ptr1);
+                assert_eq!(unsafe { (*ptr3).next }, ptr4);
+                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
+                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_did_setup_by_name("foo");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_head, ptr3);
+                assert_eq!(ds_list.did_setup_last, ptr4);
+
+                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr3).next }, ptr4);
+                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
+                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_did_setup_by_name("qux");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_head, ptr3);
+                assert_eq!(ds_list.did_setup_last, ptr3);
+
+                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
+                assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
+
+                ds_list.remove_and_drop_container_ptr_did_setup_by_name("baz");
+
+                assert_eq!(ds_list.local, false);
+                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
+                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "SyncDataSrc 1 closed",
+                    "SyncDataSrc 1 dropped",
+                    "SyncDataSrc 4 closed",
+                    "SyncDataSrc 4 dropped",
+                    "SyncDataSrc 3 closed",
+                    "SyncDataSrc 3 dropped",
+                ]
+            );
         }
 
         #[test]
