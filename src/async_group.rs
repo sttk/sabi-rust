@@ -41,7 +41,7 @@ impl<'a> AsyncGroup<'_> {
 
     /// Adds an asynchronous function (a future-producing closure) to the group.
     ///
-    /// This provided function is executed asynchronously with other added functions, 
+    /// This provided function is executed asynchronously with other added functions,
     /// awaiting completion and collecting errors internally.
     ///
     /// # Type Parameters
