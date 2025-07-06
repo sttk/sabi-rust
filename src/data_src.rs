@@ -833,11 +833,11 @@ mod tests_of_data_src {
 
         #[test]
         fn test_of_remove_and_drop_container_ptr_not_setup_by_name() {
-            let mut ds_list = DataSrcList::new(false);
-
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
+                let mut ds_list = DataSrcList::new(false);
+
                 let ds1 = SyncDataSrc::new(1, logger.clone(), false);
                 let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
                     false,
@@ -1318,11 +1318,11 @@ mod tests_of_data_src {
 
         #[test]
         fn test_of_remove_and_drop_container_ptr_did_setup_by_name() {
-            let mut ds_list = DataSrcList::new(false);
-
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
+                let mut ds_list = DataSrcList::new(false);
+
                 let ds1 = SyncDataSrc::new(1, logger.clone(), false);
                 let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
                     false,
