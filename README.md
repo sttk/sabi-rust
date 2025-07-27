@@ -42,7 +42,7 @@ In Cargo.toml, write this crate as a dependency:
 
 ```toml
 [dependencies]
-sabi = "0.2.0"
+sabi-rust = "0.2.0"
 ```
 
 ## Usage
