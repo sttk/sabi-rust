@@ -8,10 +8,10 @@
 //! In this framework, the logic exclusively takes a data access trait as its argument,
 //! and all necessary data access is defined by a single data access trait.
 //! Conversely, the concrete implementations of data access methods are provided as default methods
-//! of DataAcc derived traits, allowing for flexible grouping, often by data service.
+//! of `DataAcc` derived traits, allowing for flexible grouping, often by data service.
 //!
 //! The `DataHub` bridges these two parts.
-//! It attaches all DataAcc derived traits, and then, using the
+//! It attaches all `DataAcc` derived traits, and then, using the
 //! [override_macro](https://github.com/sttk/override_macro-rust) crate, it overrides
 //! the methods of the data access trait used by the logic to point to the implementations
 //! found in the `DataAcc` derived traits.
