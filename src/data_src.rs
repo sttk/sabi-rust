@@ -276,7 +276,7 @@ impl DataSrcList {
             ptr = next;
         }
 
-        ag.join_and_put_errors_into(&mut err_map);
+        ag.join_and_collect_errors(&mut err_map);
 
         let first_ptr_not_setup_yet = ptr;
 

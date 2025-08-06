@@ -318,7 +318,7 @@ impl DataHub {
             ptr = next;
         }
 
-        ag.join_and_put_errors_into(&mut err_map);
+        ag.join_and_collect_errors(&mut err_map);
 
         if !err_map.is_empty() {
             return Err(Err::new(DataHubError::FailToPreCommitDataConn {
@@ -344,7 +344,7 @@ impl DataHub {
             ptr = next;
         }
 
-        ag.join_and_put_errors_into(&mut err_map);
+        ag.join_and_collect_errors(&mut err_map);
 
         if !err_map.is_empty() {
             return Err(Err::new(DataHubError::FailToCommitDataConn {
