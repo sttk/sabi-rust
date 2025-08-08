@@ -166,6 +166,62 @@ pub fn setup() -> Result<AutoShutdown, Err> {
     Ok(AutoShutdown {})
 }
 
+/// Executes asynchronously the setup process for all globally registered data sources.
+///
+/// This setup typically involves tasks such as creating connection pools,
+/// opening global connections, or performing initial configurations necessary
+/// for creating session-specific connections. The setup can run synchronously
+/// or asynchronously using an `AsyncGroup` if operations are time-consuming.
+///
+/// If any data source fails to set up, this function returns an `Err` with
+/// `DataHubError::FailToSetupGlobalDataSrcs`, containing a map of the names
+/// of the failed data sources and their corresponding `Err` objects. In such a case,
+/// all global data sources that were successfully set up are also closed and dropped.
+///
+/// If all data source setups are successful, the `Result::Ok` which contains an object
+/// is returned. This object is designed to close and drop global data sources when
+/// it's dropped.
+/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
+/// automatically cleaned up when the return value goes out of scope.
+///
+/// **NOTE:** Do not receive the `Result` or its inner object into an anonymous
+/// variable using `let _ = ...`.
+/// If you do, the inner object is dropped immediately at that point.
+///
+/// # Returns
+///
+/// * `Result<AutoShutdown, Err>`: An `AutoShutdown` if all global data sources are
+///   set up successfully, or an `Err` if any setup fails.
+pub async fn setup_async() -> Result<AutoShutdown, Err> {
+    #[cfg(not(test))]
+    let ok = GLOBAL_DATA_SRCS_FIXED.set(()).is_ok();
+    #[cfg(test)]
+    let ok = GLOBAL_DATA_SRCS_FIXED
+        .compare_exchange(
+            false,
+            true,
+            sync::atomic::Ordering::Relaxed,
+            sync::atomic::Ordering::Relaxed,
+        )
+        .is_ok();
+
+    if ok {
+        #[allow(static_mut_refs)]
+        let err_map = unsafe { GLOBAL_DATA_SRC_LIST.setup_data_srcs_async() }.await;
+        if err_map.len() > 0 {
+            #[allow(static_mut_refs)]
+            unsafe {
+                GLOBAL_DATA_SRC_LIST.close_and_drop_data_srcs();
+            }
+            return Err(Err::new(DataHubError::FailToSetupGlobalDataSrcs {
+                errors: err_map,
+            }));
+        }
+    }
+
+    Ok(AutoShutdown {})
+}
+
 /// A utility struct that ensure to close and drop global data sources when it goes out scope.
 ///
 /// This struct implements the `Drop` trait, and its `drop` method handles the closing and
@@ -1183,6 +1239,378 @@ mod tests_data_hub {
 
             {
                 let result = setup();
+                assert!(result.is_ok());
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+
+                let result = setup();
+                assert!(result.is_ok());
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+            }
+
+            assert_eq!(
+                logger.lock().unwrap().clone(),
+                vec![
+                    "AsyncDataSrc 1 setupped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_setup_and_shutdown() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
+            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(!ptr.is_null());
+                assert_eq!((*ptr).name, "foo");
+                ptr = (*ptr).next;
+                assert!(!ptr.is_null());
+                assert_eq!((*ptr).name, "bar");
+                ptr = (*ptr).next;
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            {
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "bar");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+            }
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_shutdown_later() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(ptr.is_null());
+                }
+
+                uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
+                uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "bar");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+
+                    let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(ptr.is_null());
+                }
+
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "bar");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+            }
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_fail_to_setup() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Setup));
+            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(!ptr.is_null());
+                assert_eq!((*ptr).name, "foo");
+                ptr = (*ptr).next;
+                assert!(!ptr.is_null());
+                assert_eq!((*ptr).name, "bar");
+                ptr = (*ptr).next;
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            match setup_async().await {
+                Ok(_) => panic!(),
+                Err(err) => match err.reason::<DataHubError>() {
+                    Ok(r) => match r {
+                        DataHubError::FailToSetupGlobalDataSrcs { errors } => {
+                            let err = errors.get("foo").unwrap();
+                            match err.reason::<String>() {
+                                Ok(s) => assert_eq!(s, "YYY"),
+                                Err(_) => panic!(),
+                            }
+                            let err = errors.get("bar").unwrap();
+                            match err.reason::<String>() {
+                                Ok(s) => assert_eq!(s, "XXX"),
+                                Err(_) => panic!(),
+                            }
+                        }
+                        _ => panic!(),
+                    },
+                    Err(_) => panic!(),
+                },
+            }
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            assert_eq!(
+                logger.lock().unwrap().clone(),
+                vec![
+                    "SyncDataSrc 2 failed to setup",
+                    "AsyncDataSrc 1 failed to setup",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 dropped",
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_cannot_add_global_data_src_after_setup() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(!ptr.is_null());
+                assert_eq!((*ptr).name, "foo");
+                ptr = (*ptr).next;
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            {
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+
+                uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
+
+                #[allow(static_mut_refs)]
+                unsafe {
+                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                    assert!(ptr.is_null());
+
+                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                    assert!(!ptr.is_null());
+                    assert_eq!((*ptr).name, "foo");
+                    ptr = (*ptr).next;
+                    assert!(ptr.is_null());
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "AsyncDataSrc 1 setupped",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_do_nothing_if_executing_setup_twice() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
+
+            #[allow(static_mut_refs)]
+            unsafe {
+                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
+                assert!(!ptr.is_null());
+                assert_eq!((*ptr).name, "foo");
+                ptr = (*ptr).next;
+                assert!(ptr.is_null());
+
+                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
+                assert!(ptr.is_null());
+            }
+
+            {
+                let result = setup_async().await;
                 assert!(result.is_ok());
 
                 #[allow(static_mut_refs)]
