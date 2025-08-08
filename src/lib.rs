@@ -150,7 +150,7 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 pub use data_acc::DataAcc;
-pub use data_hub::{setup, uses, AutoShutdown, DataHub, DataHubError};
+pub use data_hub::{setup, setup_async, uses, AutoShutdown, DataHub, DataHubError};
 
 /// The trait that abstracts a connection per session to an external data service,
 /// such as a database, file system, or messaging service.

@@ -294,6 +294,45 @@ impl DataSrcList {
         err_map
     }
 
+    pub(crate) async fn setup_data_srcs_async(&mut self) -> HashMap<String, Err> {
+        let mut err_map = HashMap::new();
+
+        if self.not_setup_head.is_null() {
+            return err_map;
+        }
+
+        let mut ag = AsyncGroup::new();
+
+        let mut ptr = self.not_setup_head;
+        while !ptr.is_null() {
+            let setup_fn = unsafe { (*ptr).setup_fn };
+            let next = unsafe { (*ptr).next };
+            ag.name = unsafe { &(*ptr).name };
+            if let Err(err) = setup_fn(ptr, &mut ag) {
+                err_map.insert(ag.name.to_string(), err);
+                break;
+            }
+            ptr = next;
+        }
+
+        ag.join_and_collect_errors_async(&mut err_map).await;
+
+        let first_ptr_not_setup_yet = ptr;
+
+        ptr = self.not_setup_head;
+        while !ptr.is_null() && ptr != first_ptr_not_setup_yet {
+            let next = unsafe { (*ptr).next };
+            let name = unsafe { &(*ptr).name };
+            if !err_map.contains_key(name) {
+                self.remove_container_ptr_not_setup(ptr);
+                self.append_container_ptr_did_setup(ptr);
+            }
+            ptr = next;
+        }
+
+        err_map
+    }
+
     pub(crate) fn close_and_drop_data_srcs(&mut self) {
         let mut ptr = self.did_setup_last;
         while !ptr.is_null() {
@@ -1632,6 +1671,150 @@ mod tests_of_data_src {
             let mut data_src_list = DataSrcList::new(LOCAL);
 
             let err_map = data_src_list.setup_data_srcs();
+            assert!(err_map.is_empty());
+
+            data_src_list.close_and_drop_data_srcs();
+
+            assert!(data_src_list.not_setup_head.is_null());
+            assert!(data_src_list.did_setup_head.is_null());
+        }
+
+        #[tokio::test]
+        async fn async_test_setup_and_create_data_conn_and_close() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut data_src_list = DataSrcList::new(false);
+
+                let ds_async = AsyncDataSrc::new(1, logger.clone(), false);
+                data_src_list.add_data_src("foo".to_string(), ds_async);
+
+                let ds_sync = SyncDataSrc::new(2, logger.clone(), false);
+                data_src_list.add_data_src("bar".to_string(), ds_sync);
+
+                let err_map = data_src_list.setup_data_srcs_async().await;
+                assert!(err_map.is_empty());
+
+                let ptr = data_src_list.did_setup_head;
+                let create_fn = unsafe { (*ptr).create_data_conn_fn };
+                match create_fn(ptr) {
+                    Ok(_) => {}
+                    Err(_) => panic!(),
+                }
+
+                let ptr = unsafe { (*ptr).next };
+                let create_fn = unsafe { (*ptr).create_data_conn_fn };
+                match create_fn(ptr) {
+                    Ok(_) => {}
+                    Err(_) => panic!(),
+                }
+
+                data_src_list.close_and_drop_data_srcs();
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 setupped",
+                    "AsyncDataSrc 1 created DataConn",
+                    "SyncDataSrc 2 created DataConn",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_fail_to_setup_sync_and_close() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut data_src_list = DataSrcList::new(true);
+
+                let ds_async = AsyncDataSrc::new(1, logger.clone(), false);
+                data_src_list.add_data_src("foo".to_string(), ds_async);
+
+                let ds_sync = SyncDataSrc::new(2, logger.clone(), true);
+                data_src_list.add_data_src("bar".to_string(), ds_sync);
+
+                let err_map = data_src_list.setup_data_srcs_async().await;
+                assert_eq!(err_map.len(), 1);
+
+                if let Some(err) = err_map.get("bar") {
+                    if let Ok(r) = err.reason::<String>() {
+                        assert_eq!(r, "XXX");
+                    } else {
+                        panic!();
+                    }
+                } else {
+                    panic!();
+                }
+
+                data_src_list.close_and_drop_data_srcs();
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 failed to setup",
+                    "AsyncDataSrc 1 setupped",
+                    "AsyncDataSrc 1 closed",
+                    "AsyncDataSrc 1 dropped",
+                    "SyncDataSrc 2 dropped",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_fail_to_setup_async_and_close() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut data_src_list = DataSrcList::new(true);
+
+                let ds_async = AsyncDataSrc::new(1, logger.clone(), true);
+                data_src_list.add_data_src("foo".to_string(), ds_async);
+
+                let ds_sync = SyncDataSrc::new(2, logger.clone(), false);
+                data_src_list.add_data_src("bar".to_string(), ds_sync);
+
+                let err_map = data_src_list.setup_data_srcs_async().await;
+                assert_eq!(err_map.len(), 1);
+
+                if let Some(err) = err_map.get("foo") {
+                    if let Ok(r) = err.reason::<String>() {
+                        assert_eq!(r, "XXX");
+                    } else {
+                        panic!();
+                    }
+                } else {
+                    panic!();
+                }
+
+                data_src_list.close_and_drop_data_srcs();
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc 2 setupped",
+                    "AsyncDataSrc 1 failed to setup",
+                    "SyncDataSrc 2 closed",
+                    "SyncDataSrc 2 dropped",
+                    "AsyncDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_no_data_src() {
+            const LOCAL: bool = true;
+            let mut data_src_list = DataSrcList::new(LOCAL);
+
+            let err_map = data_src_list.setup_data_srcs_async().await;
             assert!(err_map.is_empty());
 
             data_src_list.close_and_drop_data_srcs();
