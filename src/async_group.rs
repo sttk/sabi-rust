@@ -39,26 +39,24 @@ impl<'a> AsyncGroup<'_> {
         }
     }
 
-    /// Adds an asynchronous function (a future-producing closure) to the group.
+    /// Adds an asynchronous task (a future) to the group.
     ///
-    /// This provided function is executed asynchronously with other added functions,
+    /// This provided future is executed asynchronously with other added tasks,
     /// awaiting completion and collecting errors internally.
     ///
     /// # Type Parameters
     ///
-    /// * `F`: The type of the closure, which must be `FnOnce` and `Send + 'static`.
-    /// * `Fut`: The type of the future returned by the closure, which must be
+    /// * `Fut`: The type of the future, which must be
     ///   `Future<Output = Result<(), Err>> + Send + 'static`.
     ///
     /// # Parameters
     ///
-    /// * `future_fn`: A closure that, when called, returns a future to be executed.
-    pub fn add<F, Fut>(&mut self, future_fn: F)
+    /// * `future`: The future to be executed.
+    pub fn add<Fut>(&mut self, future: Fut)
     where
-        F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = Result<(), Err>> + Send + 'static,
     {
-        self.task_vec.push_back(Box::pin(future_fn()));
+        self.task_vec.push_back(Box::pin(future));
         self.name_vec.push_back(self.name.to_string());
     }
 
@@ -148,7 +146,7 @@ mod tests_of_async_group {
         fn process(&self, ag: &mut AsyncGroup) {
             let flag_clone = self.flag.clone();
             let will_fail = self.will_fail;
-            ag.add(async move || {
+            ag.add(async move {
                 // The `.await` must be executed outside the Mutex lock.
                 let _ = time::sleep(time::Duration::from_millis(100)).await;
 
@@ -184,7 +182,7 @@ mod tests_of_async_group {
             let string_clone = self.string.clone();
             let flag_clone = self.flag.clone();
             let will_fail = self.will_fail;
-            ag.add(async move || {
+            ag.add(async move {
                 // The `.await` must be executed outside the Mutex lock.
                 let _ = time::sleep(time::Duration::from_millis(300)).await;
 
@@ -218,7 +216,7 @@ mod tests_of_async_group {
         fn process(&self, ag: &mut AsyncGroup) {
             let number_clone = self.number.clone();
             let will_fail = self.will_fail;
-            ag.add(async move || {
+            ag.add(async move {
                 // The `.await` must be executed outside the Mutex lock.
                 let _ = time::sleep(time::Duration::from_millis(50)).await;
 

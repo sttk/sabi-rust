@@ -443,7 +443,7 @@ mod tests_of_data_src {
             let logger = self.logger.clone();
             let will_fail = self.will_fail;
             let id = self.id;
-            ag.add(async move || {
+            ag.add(async move {
                 let mut logger = logger.lock().unwrap();
                 if will_fail {
                     logger.push(format!("AsyncDataSrc {} failed to setup", id));
