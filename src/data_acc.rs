@@ -48,6 +48,7 @@ impl DataAcc for DataHub {
 mod tests_of_data_acc {
     use super::*;
     use crate::data_hub::{clear_global_data_srcs_fixed, TEST_SEQ};
+    use crate::{run_async, setup_async, txn_async};
     use crate::{setup, uses, AsyncGroup, DataHubError, DataSrc};
     use override_macro::{overridable, override_with};
     use std::cell::RefCell;
@@ -297,6 +298,12 @@ mod tests_of_data_acc {
             Ok(())
         }
 
+        async fn sample_logic_async(data: &mut impl SampleData) -> Result<(), Err> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
         #[overridable(mod = test_logic_argument)]
         trait FooDataAcc: DataAcc {
             fn get_value(&mut self) -> Result<String, Err> {
@@ -362,6 +369,48 @@ mod tests_of_data_acc {
                 ],
             );
         }
+
+        #[tokio::test]
+        async fn async_test() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            {
+                uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
+                uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+
+                if let Err(_) = sample_logic_async(&mut hub).await {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 setupped",
+                    "BarDataSrc 2 setupped",
+                    "FooDataSrc 1 created FooDataConn",
+                    "BarDataSrc 2 created BarDataConn",
+                    "BarDataConn.text = hello",
+                    "BarDataConn 2 closed",
+                    "BarDataConn 2 dropped",
+                    "FooDataConn 1 closed",
+                    "FooDataConn 1 dropped",
+                    "BarDataSrc.text = ",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 closed",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
     }
 
     mod test_data_hub_run_using_global {
@@ -374,6 +423,12 @@ mod tests_of_data_acc {
         }
 
         fn sample_logic(data: &mut impl SampleData) -> Result<(), Err> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
+        async fn sample_logic_async(data: &mut impl SampleData) -> Result<(), Err> {
             let v = data.get_value()?;
             let _ = data.set_value(&v);
             Ok(())
@@ -443,6 +498,44 @@ mod tests_of_data_acc {
                 ],
             );
         }
+
+        #[tokio::test]
+        async fn async_test() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                assert!(run_async!(hub, sample_logic_async).await.is_ok());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 setupped",
+                    "BarDataSrc 2 setupped",
+                    "FooDataSrc 1 created FooDataConn",
+                    "BarDataSrc 2 created BarDataConn",
+                    "BarDataConn.text = Hello",
+                    "BarDataConn 2 closed",
+                    "BarDataConn 2 dropped",
+                    "FooDataConn 1 closed",
+                    "FooDataConn 1 dropped",
+                    "BarDataSrc.text = ",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 closed",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
     }
 
     mod test_data_hub_run_using_local {
@@ -455,6 +548,12 @@ mod tests_of_data_acc {
         }
 
         fn sample_logic(data: &mut impl SampleData) -> Result<(), Err> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
+        async fn sample_logic_async(data: &mut impl SampleData) -> Result<(), Err> {
             let v = data.get_value()?;
             let _ = data.set_value(&v);
             Ok(())
@@ -572,6 +671,92 @@ mod tests_of_data_acc {
                 ],
             );
         }
+
+        #[tokio::test]
+        async fn async_test() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                if let Ok(_auto_shutdown) = setup_async().await {
+                    let mut hub = DataHub::new();
+                    hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                    hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                    assert!(run_async!(hub, sample_logic_async).await.is_ok());
+                } else {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 setupped",
+                    "BarDataSrc 2 setupped",
+                    "FooDataSrc 1 created FooDataConn",
+                    "BarDataSrc 2 created BarDataConn",
+                    "BarDataConn.text = Hello",
+                    "BarDataConn 2 closed",
+                    "BarDataConn 2 dropped",
+                    "FooDataConn 1 closed",
+                    "FooDataConn 1 dropped",
+                    "BarDataSrc.text = ",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 closed",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_not_run_logic_if_fail_to_setup_local_data_src() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                if let Err(err) = run_async!(hub, sample_logic_async).await {
+                    match err.reason::<DataHubError>() {
+                        Ok(r) => match r {
+                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
+                                assert_eq!(errors.len(), 1);
+                                if let Some(err) = errors.get("foo") {
+                                    match err.reason::<String>() {
+                                        Ok(s) => assert_eq!(s, "XXX"),
+                                        Err(_) => panic!(),
+                                    }
+                                } else {
+                                    panic!();
+                                }
+                            }
+                            _ => panic!(),
+                        },
+                        Err(_) => panic!(),
+                    }
+                } else {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 failed to setup",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
     }
 
     mod test_data_hub_run_using_global_and_local {
@@ -584,6 +769,12 @@ mod tests_of_data_acc {
         }
 
         fn sample_logic(data: &mut impl SampleData) -> Result<(), Err> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
+        async fn sample_logic_async(data: &mut impl SampleData) -> Result<(), Err> {
             let v = data.get_value()?;
             let _ = data.set_value(&v);
             Ok(())
@@ -615,6 +806,7 @@ mod tests_of_data_acc {
             test_data_hub_run_using_global_and_local::BarDataAcc
         )]
         impl test_data_hub_run_using_global_and_local::SampleData for DataHub {}
+
         #[test]
         fn test() {
             let _unused = TEST_SEQ.lock().unwrap();
@@ -652,6 +844,44 @@ mod tests_of_data_acc {
                 ],
             );
         }
+
+        #[tokio::test]
+        async fn async_test() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                uses("bar", BarDataSrc::new(1, logger.clone()));
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
+
+                assert!(run_async!(hub, sample_logic_async).await.is_ok());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "BarDataSrc 1 setupped",
+                    "FooDataSrc 2 setupped",
+                    "FooDataSrc 2 created FooDataConn",
+                    "BarDataSrc 1 created BarDataConn",
+                    "BarDataConn.text = Hello",
+                    "BarDataConn 1 closed",
+                    "BarDataConn 1 dropped",
+                    "FooDataConn 2 closed",
+                    "FooDataConn 2 dropped",
+                    "FooDataSrc 2 closed",
+                    "FooDataSrc 2 dropped",
+                    "BarDataSrc.text = ",
+                    "BarDataSrc 1 closed",
+                    "BarDataSrc 1 dropped",
+                ],
+            );
+        }
     }
 
     mod test_data_hub_txn_using_global {
@@ -664,6 +894,12 @@ mod tests_of_data_acc {
         }
 
         fn sample_logic(data: &mut impl SampleData) -> Result<(), Err> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
+        async fn sample_logic_async(data: &mut impl SampleData) -> Result<(), Err> {
             let v = data.get_value()?;
             let _ = data.set_value(&v);
             Ok(())
@@ -739,6 +975,50 @@ mod tests_of_data_acc {
                 ],
             );
         }
+
+        #[tokio::test]
+        async fn async_test() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                assert!(txn_async!(hub, sample_logic_async).await.is_ok());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 setupped",
+                    "BarDataSrc 2 setupped",
+                    "FooDataSrc 1 created FooDataConn",
+                    "BarDataSrc 2 created BarDataConn",
+                    "FooDataConn 1 pre committed",
+                    "BarDataConn 2 pre committed",
+                    "FooDataConn 1 committed",
+                    "BarDataConn 2 committed",
+                    "FooDataConn 1 post committed",
+                    "BarDataConn 2 post committed",
+                    "BarDataConn.text = Hello",
+                    "BarDataConn 2 closed",
+                    "BarDataConn 2 dropped",
+                    "FooDataConn 1 closed",
+                    "FooDataConn 1 dropped",
+                    "BarDataSrc.text = Hello",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 closed",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
     }
 
     mod test_data_hub_txn_using_local {
@@ -751,6 +1031,12 @@ mod tests_of_data_acc {
         }
 
         fn sample_logic(data: &mut impl SampleData) -> Result<(), Err> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
+        async fn sample_logic_async(data: &mut impl SampleData) -> Result<(), Err> {
             let v = data.get_value()?;
             let _ = data.set_value(&v);
             Ok(())
@@ -915,6 +1201,139 @@ mod tests_of_data_acc {
                 ],
             );
         }
+
+        #[tokio::test]
+        async fn async_test() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                assert!(txn_async!(hub, sample_logic_async).await.is_ok());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 setupped",
+                    "BarDataSrc 2 setupped",
+                    "FooDataSrc 1 created FooDataConn",
+                    "BarDataSrc 2 created BarDataConn",
+                    "FooDataConn 1 pre committed",
+                    "BarDataConn 2 pre committed",
+                    "FooDataConn 1 committed",
+                    "BarDataConn 2 committed",
+                    "FooDataConn 1 post committed",
+                    "BarDataConn 2 post committed",
+                    "BarDataConn.text = Hello",
+                    "BarDataConn 2 closed",
+                    "BarDataConn 2 dropped",
+                    "FooDataConn 1 closed",
+                    "FooDataConn 1 dropped",
+                    "BarDataSrc.text = Hello",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 closed",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test_not_run_logic_in_txn_if_fail_to_setup_local_data_src() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                if let Err(err) = txn_async!(hub, sample_logic_async).await {
+                    match err.reason::<DataHubError>() {
+                        Ok(r) => match r {
+                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
+                                assert_eq!(errors.len(), 1);
+                                if let Some(err) = errors.get("foo") {
+                                    match err.reason::<String>() {
+                                        Ok(s) => assert_eq!(s, "XXX"),
+                                        Err(_) => panic!(),
+                                    }
+                                } else {
+                                    panic!();
+                                }
+                            }
+                            _ => panic!(),
+                        },
+                        Err(_) => panic!(),
+                    }
+                } else {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 failed to setup",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        async fn failing_logic_async(_data: &mut impl SampleData) -> Result<(), Err> {
+            Err(Err::new("ZZZ".to_string()))
+        }
+
+        #[tokio::test]
+        async fn async_test_fail_to_run_logic_in_txn_and_rollback() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                if let Err(err) = txn_async!(hub, failing_logic_async).await {
+                    match err.reason::<String>() {
+                        Ok(s) => assert_eq!(s, "ZZZ"),
+                        Err(_) => panic!(),
+                    }
+                } else {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc 1 setupped",
+                    "BarDataSrc 2 setupped",
+                    "BarDataSrc.text = ",
+                    "BarDataSrc 2 closed",
+                    "BarDataSrc 2 dropped",
+                    "FooDataSrc 1 closed",
+                    "FooDataSrc 1 dropped",
+                ],
+            );
+        }
     }
 
     mod test_data_hub_txn_using_global_and_local {
@@ -927,6 +1346,12 @@ mod tests_of_data_acc {
         }
 
         fn sample_logic(data: &mut impl SampleData) -> Result<(), Err> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
+        async fn sample_logic_async(data: &mut impl SampleData) -> Result<(), Err> {
             let v = data.get_value()?;
             let _ = data.set_value(&v);
             Ok(())
@@ -975,6 +1400,51 @@ mod tests_of_data_acc {
                 hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
 
                 assert!(hub.txn(sample_logic).is_ok());
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "BarDataSrc 1 setupped",
+                    "FooDataSrc 2 setupped",
+                    "FooDataSrc 2 created FooDataConn",
+                    "BarDataSrc 1 created BarDataConn",
+                    "FooDataConn 2 pre committed",
+                    "BarDataConn 1 pre committed",
+                    "FooDataConn 2 committed",
+                    "BarDataConn 1 committed",
+                    "FooDataConn 2 post committed",
+                    "BarDataConn 1 post committed",
+                    "BarDataConn.text = Hello",
+                    "BarDataConn 1 closed",
+                    "BarDataConn 1 dropped",
+                    "FooDataConn 2 closed",
+                    "FooDataConn 2 dropped",
+                    "FooDataSrc 2 closed",
+                    "FooDataSrc 2 dropped",
+                    "BarDataSrc.text = Hello",
+                    "BarDataSrc 1 closed",
+                    "BarDataSrc 1 dropped",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn async_test() {
+            let _unused = TEST_SEQ.lock().unwrap();
+            clear_global_data_srcs_fixed();
+
+            let logger = Arc::new(Mutex::new(Vec::new()));
+            {
+                uses("bar", BarDataSrc::new(1, logger.clone()));
+
+                let result = setup_async().await;
+                assert!(result.is_ok());
+
+                let mut hub = DataHub::new();
+                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
+
+                assert!(txn_async!(hub, sample_logic_async).await.is_ok());
             }
 
             assert_eq!(
