@@ -922,7 +922,7 @@ mod tests_data_hub {
             let logger = self.logger.clone();
             let id = self.id;
 
-            ag.add(async move || {
+            ag.add(async move {
                 // The `.await` must be executed outside the Mutex lock.
                 let _ = time::sleep(time::Duration::from_millis(100)).await;
 
