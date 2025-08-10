@@ -165,7 +165,7 @@
 //!
 //!     // Execute application logic within a transaction.
 //!     // my_logic performs data operations via DataHub.
-//!     let _ = data.txn_async(my_logic).await.unwrap();
+//!     let _ = txn_async!(data, my_logic).await.unwrap();
 //! }
 //! ```
 
