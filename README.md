@@ -213,6 +213,39 @@ fn main() {
 }
 ```
 
+### Using this framework in async function/block
+
+If you want to run this framework within an async function/block, you should use `setup_async`
+instead of `setup`, `run_async` instead of `run`, and `txn_async` instead of `txn`, as shown
+below.
+
+```rust
+async fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
+    let text = data.get_text()?;
+    let _ = data.set_text(text)?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    // Register global DataSrc.
+    uses("foo", FooDataSrc{}).await;
+    // Set up the sabi framework.
+    // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
+    // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
+    let _auto_shutdown = setup_async().await.unwrap();
+
+    // Create a new instance of DataHub.
+    let mut data = DataHub::new();
+    // Register session-local DataSrc with DataHub.
+    data.uses("bar", BarDataSrc{});
+
+    // Execute application logic within a transaction.
+    // my_logic performs data operations via DataHub.
+    let _ = txn_async!(data, my_logic).await.unwrap();
+}
+```
+
 ## Supported Rust versions
 
 This crate supports Rust 1.85.1 or later.
