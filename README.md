@@ -1,4 +1,4 @@
-# [sabi for Rust][repo-url] [![crate.io][crateio-img]][crateio-url] [![doc.rs][docrs-img]][docrs-url] [![CI Status][ci-img]][ci-url] [![MIT License][mit-img]][mit-url]
+# [sabi for Rust][repo-url] [![crates.io][crateio-img]][crateio-url] [![doc.rs][docrs-img]][docrs-url] [![CI Status][ci-img]][ci-url] [![MIT License][mit-img]][mit-url]
 
 A small framework for Rust designed to separate logic from data access.
 
@@ -42,7 +42,7 @@ In Cargo.toml, write this crate as a dependency:
 
 ```toml
 [dependencies]
-sabi-rust = "0.2.1"
+sabi-rust = "0.3.0"
 ```
 
 ## Usage
@@ -270,7 +270,7 @@ See the file LICENSE in this distribution for more details.
 
 
 [repo-url]: https://github.com/sttk/sabi-rust
-[crateio-img]: https://img.shields.io/badge/crate.io-ver.0.2.1-fc8d62?logo=rust
+[crateio-img]: https://img.shields.io/badge/crate.io-ver.0.3.0-fc8d62?logo=rust
 [crateio-url]: https://crates.io/crates/sabi-rust
 [docrs-img]: https://img.shields.io/badge/doc.rs-sabi_rust-66c2a5?logo=docs.rs
 [docrs-url]: https://docs.rs/sabi-rust
