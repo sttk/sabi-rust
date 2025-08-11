@@ -4,7 +4,6 @@
 
 use std::any;
 use std::collections::HashMap;
-use std::future;
 use std::sync;
 
 use errs::Err;
@@ -354,7 +353,8 @@ impl DataHub {
         Ok(())
     }
 
-    async fn begin_async(&mut self) -> Result<(), Err> {
+    #[doc(hidden)]
+    pub async fn begin_async(&mut self) -> Result<(), Err> {
         self.fixed = true;
 
         let err_map = self.local_data_src_list.setup_data_srcs_async().await;
@@ -426,10 +426,28 @@ impl DataHub {
             }));
         }
 
+        let mut ag = AsyncGroup::new();
+
+        let mut ptr = self.data_conn_list.head();
+        while !ptr.is_null() {
+            let post_commit_fn = unsafe { (*ptr).post_commit_fn };
+            let name = unsafe { &(*ptr).name };
+            let next = unsafe { (*ptr).next };
+
+            ag.name = name;
+
+            post_commit_fn(ptr, &mut ag);
+
+            ptr = next;
+        }
+
+        ag.join_and_ignore_errors();
+
         return Ok(());
     }
 
-    async fn commit_async(&mut self) -> Result<(), Err> {
+    #[doc(hidden)]
+    pub async fn commit_async(&mut self) -> Result<(), Err> {
         let mut err_map = HashMap::new();
 
         let mut ag = AsyncGroup::new();
@@ -484,6 +502,23 @@ impl DataHub {
             }));
         }
 
+        let mut ag = AsyncGroup::new();
+
+        let mut ptr = self.data_conn_list.head();
+        while !ptr.is_null() {
+            let post_commit_fn = unsafe { (*ptr).post_commit_fn };
+            let name = unsafe { &(*ptr).name };
+            let next = unsafe { (*ptr).next };
+
+            ag.name = name;
+
+            post_commit_fn(ptr, &mut ag);
+
+            ptr = next;
+        }
+
+        ag.join_and_ignore_errors_async().await;
+
         return Ok(());
     }
 
@@ -512,7 +547,8 @@ impl DataHub {
         ag.join_and_ignore_errors();
     }
 
-    async fn rollback_async(&mut self) {
+    #[doc(hidden)]
+    pub async fn rollback_async(&mut self) {
         let mut ag = AsyncGroup::new();
 
         let mut ptr = self.data_conn_list.head();
@@ -537,45 +573,8 @@ impl DataHub {
         ag.join_and_ignore_errors_async().await;
     }
 
-    fn post_commit(&mut self) {
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let post_commit_fn = unsafe { (*ptr).post_commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            post_commit_fn(ptr, &mut ag);
-
-            ptr = next;
-        }
-
-        ag.join_and_ignore_errors();
-    }
-
-    async fn post_commit_async(&mut self) {
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let post_commit_fn = unsafe { (*ptr).post_commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            post_commit_fn(ptr, &mut ag);
-
-            ptr = next;
-        }
-
-        ag.join_and_ignore_errors_async().await;
-    }
-
-    fn end(&mut self) {
+    #[doc(hidden)]
+    pub fn end(&mut self) {
         self.data_conn_map.clear();
         self.data_conn_list.close_and_drop_data_conns();
         self.fixed = false;
@@ -607,37 +606,6 @@ impl DataHub {
         }
 
         let r = logic_fn(self);
-        self.end();
-        r
-    }
-
-    /// Executes asynchronously a given logic function without transaction control.
-    ///
-    /// This method sets up local data sources, runs the provided closure,
-    /// and then cleans up the `DataHub`'s session resources. It does not
-    /// perform commit or rollback operations.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to `DataHub` as an argument.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), Err>`: The result of the logic function's execution,
-    ///   or an error if the `DataHub`'s setup fails.
-    pub async fn run_async<F, Fut>(&mut self, logic_fn: F) -> Result<(), Err>
-    where
-        F: FnOnce(&mut DataHub) -> Fut + Send + 'static,
-        Fut: future::Future<Output = Result<(), Err>> + Send + 'static,
-    {
-        let r = self.begin_async().await;
-        if r.is_err() {
-            self.end();
-            return r;
-        }
-
-        let r = logic_fn(self).await;
         self.end();
         r
     }
@@ -678,53 +646,6 @@ impl DataHub {
 
         if r.is_err() {
             self.rollback();
-        } else {
-            self.post_commit();
-        }
-
-        self.end();
-        r
-    }
-
-    /// Executes asynchronously a given logic function within a transaction.
-    ///
-    /// This method first sets up local data sources, then runs the provided closure.
-    /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
-    /// or if the logic function itself returns an `Err`, a rollback operation
-    /// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
-    /// `post_commit` methods of all `DataConn`s are executed.
-    /// Finally, it cleans up the `DataHub`'s session resources.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to `DataHub` as an argument.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), Err>`: The final result of the transaction (success or failure of
-    ///   logic/commit), or an error if the `DataHub`'s setup fails.
-    pub async fn txn_async<F, Fut>(&mut self, logic_fn: F) -> Result<(), Err>
-    where
-        F: FnOnce(&mut DataHub) -> Fut + Send + 'static,
-        Fut: future::Future<Output = Result<(), Err>> + Send + 'static,
-    {
-        let r = self.begin_async().await;
-        if r.is_err() {
-            self.end();
-            return r;
-        }
-
-        let mut r = logic_fn(self).await;
-
-        if r.is_ok() {
-            r = self.commit_async().await;
-        }
-
-        if r.is_err() {
-            self.rollback_async().await;
-        } else {
-            self.post_commit_async().await;
         }
 
         self.end();
@@ -821,6 +742,88 @@ impl Drop for DataHub {
         self.data_src_map.clear();
         self.local_data_src_list.close_and_drop_data_srcs();
     }
+}
+
+/// Executes asynchronously a given logic function without transaction control.
+///
+/// This macro sets up local data sources, runs the provided closure,
+/// and then cleans up the `DataHub`'s session resources. It does not
+/// perform commit or rollback operations.
+///
+/// # Parameters
+///
+/// * `hub`: A hub struct instance for data input/output operations.
+/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+///   It takes a mutable reference to `DataHub` as an argument.
+///
+/// # Returns
+///
+/// * `Result<(), Err>`: The result of the logic function's execution,
+///   or an error if the `DataHub`'s setup fails.
+#[macro_export]
+macro_rules! run_async {
+    ($hub:expr, $logic_fn:expr) => {
+        async {
+            let hub = &mut ($hub);
+
+            let r = hub.begin_async().await;
+            if r.is_err() {
+                hub.end();
+                return r;
+            }
+
+            let r = ($logic_fn)(hub).await;
+            hub.end();
+            r
+        }
+    };
+}
+
+/// Executes asynchronously a given logic function within a transaction.
+///
+/// This macro first sets up local data sources, then runs the provided closure.
+/// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
+/// or if the logic function itself returns an `Err`, a rollback operation
+/// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
+/// `post_commit` methods of all `DataConn`s are executed.
+/// Finally, it cleans up the `DataHub`'s session resources.
+///
+/// # Parameters
+///
+/// * `hub`: A hub struct instance for data input/output operations.
+/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+///   It takes a mutable reference to `DataHub` as an argument.
+///
+/// # Returns
+///
+/// * `Result<(), Err>`: The final result of the transaction (success or failure of
+///   logic/commit), or an error if the `DataHub`'s setup fails.
+#[macro_export]
+macro_rules! txn_async {
+    ($hub:expr, $logic_fn:expr) => {
+        async {
+            let hub = &mut ($hub);
+
+            let r = hub.begin_async().await;
+            if r.is_err() {
+                hub.end();
+                return r;
+            }
+
+            let mut r = ($logic_fn)(hub).await;
+
+            if r.is_ok() {
+                r = hub.commit_async().await;
+            }
+
+            if r.is_err() {
+                hub.rollback_async().await;
+            }
+
+            hub.end();
+            r
+        }
+    };
 }
 
 #[cfg(test)]
@@ -2362,7 +2365,7 @@ mod tests_data_hub {
         }
 
         #[test]
-        fn test_commit() {
+        fn test_commit_and_post_commit() {
             let _unused = TEST_SEQ.lock().unwrap();
             clear_global_data_srcs_fixed();
 
@@ -2471,6 +2474,10 @@ mod tests_data_hub {
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 committed",
                     "SyncDataConn 4 committed",
+                    "AsyncDataConn 1 post committed",
+                    "SyncDataConn 2 post committed",
+                    "AsyncDataConn 3 post committed",
+                    "SyncDataConn 4 post committed",
                     "SyncDataConn 4 closed",
                     "SyncDataConn 4 dropped",
                     "AsyncDataConn 3 closed",
@@ -3940,103 +3947,14 @@ mod tests_data_hub {
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 committed",
                     "SyncDataConn 4 committed",
-                    "AsyncDataConn 1 forced back",
-                    "SyncDataConn 2 forced back",
-                    "AsyncDataConn 3 forced back",
-                    "SyncDataConn 4 forced back",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_post_commit() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    hub.post_commit();
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
                     "AsyncDataConn 1 post committed",
                     "SyncDataConn 2 post committed",
                     "AsyncDataConn 3 post committed",
                     "SyncDataConn 4 post committed",
+                    "AsyncDataConn 1 forced back",
+                    "SyncDataConn 2 forced back",
+                    "AsyncDataConn 3 forced back",
+                    "SyncDataConn 4 forced back",
                     "SyncDataConn 4 closed",
                     "SyncDataConn 4 dropped",
                     "AsyncDataConn 3 closed",
@@ -4553,7 +4471,7 @@ mod tests_data_hub {
         }
 
         #[tokio::test]
-        async fn async_test_commit() {
+        async fn async_test_commit_and_post_commit() {
             let _unused = TEST_SEQ.lock().unwrap();
             clear_global_data_srcs_fixed();
 
@@ -4662,6 +4580,10 @@ mod tests_data_hub {
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 committed",
                     "SyncDataConn 4 committed",
+                    "AsyncDataConn 1 post committed",
+                    "SyncDataConn 2 post committed",
+                    "AsyncDataConn 3 post committed",
+                    "SyncDataConn 4 post committed",
                     "SyncDataConn 4 closed",
                     "SyncDataConn 4 dropped",
                     "AsyncDataConn 3 closed",
@@ -5001,7 +4923,7 @@ mod tests_data_hub {
         }
 
         #[tokio::test]
-        async fn async_test_commit_when_no_data_conn() {
+        async fn async_test_commit_and_post_commit_when_no_data_conn() {
             let _unused = TEST_SEQ.lock().unwrap();
             clear_global_data_srcs_fixed();
 
@@ -5045,7 +4967,7 @@ mod tests_data_hub {
         }
 
         #[tokio::test]
-        async fn async_test_commit_but_fail_global_sync() {
+        async fn async_test_commit_and_but_fail_global_sync() {
             let _unused = TEST_SEQ.lock().unwrap();
             clear_global_data_srcs_fixed();
 
@@ -6131,103 +6053,14 @@ mod tests_data_hub {
                     "SyncDataConn 2 committed",
                     "AsyncDataConn 3 committed",
                     "SyncDataConn 4 committed",
-                    "AsyncDataConn 1 forced back",
-                    "SyncDataConn 2 forced back",
-                    "AsyncDataConn 3 forced back",
-                    "SyncDataConn 4 forced back",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_post_commit() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    hub.post_commit_async().await;
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
                     "AsyncDataConn 1 post committed",
                     "SyncDataConn 2 post committed",
                     "AsyncDataConn 3 post committed",
                     "SyncDataConn 4 post committed",
+                    "AsyncDataConn 1 forced back",
+                    "SyncDataConn 2 forced back",
+                    "AsyncDataConn 3 forced back",
+                    "SyncDataConn 4 forced back",
                     "SyncDataConn 4 closed",
                     "SyncDataConn 4 dropped",
                     "AsyncDataConn 3 closed",
