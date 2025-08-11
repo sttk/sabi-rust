@@ -762,16 +762,18 @@ impl Drop for DataHub {
 ///   or an error if the `DataHub`'s setup fails.
 #[macro_export]
 macro_rules! run_async {
-    ($hub:ident, $logic_fn:ident) => {
+    ($hub:expr, $logic_fn:expr) => {
         async {
-            let r = $hub.begin_async().await;
+            let hub = &mut ($hub);
+
+            let r = hub.begin_async().await;
             if r.is_err() {
-                $hub.end();
+                hub.end();
                 return r;
             }
 
-            let r = $logic_fn(&mut $hub).await;
-            $hub.end();
+            let r = ($logic_fn)(hub).await;
+            hub.end();
             r
         }
     };
@@ -798,25 +800,27 @@ macro_rules! run_async {
 ///   logic/commit), or an error if the `DataHub`'s setup fails.
 #[macro_export]
 macro_rules! txn_async {
-    ($hub:ident, $logic_fn:ident) => {
+    ($hub:expr, $logic_fn:expr) => {
         async {
-            let r = $hub.begin_async().await;
+            let hub = &mut ($hub);
+
+            let r = hub.begin_async().await;
             if r.is_err() {
-                $hub.end();
+                hub.end();
                 return r;
             }
 
-            let mut r = $logic_fn(&mut $hub).await;
+            let mut r = ($logic_fn)(hub).await;
 
             if r.is_ok() {
-                r = $hub.commit_async().await;
+                r = hub.commit_async().await;
             }
 
             if r.is_err() {
-                $hub.rollback_async().await;
+                hub.rollback_async().await;
             }
 
-            $hub.end();
+            hub.end();
             r
         }
     };
