@@ -594,7 +594,7 @@ impl DataHub {
     /// # Returns
     ///
     /// * `Result<(), Err>`: The result of the logic function's execution,
-    ///   or an error if executing `logic_fn`.
+    ///   or an error if executing `logic_fn` fails.
     pub fn run<F>(&mut self, logic_fn: F) -> Result<(), Err>
     where
         F: FnOnce(&mut DataHub) -> Result<(), Err> + Send + 'static,
@@ -627,7 +627,7 @@ impl DataHub {
     /// # Returns
     ///
     /// * `Result<(), Err>`: The final result of the transaction (success or failure of
-    ///   logic/commit), or an error if executing `logic_fn`.
+    ///   logic/commit), or an error if executing `logic_fn` fails.
     pub fn txn<F>(&mut self, logic_fn: F) -> Result<(), Err>
     where
         F: FnOnce(&mut DataHub) -> Result<(), Err> + Send + 'static,
@@ -759,7 +759,7 @@ impl Drop for DataHub {
 /// # Returns
 ///
 /// * `Result<(), Err>`: The result of the logic function's execution,
-///   or an error if executing `logic_fn`.
+///   or an error if executing `logic_fn` fails.
 #[macro_export]
 macro_rules! run_async {
     ($hub:expr, $logic_fn:expr) => {
@@ -797,7 +797,7 @@ macro_rules! run_async {
 /// # Returns
 ///
 /// * `Result<(), Err>`: The final result of the transaction (success or failure of
-///   logic/commit), or an error if executing `logic_fn`.
+///   logic/commit), or an error if executing `logic_fn` fails.
 #[macro_export]
 macro_rules! txn_async {
     ($hub:expr, $logic_fn:expr) => {
