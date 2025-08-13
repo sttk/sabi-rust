@@ -20,8 +20,11 @@
 //!
 //! Furthermore, the `DataHub` provides transaction control for data operations performed
 //! within the logic.
-//! You can execute logic functions with transaction control using the `DataHub#txn` method,
-//! or without it using the `DataHub#run` method.
+//! You can execute logic functions with transaction control using the `txn!` macro,
+//! or without transaction control using the `run!` macro.
+//! Futhermore, you can execute asynchronous logic function with transaction control using
+//! `txn_async!` macro or without transaction control using the `run_async!` macro.
+//!
 //! This framework brings clear separation and robustness to Rust application design.
 //!
 //! ## Example
@@ -29,7 +32,7 @@
 //! The following is a sample code using this framework:
 //!
 //! ```rust
-//! use sabi::{uses, setup, AsyncGroup, DataSrc, DataConn, DataAcc, DataHub};
+//! use sabi::{AsyncGroup, DataSrc, DataConn, DataAcc, DataHub};
 //! use errs::Err;
 //! use override_macro::{overridable, override_with};
 //!
@@ -121,11 +124,11 @@
 //!
 //! fn main() {
 //!     // Register global DataSrc.
-//!     uses("foo", FooDataSrc{});
+//!     sabi::uses("foo", FooDataSrc{});
 //!     // Set up the sabi framework.
 //!     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
 //!     // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
-//!     let _auto_shutdown = setup().unwrap();
+//!     let _auto_shutdown = sabi::setup().unwrap();
 //!
 //!     // Create a new instance of DataHub.
 //!     let mut data = DataHub::new();
@@ -134,7 +137,7 @@
 //!
 //!     // Execute application logic within a transaction.
 //!     // my_logic performs data operations via DataHub.
-//!     let _ = data.txn(my_logic).unwrap();
+//!     let _ = sabi::txn!(my_logic, data).unwrap();
 //! }
 //! ```
 //!
@@ -152,11 +155,11 @@
 //! #[tokio::main]
 //! async fn main() {
 //!     // Register global DataSrc.
-//!     uses("foo", FooDataSrc{}).await;
+//!     sabi::uses("foo", FooDataSrc{}).await;
 //!     // Set up the sabi framework.
 //!     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
 //!     // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
-//!     let _auto_shutdown = setup_async().await.unwrap();
+//!     let _auto_shutdown = sabi::setup_async().await.unwrap();
 //!
 //!     // Create a new instance of DataHub.
 //!     let mut data = DataHub::new();
@@ -165,7 +168,7 @@
 //!
 //!     // Execute application logic within a transaction.
 //!     // my_logic performs data operations via DataHub.
-//!     let _ = txn_async!(data, my_logic).await.unwrap();
+//!     let _ = sabi::txn_async!(my_logic, data).await.unwrap();
 //! }
 //! ```
 

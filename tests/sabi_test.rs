@@ -73,11 +73,19 @@ mod logic_layer {
     pub trait MyData {
         fn get_text(&mut self) -> Result<String, Err>;
         fn set_text(&mut self, text: String) -> Result<(), Err>;
+        async fn get_text_async(&mut self) -> Result<String, Err>;
+        async fn set_text_async(&mut self, text: String) -> Result<(), Err>;
     }
 
     pub fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
         let text = data.get_text()?;
         data.set_text(text)?;
+        Ok(())
+    }
+
+    pub async fn my_logic_async(data: &mut impl MyData) -> Result<(), Err> {
+        let text = data.get_text_async().await?;
+        data.set_text_async(text).await?;
         Ok(())
     }
 }
@@ -96,12 +104,23 @@ mod data_access_layer {
             /* ... */
             Ok("output text".to_string())
         }
+        async fn get_text_async(&mut self) -> Result<String, Err> {
+            let _conn = self.get_data_conn::<FooDataConn>("foo_async")?;
+            /* ... */
+            Ok("output text".to_string())
+        }
     }
 
     #[overridable]
     pub trait SettingDataAcc: DataAcc {
         fn set_text(&mut self, text: String) -> Result<(), Err> {
             let _conn = self.get_data_conn::<BarDataConn>("bar")?;
+            /* ... */
+            assert_eq!("output text", text);
+            Ok(())
+        }
+        async fn set_text_async(&mut self, text: String) -> Result<(), Err> {
+            let _conn = self.get_data_conn::<BarDataConn>("bar_async")?;
             /* ... */
             assert_eq!("output text", text);
             Ok(())
@@ -125,19 +144,22 @@ mod hub {
 }
 
 mod app {
-    use sabi::{setup, uses, DataHub};
+    use tokio::runtime;
+
+    use sabi;
+    use sabi::DataHub;
 
     use crate::data_src::{BarDataSrc, FooDataSrc};
-    use crate::logic_layer::my_logic;
+    use crate::logic_layer::{my_logic, my_logic_async};
 
     #[test]
     fn test_datahub_transaction_flow() {
         // Register global DataSrc.
-        uses("foo", FooDataSrc {});
+        sabi::uses("foo", FooDataSrc {});
         // Set up the sabi framework.
         // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
         // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
-        let _auto_shutdown = setup().unwrap();
+        let _auto_shutdown = sabi::setup().unwrap();
 
         // Create a new instance of DataHub.
         let mut data = DataHub::new();
@@ -146,6 +168,29 @@ mod app {
 
         // Execute application logic within a transaction.
         // my_logic performs data operations via DataHub.
-        assert!(data.txn(my_logic).is_ok());
+        assert!(sabi::txn!(my_logic, data).is_ok());
+
+        if let Ok(rt) = runtime::Runtime::new() {
+            rt.block_on(async_test_datahub_transaction_flow());
+        } else {
+            panic!();
+        }
+    }
+
+    async fn async_test_datahub_transaction_flow() {
+        // Set up the sabi framework.
+        // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
+        // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
+        let _auto_shutdown = sabi::setup_async().await.unwrap();
+
+        // Create a new instance of DataHub.
+        let mut data = DataHub::new();
+        // Register session-local DataSrc with DataHub.
+        data.uses("foo_async", FooDataSrc {});
+        data.uses("bar_async", BarDataSrc {});
+
+        // Execute application logic within a transaction.
+        // my_logic performs data operations via DataHub.
+        assert!(sabi::txn_async!(my_logic_async, data).await.is_ok());
     }
 }
