@@ -677,7 +677,7 @@ impl Drop for DataHub {
 
 /// Executes a given logic function without transaction control.
 ///
-/// This method sets up local data sources, runs the provided closure,
+/// This macro sets up local data sources, runs the provided closure,
 /// and then cleans up the `DataHub`'s session resources. It does not
 /// perform commit or rollback operations.
 ///
@@ -706,7 +706,7 @@ macro_rules! run {
 
 /// Executes a given logic function within a transaction.
 ///
-/// This method first sets up local data sources, then runs the provided closure.
+/// This macro first sets up local data sources, then runs the provided closure.
 /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
 /// or if the logic function itself returns an `Err`, a rollback operation
 /// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,

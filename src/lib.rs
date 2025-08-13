@@ -22,7 +22,7 @@
 //! within the logic.
 //! You can execute logic functions with transaction control using the `txn!` macro,
 //! or without transaction control using the `run!` macro.
-//! Futhermore, you can execute asynchronous logic function with transaction control using
+//! Furthermore, you can execute asynchronous logic function with transaction control using
 //! `txn_async!` macro or without transaction control using the `run_async!` macro.
 //!
 //! This framework brings clear separation and robustness to Rust application design.
