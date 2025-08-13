@@ -252,8 +252,6 @@ impl Drop for AutoShutdown {
 ///
 /// The `DataHub` is capable of performing aggregated transactional operations
 /// on all `DataConn` objects created from its registered `DataSrc` instances.
-/// The `run` method executes logic without transaction control, while the `txn`
-/// method executes logic within a controlled transaction.
 pub struct DataHub {
     local_data_src_list: DataSrcList,
     data_src_map: HashMap<String, *mut DataSrcContainer>,
