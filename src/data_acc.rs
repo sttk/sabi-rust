@@ -48,8 +48,8 @@ impl DataAcc for DataHub {
 mod tests_of_data_acc {
     use super::*;
     use crate::data_hub::{clear_global_data_srcs_fixed, TEST_SEQ};
-    use crate::{run_async, setup_async, txn_async};
-    use crate::{setup, uses, AsyncGroup, DataHubError, DataSrc};
+    use crate::{run, run_async, setup, setup_async, txn, txn_async, uses};
+    use crate::{AsyncGroup, DataHubError, DataSrc};
     use override_macro::{overridable, override_with};
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -342,9 +342,9 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
+                let mut data = DataHub::new();
 
-                if let Err(_) = sample_logic(&mut hub) {
+                if let Err(_) = sample_logic(&mut data) {
                     panic!();
                 }
             }
@@ -384,9 +384,9 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
+                let mut data = DataHub::new();
 
-                if let Err(_) = sample_logic_async(&mut hub).await {
+                if let Err(_) = sample_logic_async(&mut data).await {
                     panic!();
                 }
             }
@@ -474,8 +474,8 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                assert!(hub.run(sample_logic).is_ok());
+                let mut data = DataHub::new();
+                assert!(run!(sample_logic, data).is_ok());
             }
 
             assert_eq!(
@@ -512,8 +512,8 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                assert!(run_async!(hub, sample_logic_async).await.is_ok());
+                let mut data = DataHub::new();
+                assert!(run_async!(sample_logic_async, data).await.is_ok());
             }
 
             assert_eq!(
@@ -594,11 +594,11 @@ mod tests_of_data_acc {
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
                 if let Ok(_auto_shutdown) = setup() {
-                    let mut hub = DataHub::new();
-                    hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
-                    hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                    let mut data = DataHub::new();
+                    data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                    data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                    assert!(hub.run(sample_logic).is_ok());
+                    assert!(run!(sample_logic, data).is_ok());
                 } else {
                     panic!();
                 }
@@ -635,11 +635,11 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(err) = hub.run(sample_logic) {
+                if let Err(err) = run!(sample_logic, data) {
                     match err.reason::<DataHubError>() {
                         Ok(r) => match r {
                             DataHubError::FailToSetupLocalDataSrcs { errors } => {
@@ -680,11 +680,11 @@ mod tests_of_data_acc {
             let logger = Arc::new(Mutex::new(Vec::new()));
             {
                 if let Ok(_auto_shutdown) = setup_async().await {
-                    let mut hub = DataHub::new();
-                    hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
-                    hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                    let mut data = DataHub::new();
+                    data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                    data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                    assert!(run_async!(hub, sample_logic_async).await.is_ok());
+                    assert!(run_async!(sample_logic_async, data).await.is_ok());
                 } else {
                     panic!();
                 }
@@ -721,11 +721,11 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(err) = run_async!(hub, sample_logic_async).await {
+                if let Err(err) = run_async!(sample_logic_async, data).await {
                     match err.reason::<DataHubError>() {
                         Ok(r) => match r {
                             DataHubError::FailToSetupLocalDataSrcs { errors } => {
@@ -818,10 +818,10 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
 
-                assert!(hub.run(sample_logic).is_ok());
+                assert!(run!(sample_logic, data).is_ok());
             }
 
             assert_eq!(
@@ -856,10 +856,10 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
 
-                assert!(run_async!(hub, sample_logic_async).await.is_ok());
+                assert!(run_async!(sample_logic_async, data).await.is_ok());
             }
 
             assert_eq!(
@@ -945,8 +945,8 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                assert!(hub.txn(sample_logic).is_ok());
+                let mut data = DataHub::new();
+                assert!(txn!(sample_logic, data).is_ok());
             }
 
             assert_eq!(
@@ -989,8 +989,8 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                assert!(txn_async!(hub, sample_logic_async).await.is_ok());
+                let mut data = DataHub::new();
+                assert!(txn_async!(sample_logic_async, data).await.is_ok());
             }
 
             assert_eq!(
@@ -1079,11 +1079,11 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                assert!(hub.txn(sample_logic).is_ok());
+                assert!(txn!(sample_logic, data).is_ok());
             }
 
             assert_eq!(
@@ -1123,11 +1123,11 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(err) = hub.txn(sample_logic) {
+                if let Err(err) = txn!(sample_logic, data) {
                     match err.reason::<DataHubError>() {
                         Ok(r) => match r {
                             DataHubError::FailToSetupLocalDataSrcs { errors } => {
@@ -1174,11 +1174,11 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(err) = hub.txn(failing_logic) {
+                if let Err(err) = txn!(failing_logic, data) {
                     match err.reason::<String>() {
                         Ok(s) => assert_eq!(s, "ZZZ"),
                         Err(_) => panic!(),
@@ -1212,11 +1212,11 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                assert!(txn_async!(hub, sample_logic_async).await.is_ok());
+                assert!(txn_async!(sample_logic_async, data).await.is_ok());
             }
 
             assert_eq!(
@@ -1256,11 +1256,11 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), true));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(err) = txn_async!(hub, sample_logic_async).await {
+                if let Err(err) = txn_async!(sample_logic_async, data).await {
                     match err.reason::<DataHubError>() {
                         Ok(r) => match r {
                             DataHubError::FailToSetupLocalDataSrcs { errors } => {
@@ -1307,11 +1307,11 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
-                hub.uses("bar", BarDataSrc::new(2, logger.clone()));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(1, "Hello", logger.clone(), false));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(err) = txn_async!(hub, failing_logic_async).await {
+                if let Err(err) = txn_async!(failing_logic_async, data).await {
                     match err.reason::<String>() {
                         Ok(s) => assert_eq!(s, "ZZZ"),
                         Err(_) => panic!(),
@@ -1396,10 +1396,10 @@ mod tests_of_data_acc {
                 let result = setup();
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
 
-                assert!(hub.txn(sample_logic).is_ok());
+                assert!(txn!(sample_logic, data).is_ok());
             }
 
             assert_eq!(
@@ -1441,10 +1441,10 @@ mod tests_of_data_acc {
                 let result = setup_async().await;
                 assert!(result.is_ok());
 
-                let mut hub = DataHub::new();
-                hub.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
+                let mut data = DataHub::new();
+                data.uses("foo", FooDataSrc::new(2, "Hello", logger.clone(), false));
 
-                assert!(txn_async!(hub, sample_logic_async).await.is_ok());
+                assert!(txn_async!(sample_logic_async, data).await.is_ok());
             }
 
             assert_eq!(

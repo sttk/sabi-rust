@@ -252,8 +252,6 @@ impl Drop for AutoShutdown {
 ///
 /// The `DataHub` is capable of performing aggregated transactional operations
 /// on all `DataConn` objects created from its registered `DataSrc` instances.
-/// The `run` method executes logic without transaction control, while the `txn`
-/// method executes logic within a controlled transaction.
 pub struct DataHub {
     local_data_src_list: DataSrcList,
     data_src_map: HashMap<String, *mut DataSrcContainer>,
@@ -294,8 +292,8 @@ impl DataHub {
     ///
     /// This method is similar to the global `uses` function but registers a data source
     /// that is local to this specific `DataHub` session. Once the `DataHub`'s state is
-    /// "fixed" (while `run` or `txn` method is executing), further calls
-    /// to `uses` are ignored. However, after `run` or `txn` completes, the `DataHub`'s
+    /// "fixed" (while `run!` or `txn!` macro is executing), further calls
+    /// to `uses` are ignored. However, after `run!` or `txn!` completes, the `DataHub`'s
     /// "fixed" state is reset, allowing for new data sources to be registered or removed
     /// via `disuses` method in subsequent operations.
     ///
@@ -336,7 +334,8 @@ impl DataHub {
             .remove_and_drop_container_ptr_not_setup_by_name(name);
     }
 
-    fn begin(&mut self) -> Result<(), Err> {
+    #[doc(hidden)]
+    pub fn begin(&mut self) -> Result<(), Err> {
         self.fixed = true;
 
         let err_map = self.local_data_src_list.setup_data_srcs();
@@ -371,7 +370,8 @@ impl DataHub {
         Ok(())
     }
 
-    fn commit(&mut self) -> Result<(), Err> {
+    #[doc(hidden)]
+    pub fn commit(&mut self) -> Result<(), Err> {
         let mut err_map = HashMap::new();
 
         let mut ag = AsyncGroup::new();
@@ -522,7 +522,8 @@ impl DataHub {
         return Ok(());
     }
 
-    fn rollback(&mut self) {
+    #[doc(hidden)]
+    pub fn rollback(&mut self) {
         let mut ag = AsyncGroup::new();
 
         let mut ptr = self.data_conn_list.head();
@@ -578,78 +579,6 @@ impl DataHub {
         self.data_conn_map.clear();
         self.data_conn_list.close_and_drop_data_conns();
         self.fixed = false;
-    }
-
-    /// Executes a given logic function without transaction control.
-    ///
-    /// This method sets up local data sources, runs the provided closure,
-    /// and then cleans up the `DataHub`'s session resources. It does not
-    /// perform commit or rollback operations.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to `DataHub` as an argument.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), Err>`: The result of the logic function's execution,
-    ///   or an error if executing `logic_fn` fails.
-    pub fn run<F>(&mut self, logic_fn: F) -> Result<(), Err>
-    where
-        F: FnOnce(&mut DataHub) -> Result<(), Err> + Send + 'static,
-    {
-        let r = self.begin();
-        if r.is_err() {
-            self.end();
-            return r;
-        }
-
-        let r = logic_fn(self);
-        self.end();
-        r
-    }
-
-    /// Executes a given logic function within a transaction.
-    ///
-    /// This method first sets up local data sources, then runs the provided closure.
-    /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
-    /// or if the logic function itself returns an `Err`, a rollback operation
-    /// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
-    /// `post_commit` methods of all `DataConn`s are executed.
-    /// Finally, it cleans up the `DataHub`'s session resources.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to `DataHub` as an argument.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), Err>`: The final result of the transaction (success or failure of
-    ///   logic/commit), or an error if executing `logic_fn` fails.
-    pub fn txn<F>(&mut self, logic_fn: F) -> Result<(), Err>
-    where
-        F: FnOnce(&mut DataHub) -> Result<(), Err> + Send + 'static,
-    {
-        let r = self.begin();
-        if r.is_err() {
-            self.end();
-            return r;
-        }
-
-        let mut r = logic_fn(self);
-
-        if r.is_ok() {
-            r = self.commit();
-        }
-
-        if r.is_err() {
-            self.rollback();
-        }
-
-        self.end();
-        r
     }
 
     /// Retrieves a mutable reference to a `DataConn` object by name, creating it if necessary.
@@ -744,6 +673,73 @@ impl Drop for DataHub {
     }
 }
 
+/// Executes a given logic function without transaction control.
+///
+/// This macro sets up local data sources, runs the provided closure,
+/// and then cleans up the `DataHub`'s session resources. It does not
+/// perform commit or rollback operations.
+///
+/// # Parameters
+///
+/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+///   It takes a mutable reference to `DataHub` as an argument.
+/// * `hub`: A hub struct instance for data input/output operations.
+///
+/// # Returns
+///
+/// * `Result<(), Err>`: The result of the logic function's execution,
+///   or an error if executing `logic_fn` fails.
+#[macro_export]
+macro_rules! run {
+    ($logic_fn:expr, $hub:expr) => {{
+        let hub = &mut ($hub);
+        let mut r = hub.begin();
+        if r.is_ok() {
+            r = ($logic_fn)(hub);
+        }
+        hub.end();
+        r
+    }};
+}
+
+/// Executes a given logic function within a transaction.
+///
+/// This macro first sets up local data sources, then runs the provided closure.
+/// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
+/// or if the logic function itself returns an `Err`, a rollback operation
+/// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
+/// `post_commit` methods of all `DataConn`s are executed.
+/// Finally, it cleans up the `DataHub`'s session resources.
+///
+/// # Parameters
+///
+/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+///   It takes a mutable reference to `DataHub` as an argument.
+/// * `hub`: A hub struct instance for data input/output operations.
+///
+/// # Returns
+///
+/// * `Result<(), Err>`: The final result of the transaction (success or failure of
+///   logic/commit), or an error if executing `logic_fn` fails.
+#[macro_export]
+macro_rules! txn {
+    ($logic_fn:expr, $hub:expr) => {{
+        let hub = &mut ($hub);
+        let mut r = hub.begin();
+        if r.is_ok() {
+            r = ($logic_fn)(hub);
+        }
+        if r.is_ok() {
+            r = hub.commit();
+        }
+        if r.is_err() {
+            hub.rollback();
+        }
+        hub.end();
+        r
+    }};
+}
+
 /// Executes asynchronously a given logic function without transaction control.
 ///
 /// This macro sets up local data sources, runs the provided closure,
@@ -752,9 +748,9 @@ impl Drop for DataHub {
 ///
 /// # Parameters
 ///
-/// * `hub`: A hub struct instance for data input/output operations.
 /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
 ///   It takes a mutable reference to `DataHub` as an argument.
+/// * `hub`: A hub struct instance for data input/output operations.
 ///
 /// # Returns
 ///
@@ -762,17 +758,13 @@ impl Drop for DataHub {
 ///   or an error if executing `logic_fn` fails.
 #[macro_export]
 macro_rules! run_async {
-    ($hub:expr, $logic_fn:expr) => {
+    ($logic_fn:expr, $hub:expr) => {
         async {
             let hub = &mut ($hub);
-
-            let r = hub.begin_async().await;
-            if r.is_err() {
-                hub.end();
-                return r;
+            let mut r = hub.begin_async().await;
+            if r.is_ok() {
+                r = ($logic_fn)(hub).await;
             }
-
-            let r = ($logic_fn)(hub).await;
             hub.end();
             r
         }
@@ -790,9 +782,9 @@ macro_rules! run_async {
 ///
 /// # Parameters
 ///
-/// * `hub`: A hub struct instance for data input/output operations.
 /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
 ///   It takes a mutable reference to `DataHub` as an argument.
+/// * `hub`: A hub struct instance for data input/output operations.
 ///
 /// # Returns
 ///
@@ -800,26 +792,19 @@ macro_rules! run_async {
 ///   logic/commit), or an error if executing `logic_fn` fails.
 #[macro_export]
 macro_rules! txn_async {
-    ($hub:expr, $logic_fn:expr) => {
+    ($logic_fn:expr, $hub:expr) => {
         async {
             let hub = &mut ($hub);
-
-            let r = hub.begin_async().await;
-            if r.is_err() {
-                hub.end();
-                return r;
+            let mut r = hub.begin_async().await;
+            if r.is_ok() {
+                r = ($logic_fn)(hub).await;
             }
-
-            let mut r = ($logic_fn)(hub).await;
-
             if r.is_ok() {
                 r = hub.commit_async().await;
             }
-
             if r.is_err() {
                 hub.rollback_async().await;
             }
-
             hub.end();
             r
         }
