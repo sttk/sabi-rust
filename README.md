@@ -184,7 +184,7 @@ impl MyData for DataHub {}
 Inside your `main` function, register your global `DataSrc` and setup the `sabi` framework.
 Then, create an instance of `DataHub` and register the necessary local `DataSrc` using
 the `uses` method.
-Finally, use the `txn` method of `DataHub` to execute your defined application logic
+Finally, use the `txn!` macro to execute your defined application logic
 function (`my_logic`) within a transaction.
 This automatically handles transaction commits and rollbacks.
 
@@ -197,6 +197,7 @@ use crate::logic_layer::my_logic;
 fn main() {
     // Register global DataSrc
     uses("foo", FooDataSrc{});
+
     // Set up the sabi framework
     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
     // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
@@ -209,14 +210,14 @@ fn main() {
 
     // Execute application logic within a transaction
     // my_logic performs data operations via DataHub
-    let _ = data.txn(my_logic).unwrap();
+    let _ = txn!(my_logic, data).unwrap();
 }
 ```
 
 ### Using this framework in async function/block
 
 If you want to run this framework within an async function/block, you should use `setup_async`
-instead of `setup`, `run_async` instead of `run`, and `txn_async` instead of `txn`, as shown
+instead of `setup`, `run_async!` instead of `run!`, and `txn_async!` instead of `txn!`, as shown
 below.
 
 ```rust
@@ -230,6 +231,7 @@ async fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
 async fn main() {
     // Register global DataSrc.
     uses("foo", FooDataSrc{}).await;
+
     // Set up the sabi framework.
     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
     // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
@@ -242,7 +244,7 @@ async fn main() {
 
     // Execute application logic within a transaction.
     // my_logic performs data operations via DataHub.
-    let _ = txn_async!(data, my_logic).await.unwrap();
+    let _ = txn_async!(my_logic, data).await.unwrap();
 }
 ```
 
@@ -255,10 +257,10 @@ This crate supports Rust 1.85.1 or later.
   [Meta]   cargo-msrv 0.18.4
         ~~~~~~(omission)~~~~~
 Result:
-   Considered (min … max):   Rust 1.56.1 … Rust 1.87.0 
+   Considered (min … max):   Rust 1.56.1 … Rust 1.89.0 
    Search method:            bisect                    
    MSRV:                     1.85.1                    
-   Target:                   x86_64-apple-darwin
+   Target:                   x86_64-apple-darwin      
 ```
 
 ## License
