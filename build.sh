@@ -51,6 +51,13 @@ doc() {
   errcheck $?
 }
 
+msrv() {
+  cargo update
+  errcheck $?
+  cargo msrv find
+  errcheck $?
+}
+
 if [[ "$#" == "0" ]]; then
   #clean
   format
@@ -86,8 +93,8 @@ else
     bench)
       bench
       ;;
-    '')
-      compile
+    msrv)
+      msrv
       ;;
     *)
       echo "Bad task: $a"
