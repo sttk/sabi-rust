@@ -253,14 +253,29 @@ async fn main() {
 This crate supports Rust 1.85.1 or later.
 
 ```bash
-% cargo msrv find
+% ./build.sh msrv
   [Meta]   cargo-msrv 0.18.4
-        ~~~~~~(omission)~~~~~
+
+Compatibility Check #1: Rust 1.73.0
+  [FAIL]   Is incompatible
+
+Compatibility Check #2: Rust 1.81.0
+  [FAIL]   Is incompatible
+
+Compatibility Check #3: Rust 1.85.1
+  [OK]     Is compatible
+
+Compatibility Check #4: Rust 1.83.0
+  [FAIL]   Is incompatible
+
+Compatibility Check #5: Rust 1.84.1
+  [FAIL]   Is incompatible
+
 Result:
-   Considered (min … max):   Rust 1.56.1 … Rust 1.89.0 
-   Search method:            bisect                    
-   MSRV:                     1.85.1                    
-   Target:                   x86_64-apple-darwin      
+   Considered (min … max):   Rust 1.56.1 … Rust 1.89.0
+   Search method:            bisect
+   MSRV:                     1.85.1
+   Target:                   x86_64-apple-darwin
 ```
 
 ## License
