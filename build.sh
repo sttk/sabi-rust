@@ -52,9 +52,7 @@ doc() {
 }
 
 msrv() {
-  cargo update
-  errcheck $?
-  cargo msrv find
+  cargo msrv find --ignore-lockfile --no-check-feedback
   errcheck $?
 }
 
