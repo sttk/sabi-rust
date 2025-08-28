@@ -16,7 +16,7 @@ categories = []
 name = "sabi"
 
 [dependencies]
-errs = "0.2"
+errs = "0.3"
 futures = "0.3"
 tokio = "1"
 
