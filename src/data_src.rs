@@ -1,33 +1,49 @@
-// Copyright (C) 2024-2025 Takayuki Sato. All Rights Reserved.
+// Copyright (C) 2024-2026 Takayuki Sato. All Rights Reserved.
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use std::any;
+use crate::{
+    AsyncGroup, AutoShutdown, DataConn, DataConnContainer, DataSrc, DataSrcContainer,
+    SendSyncNonNull,
+};
+
+use setup_read_cleanup::{PhasedCell, PhasedError};
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::ptr;
+use std::{any, marker, ptr};
 
-use errs::Err;
+#[derive(Debug)]
+pub enum DataSrcError {
+    FailToSetupGlobalDataSrcs { errors: HashMap<String, errs::Err> },
+}
 
-use crate::{AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer};
+unsafe impl<T: Send + Sync> Send for SendSyncNonNull<T> {}
+unsafe impl<T: Send + Sync> Sync for SendSyncNonNull<T> {}
+
+impl<T: Send + Sync> SendSyncNonNull<T> {
+    pub(crate) fn new(non_null_ptr: ptr::NonNull<T>) -> Self {
+        Self {
+            non_null_ptr,
+            _phantom: marker::PhantomData,
+        }
+    }
+}
 
 impl<S, C> DataSrcContainer<S, C>
 where
     S: DataSrc<C>,
     C: DataConn + 'static,
 {
-    pub(crate) fn new(local: bool, name: String, data_src: S) -> Self {
+    pub(crate) fn new(name: impl Into<Cow<'static, str>>, data_src: S, local: bool) -> Self {
         Self {
             drop_fn: drop_data_src::<S, C>,
-
             setup_fn: setup_data_src::<S, C>,
             close_fn: close_data_src::<S, C>,
             create_data_conn_fn: create_data_conn::<S, C>,
             is_data_conn_fn: is_data_conn::<C>,
 
-            prev: ptr::null_mut(),
-            next: ptr::null_mut(),
             local,
-            name,
+            name: name.into(),
             data_src,
         }
     }
@@ -42,7 +58,7 @@ where
     drop(unsafe { Box::from_raw(typed_ptr) });
 }
 
-fn setup_data_src<S, C>(ptr: *const DataSrcContainer, ag: &mut AsyncGroup) -> Result<(), Err>
+fn setup_data_src<S, C>(ptr: *const DataSrcContainer, ag: &mut AsyncGroup) -> errs::Result<()>
 where
     S: DataSrc<C>,
     C: DataConn + 'static,
@@ -60,7 +76,7 @@ where
     unsafe { (*typed_ptr).data_src.close() }
 }
 
-fn create_data_conn<S, C>(ptr: *const DataSrcContainer) -> Result<Box<DataConnContainer<C>>, Err>
+fn create_data_conn<S, C>(ptr: *const DataSrcContainer) -> errs::Result<Box<DataConnContainer<C>>>
 where
     S: DataSrc<C>,
     C: DataConn + 'static,
@@ -68,7 +84,10 @@ where
     let typed_ptr = ptr as *mut DataSrcContainer<S, C>;
     let conn: Box<C> = unsafe { (*typed_ptr).data_src.create_data_conn() }?;
     let name = unsafe { &(*typed_ptr).name };
-    Ok(Box::new(DataConnContainer::<C>::new(name, conn)))
+    Ok(Box::new(DataConnContainer::<C>::new(
+        name.to_string(),
+        conn,
+    )))
 }
 
 fn is_data_conn<C>(type_id: any::TypeId) -> bool
@@ -78,289 +97,192 @@ where
     any::TypeId::of::<C>() == type_id
 }
 
-pub(crate) struct DataSrcList {
-    not_setup_head: *mut DataSrcContainer,
-    not_setup_last: *mut DataSrcContainer,
-    did_setup_head: *mut DataSrcContainer,
-    did_setup_last: *mut DataSrcContainer,
+static DS_VEC: PhasedCell<Vec<SendSyncNonNull<DataSrcContainer>>> = PhasedCell::new(Vec::new());
+
+const NOOP: fn(&mut Vec<SendSyncNonNull<DataSrcContainer>>) -> Result<(), PhasedError> = |_| Ok(());
+
+pub(crate) fn add_data_src<S, C>(
+    data_src_vec: &mut Vec<SendSyncNonNull<DataSrcContainer>>,
+    name: impl Into<Cow<'static, str>>,
+    ds: S,
     local: bool,
+) where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    let boxed = Box::new(DataSrcContainer::<S, C>::new(name, ds, local));
+    let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
+    data_src_vec.push(SendSyncNonNull::new(ptr));
 }
 
-impl DataSrcList {
-    pub(crate) const fn new(local: bool) -> Self {
-        Self {
-            not_setup_head: ptr::null_mut(),
-            not_setup_last: ptr::null_mut(),
-            did_setup_head: ptr::null_mut(),
-            did_setup_last: ptr::null_mut(),
-            local,
+pub(crate) fn setup_all_data_srcs(
+    data_src_vec: &mut [SendSyncNonNull<DataSrcContainer>],
+    err_map: &mut HashMap<String, errs::Err>,
+) {
+    if data_src_vec.is_empty() {
+        return;
+    }
+
+    let mut done_vec = Vec::<*mut DataSrcContainer>::new();
+
+    let mut ag = AsyncGroup::new();
+    for ssnnptr in data_src_vec.iter() {
+        let ptr = ssnnptr.non_null_ptr.as_ptr();
+        let setup_fn = unsafe { (*ptr).setup_fn };
+        ag.name = unsafe { &(*ptr).name };
+        if let Err(err) = setup_fn(ptr, &mut ag) {
+            err_map.insert(ag.name.to_string(), err);
+            break;
         }
+        done_vec.push(ptr);
     }
+    ag.join_and_collect_errors(err_map);
 
-    #[cfg(test)]
-    pub(crate) fn not_setup_head(&self) -> *mut DataSrcContainer {
-        self.not_setup_head
-    }
-
-    #[cfg(test)]
-    pub(crate) fn did_setup_head(&self) -> *mut DataSrcContainer {
-        self.did_setup_head
-    }
-
-    fn append_container_ptr_not_setup(&mut self, ptr: *mut DataSrcContainer) {
-        unsafe {
-            (*ptr).next = ptr::null_mut();
-        }
-
-        if self.not_setup_last.is_null() {
-            self.not_setup_head = ptr;
-            self.not_setup_last = ptr;
-            unsafe {
-                (*ptr).prev = ptr::null_mut();
-            }
-        } else {
-            unsafe {
-                (*self.not_setup_last).next = ptr;
-                (*ptr).prev = self.not_setup_last;
-            }
-            self.not_setup_last = ptr;
-        }
-    }
-
-    fn remove_container_ptr_not_setup(&mut self, ptr: *mut DataSrcContainer) {
-        let prev = unsafe { (*ptr).prev };
-        let next = unsafe { (*ptr).next };
-
-        if prev.is_null() && next.is_null() {
-            self.not_setup_head = ptr::null_mut();
-            self.not_setup_last = ptr::null_mut();
-        } else if prev.is_null() {
-            unsafe { (*next).prev = ptr::null_mut() };
-            self.not_setup_head = next;
-        } else if next.is_null() {
-            unsafe { (*prev).next = ptr::null_mut() };
-            self.not_setup_last = prev;
-        } else {
-            unsafe {
-                (*next).prev = prev;
-            }
-            unsafe {
-                (*prev).next = next;
-            }
-        }
-    }
-
-    pub(crate) fn remove_and_drop_container_ptr_not_setup_by_name(&mut self, name: &str) {
-        let mut ptr = self.not_setup_head;
-        while !ptr.is_null() {
-            let next = unsafe { (*ptr).next };
-            let nm = unsafe { &(*ptr).name };
-
-            if nm == name {
+    if !err_map.is_empty() {
+        for ptr in done_vec {
+            if !err_map.contains_key(unsafe { &(*ptr).name }.as_ref()) {
                 let close_fn = unsafe { (*ptr).close_fn };
-                let drop_fn = unsafe { (*ptr).drop_fn };
-
-                self.remove_container_ptr_not_setup(ptr);
-
                 close_fn(ptr);
-                drop_fn(ptr);
-            }
-
-            ptr = next;
-        }
-    }
-
-    fn append_container_ptr_did_setup(&mut self, ptr: *mut DataSrcContainer) {
-        unsafe {
-            (*ptr).next = ptr::null_mut();
-        }
-
-        if self.did_setup_last.is_null() {
-            self.did_setup_head = ptr;
-            self.did_setup_last = ptr;
-            unsafe {
-                (*ptr).prev = ptr::null_mut();
-            }
-        } else {
-            unsafe {
-                (*self.did_setup_last).next = ptr;
-                (*ptr).prev = self.did_setup_last;
-            }
-            self.did_setup_last = ptr;
-        }
-    }
-
-    pub(crate) fn remove_container_ptr_did_setup(&mut self, ptr: *mut DataSrcContainer) {
-        let prev = unsafe { (*ptr).prev };
-        let next = unsafe { (*ptr).next };
-
-        if prev.is_null() && next.is_null() {
-            self.did_setup_head = ptr::null_mut();
-            self.did_setup_last = ptr::null_mut();
-        } else if prev.is_null() {
-            unsafe { (*next).prev = ptr::null_mut() };
-            self.did_setup_head = next;
-        } else if next.is_null() {
-            unsafe { (*prev).next = ptr::null_mut() };
-            self.did_setup_last = prev;
-        } else {
-            unsafe {
-                (*next).prev = prev;
-                (*prev).next = next;
             }
         }
-    }
-
-    pub(crate) fn remove_and_drop_container_ptr_did_setup_by_name(&mut self, name: &str) {
-        let mut ptr = self.did_setup_head;
-        while !ptr.is_null() {
-            let next = unsafe { (*ptr).next };
-            let nm = unsafe { &(*ptr).name };
-
-            if nm == name {
-                let close_fn = unsafe { (*ptr).close_fn };
-                let drop_fn = unsafe { (*ptr).drop_fn };
-
-                self.remove_container_ptr_did_setup(ptr);
-
-                close_fn(ptr);
-                drop_fn(ptr);
-            }
-
-            ptr = next;
-        }
-    }
-
-    pub(crate) fn copy_container_ptrs_did_setup_into(
-        &self,
-        map: &mut HashMap<String, *mut DataSrcContainer>,
-    ) {
-        let mut ptr = self.did_setup_head;
-        while !ptr.is_null() {
-            let next = unsafe { (*ptr).next };
-            let name = unsafe { &(*ptr).name };
-            map.insert(name.to_string(), ptr);
-            ptr = next;
-        }
-    }
-
-    pub(crate) fn add_data_src<S, C>(&mut self, name: String, ds: S)
-    where
-        S: DataSrc<C>,
-        C: DataConn + 'static,
-    {
-        let boxed = Box::new(DataSrcContainer::<S, C>::new(self.local, name, ds));
-        let typed_ptr = Box::into_raw(boxed);
-        let ptr = typed_ptr.cast::<DataSrcContainer>();
-        self.append_container_ptr_not_setup(ptr);
-    }
-
-    pub(crate) fn setup_data_srcs(&mut self) -> HashMap<String, Err> {
-        let mut err_map = HashMap::new();
-
-        if self.not_setup_head.is_null() {
-            return err_map;
-        }
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.not_setup_head;
-        while !ptr.is_null() {
-            let setup_fn = unsafe { (*ptr).setup_fn };
-            let next = unsafe { (*ptr).next };
-            ag.name = unsafe { &(*ptr).name };
-            if let Err(err) = setup_fn(ptr, &mut ag) {
-                err_map.insert(ag.name.to_string(), err);
-                break;
-            }
-            ptr = next;
-        }
-
-        ag.join_and_collect_errors(&mut err_map);
-
-        let first_ptr_not_setup_yet = ptr;
-
-        ptr = self.not_setup_head;
-        while !ptr.is_null() && ptr != first_ptr_not_setup_yet {
-            let next = unsafe { (*ptr).next };
-            let name = unsafe { &(*ptr).name };
-            if !err_map.contains_key(name) {
-                self.remove_container_ptr_not_setup(ptr);
-                self.append_container_ptr_did_setup(ptr);
-            }
-            ptr = next;
-        }
-
-        err_map
-    }
-
-    pub(crate) async fn setup_data_srcs_async(&mut self) -> HashMap<String, Err> {
-        let mut err_map = HashMap::new();
-
-        if self.not_setup_head.is_null() {
-            return err_map;
-        }
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.not_setup_head;
-        while !ptr.is_null() {
-            let setup_fn = unsafe { (*ptr).setup_fn };
-            let next = unsafe { (*ptr).next };
-            ag.name = unsafe { &(*ptr).name };
-            if let Err(err) = setup_fn(ptr, &mut ag) {
-                err_map.insert(ag.name.to_string(), err);
-                break;
-            }
-            ptr = next;
-        }
-
-        ag.join_and_collect_errors_async(&mut err_map).await;
-
-        let first_ptr_not_setup_yet = ptr;
-
-        ptr = self.not_setup_head;
-        while !ptr.is_null() && ptr != first_ptr_not_setup_yet {
-            let next = unsafe { (*ptr).next };
-            let name = unsafe { &(*ptr).name };
-            if !err_map.contains_key(name) {
-                self.remove_container_ptr_not_setup(ptr);
-                self.append_container_ptr_did_setup(ptr);
-            }
-            ptr = next;
-        }
-
-        err_map
-    }
-
-    pub(crate) fn close_and_drop_data_srcs(&mut self) {
-        let mut ptr = self.did_setup_last;
-        while !ptr.is_null() {
-            let close_fn = unsafe { (*ptr).close_fn };
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            let prev = unsafe { (*ptr).prev };
-            close_fn(ptr);
-            drop_fn(ptr);
-            ptr = prev;
-        }
-        let mut ptr = self.not_setup_last;
-        while !ptr.is_null() {
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            let prev = unsafe { (*ptr).prev };
-            drop_fn(ptr);
-            ptr = prev;
-        }
-        self.not_setup_head = ptr::null_mut();
-        self.not_setup_last = ptr::null_mut();
-        self.did_setup_head = ptr::null_mut();
-        self.did_setup_last = ptr::null_mut();
+        drop_all_data_srcs(data_src_vec);
     }
 }
 
-impl Drop for DataSrcList {
+pub(crate) fn drop_all_data_srcs(data_src_vec: &[SendSyncNonNull<DataSrcContainer>]) {
+    for ssnnptr in data_src_vec.iter().rev() {
+        let ptr = ssnnptr.non_null_ptr.as_ptr();
+        let drop_fn = unsafe { (*ptr).drop_fn };
+        drop_fn(ptr);
+    }
+}
+
+pub(crate) fn close_and_drop_all_data_srcs(data_src_vec: &[SendSyncNonNull<DataSrcContainer>]) {
+    for ssnnptr in data_src_vec.iter().rev() {
+        let ptr = ssnnptr.non_null_ptr.as_ptr();
+        let close_fn = unsafe { (*ptr).close_fn };
+        let drop_fn = unsafe { (*ptr).drop_fn };
+        close_fn(ptr);
+        drop_fn(ptr);
+    }
+}
+
+pub(crate) fn copy_global_data_srcs_to_map(m: &mut HashMap<Cow<str>, *mut DataSrcContainer>) {
+    if let Ok(static_ds_vec) = DS_VEC.read() {
+        for ssnnptr in static_ds_vec {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
+            m.insert(unsafe { (*ptr).name.clone() }, ptr);
+        }
+    }
+}
+
+impl Drop for AutoShutdown {
     fn drop(&mut self) {
-        self.close_and_drop_data_srcs();
+        let _ = DS_VEC.transition_to_cleanup(NOOP);
+        match DS_VEC.get_mut_unlocked() {
+            Ok(vec) => {
+                close_and_drop_all_data_srcs(vec);
+            }
+            Err(e) => {
+                eprintln!("ERROR(sabi): Fail to close and drop global DataSrc(s): {e:?}");
+            }
+        }
     }
+}
+
+pub fn uses<S, C>(name: impl Into<Cow<'static, str>>, ds: S)
+where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    match DS_VEC.get_mut_unlocked() {
+        Ok(vec) => {
+            add_data_src(vec, name, ds, false);
+        }
+        Err(e) => {
+            eprintln!("ERROR(sabi): Fail to add a global DataSrc: {e:?}");
+        }
+    }
+}
+
+pub fn setup() -> errs::Result<AutoShutdown> {
+    let mut errors = HashMap::new();
+    let errors_ref_mut = &mut errors;
+
+    let _ = DS_VEC.transition_to_read(move |vec| {
+        let mut regs: Vec<_> = inventory::iter::<DataSrcRegistration>.into_iter().collect();
+        regs.sort_unstable_by_key(|reg| reg.priority);
+
+        let mut static_vec: Vec<SendSyncNonNull<DataSrcContainer>> = Vec::with_capacity(regs.len());
+        for reg in regs {
+            let any_container = (reg.factory)();
+            static_vec.push(any_container.ssnnptr);
+        }
+        vec.splice(0..0, static_vec);
+
+        setup_all_data_srcs(vec, errors_ref_mut);
+        Ok::<(), PhasedError>(())
+    });
+
+    if errors.is_empty() {
+        Ok(AutoShutdown {})
+    } else {
+        Err(errs::Err::new(DataSrcError::FailToSetupGlobalDataSrcs {
+            errors,
+        }))
+    }
+}
+
+#[doc(hidden)]
+pub struct AnyDataSrcContainer {
+    ssnnptr: SendSyncNonNull<DataSrcContainer>,
+}
+
+#[doc(hidden)]
+pub fn create_data_src_container<S, C>(name: &'static str, data_src: S) -> AnyDataSrcContainer
+where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    let boxed = Box::new(DataSrcContainer::<S, C>::new(name, data_src, false));
+    let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
+    AnyDataSrcContainer {
+        ssnnptr: SendSyncNonNull::new(ptr),
+    }
+}
+
+#[doc(hidden)]
+pub struct DataSrcRegistration {
+    factory: fn() -> AnyDataSrcContainer,
+    priority: u32,
+}
+impl DataSrcRegistration {
+    pub const fn new(factory: fn() -> AnyDataSrcContainer, priority: u32) -> Self {
+        Self { factory, priority }
+    }
+}
+inventory::collect!(DataSrcRegistration);
+
+#[macro_export]
+macro_rules! uses {
+    ($name:tt, $data_src:expr, $priority:expr) => {
+        const _: () = {
+            inventory::submit! {
+                $crate::DataSrcRegistration::new(|| {
+                    $crate::create_data_src_container($name, $data_src)
+                }, $priority)
+            }
+        };
+    };
+    ($name:tt, $data_src:expr) => {
+        const _: () = {
+            inventory::submit! {
+                $crate::DataSrcRegistration::new(|| {
+                    $crate::create_data_src_container($name, $data_src)
+                }, u32::MAX)
+            }
+        };
+    };
 }
 
 #[cfg(test)]
@@ -368,12 +290,39 @@ mod tests_of_data_src {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    struct SyncDataConn {}
+    impl SyncDataConn {
+        fn new() -> Self {
+            Self {}
+        }
+    }
+    impl DataConn for SyncDataConn {
+        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+        fn close(&mut self) {}
+    }
+
+    struct AsyncDataConn {}
+    impl AsyncDataConn {
+        fn new() -> Self {
+            Self {}
+        }
+    }
+    impl DataConn for AsyncDataConn {
+        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+        fn close(&mut self) {}
+    }
+
     struct SyncDataSrc {
         id: i8,
         will_fail: bool,
         logger: Arc<Mutex<Vec<String>>>,
     }
-
     impl SyncDataSrc {
         fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, will_fail: bool) -> Self {
             Self {
@@ -383,20 +332,18 @@ mod tests_of_data_src {
             }
         }
     }
-
     impl Drop for SyncDataSrc {
         fn drop(&mut self) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("SyncDataSrc {} dropped", self.id));
         }
     }
-
     impl DataSrc<SyncDataConn> for SyncDataSrc {
-        fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
+        fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             if self.will_fail {
                 logger.push(format!("SyncDataSrc {} failed to setup", self.id));
-                return Err(Err::new("XXX".to_string()));
+                return Err(errs::Err::new("XXX".to_string()));
             }
             logger.push(format!("SyncDataSrc {} setupped", self.id));
             Ok(())
@@ -407,7 +354,7 @@ mod tests_of_data_src {
             logger.push(format!("SyncDataSrc {} closed", self.id));
         }
 
-        fn create_data_conn(&mut self) -> Result<Box<SyncDataConn>, Err> {
+        fn create_data_conn(&mut self) -> errs::Result<Box<SyncDataConn>> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("SyncDataSrc {} created DataConn", self.id));
             let conn = SyncDataConn::new();
@@ -419,48 +366,47 @@ mod tests_of_data_src {
         id: i8,
         will_fail: bool,
         logger: Arc<Mutex<Vec<String>>>,
+        wait: u64,
     }
-
     impl AsyncDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, will_fail: bool) -> Self {
+        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, will_fail: bool, wait: u64) -> Self {
             Self {
                 id,
                 will_fail,
                 logger,
+                wait,
             }
         }
     }
-
     impl Drop for AsyncDataSrc {
         fn drop(&mut self) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("AsyncDataSrc {} dropped", self.id));
         }
     }
-
     impl DataSrc<AsyncDataConn> for AsyncDataSrc {
-        fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> {
+        fn setup(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
             let logger = self.logger.clone();
             let will_fail = self.will_fail;
             let id = self.id;
-            ag.add(async move {
+            let wait = self.wait;
+            ag.add(move || {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
                 let mut logger = logger.lock().unwrap();
                 if will_fail {
                     logger.push(format!("AsyncDataSrc {} failed to setup", id));
-                    return Err(Err::new("XXX".to_string()));
+                    return Err(errs::Err::new("XXX".to_string()));
                 }
                 logger.push(format!("AsyncDataSrc {} setupped", id));
                 Ok(())
             });
             Ok(())
         }
-
         fn close(&mut self) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("AsyncDataSrc {} closed", self.id));
         }
-
-        fn create_data_conn(&mut self) -> Result<Box<AsyncDataConn>, Err> {
+        fn create_data_conn(&mut self) -> errs::Result<Box<AsyncDataConn>> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("AsyncDataSrc {} created DataConn", self.id));
             let conn = AsyncDataConn::new();
@@ -468,1359 +414,168 @@ mod tests_of_data_src {
         }
     }
 
-    struct SyncDataConn {}
+    #[test]
+    fn test_of_add_data_src() {
+        let ds_vec: PhasedCell<Vec<SendSyncNonNull<DataSrcContainer>>> =
+            PhasedCell::new(Vec::new());
 
-    impl SyncDataConn {
-        fn new() -> Self {
-            Self {}
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            add_data_src(vec, "foo", ds1, false);
+        }
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            assert_eq!(vec.len(), 1);
+            let dsc =
+                vec[0].non_null_ptr.as_ptr() as *mut DataSrcContainer<SyncDataSrc, SyncDataConn>;
+            assert_eq!(unsafe { (*dsc).name.clone() }, "foo");
+            assert_eq!(unsafe { (*dsc).local }, false);
+        }
+
+        let ds2 = SyncDataSrc::new(1, logger.clone(), false);
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            add_data_src(vec, "bar", ds2, false);
+        }
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            let dsc =
+                vec[0].non_null_ptr.as_ptr() as *mut DataSrcContainer<SyncDataSrc, SyncDataConn>;
+            assert_eq!(unsafe { (*dsc).name.clone() }, "foo");
+            assert_eq!(unsafe { (*dsc).local }, false);
+            let dsc =
+                vec[1].non_null_ptr.as_ptr() as *mut DataSrcContainer<SyncDataSrc, SyncDataConn>;
+            assert_eq!(unsafe { (*dsc).name.clone() }, "bar");
+            assert_eq!(unsafe { (*dsc).local }, false);
         }
     }
 
-    impl DataConn for SyncDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            Ok(())
+    #[test]
+    fn test_of_setup_and_close_zero_data_srcs() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let ds_vec: PhasedCell<Vec<SendSyncNonNull<DataSrcContainer>>> =
+            PhasedCell::new(Vec::new());
+
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            let mut err_map = HashMap::<String, errs::Err>::new();
+            setup_all_data_srcs(vec, &mut err_map);
+            if !err_map.is_empty() {
+                panic!("{err_map:?}");
+            }
         }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
-        fn close(&mut self) {}
+
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            close_and_drop_all_data_srcs(vec);
+        }
+
+        assert_eq!(logger.lock().unwrap().len(), 0);
     }
 
-    struct AsyncDataConn {}
+    #[test]
+    fn test_of_setup_and_close_sync_data_srcs() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-    impl AsyncDataConn {
-        fn new() -> Self {
-            Self {}
+        let ds_vec: PhasedCell<Vec<SendSyncNonNull<DataSrcContainer>>> =
+            PhasedCell::new(Vec::new());
+
+        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            add_data_src(vec, "foo", ds1, false);
         }
+
+        let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            add_data_src(vec, "bar", ds2, false);
+        }
+
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            let mut err_map = HashMap::<String, errs::Err>::new();
+            setup_all_data_srcs(vec, &mut err_map);
+            if !err_map.is_empty() {
+                panic!("{err_map:?}");
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            vec!["SyncDataSrc 1 setupped", "SyncDataSrc 2 setupped",]
+        );
+
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            close_and_drop_all_data_srcs(vec);
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            vec![
+                "SyncDataSrc 1 setupped",
+                "SyncDataSrc 2 setupped",
+                "SyncDataSrc 2 closed",
+                "SyncDataSrc 2 dropped",
+                "SyncDataSrc 1 closed",
+                "SyncDataSrc 1 dropped",
+            ]
+        );
     }
 
-    impl DataConn for AsyncDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            Ok(())
-        }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
-        fn close(&mut self) {}
-    }
+    #[test]
+    fn test_of_setup_and_close_async_data_srcs() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-    mod tests_of_data_src_list {
-        use super::*;
+        let ds_vec: PhasedCell<Vec<SendSyncNonNull<DataSrcContainer>>> =
+            PhasedCell::new(Vec::new());
 
-        #[test]
-        fn test_of_new() {
-            let ds_list = DataSrcList::new(false);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+        let ds1 = AsyncDataSrc::new(1, logger.clone(), false, 200);
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            add_data_src(vec, "foo", ds1, false);
         }
 
-        #[test]
-        fn test_of_append_container_ptr_not_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr1);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr1);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr::null_mut());
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr2);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr2);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr::null_mut());
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
+        let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 100);
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            add_data_src(vec, "bar", ds2, false);
         }
 
-        #[test]
-        fn test_of_remove_head_container_ptr_not_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_not_setup(ptr1);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr2);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr2).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_middle_container_ptr_not_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_not_setup(ptr2);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_last_container_ptr_not_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_not_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr2);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_all_container_ptr_not_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_not_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr1);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_not_setup(ptr1);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr2);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr2).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_not_setup(ptr2);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr3);
-            assert_eq!(ds_list.not_setup_last, ptr3);
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-            assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_not_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_and_drop_container_ptr_not_setup_by_name() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut ds_list = DataSrcList::new(false);
-
-                let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "foo".to_string(),
-                    ds1,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_not_setup(ptr1);
-
-                let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "bar".to_string(),
-                    ds2,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_not_setup(ptr2);
-
-                let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "baz".to_string(),
-                    ds3,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_not_setup(ptr3);
-
-                let ds4 = SyncDataSrc::new(4, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "qux".to_string(),
-                    ds4,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr4 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_not_setup(ptr4);
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr1);
-                assert_eq!(ds_list.not_setup_last, ptr4);
-                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr1).next }, ptr2);
-                assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-                assert_eq!(unsafe { (*ptr2).next }, ptr3);
-                assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-                assert_eq!(unsafe { (*ptr3).next }, ptr4);
-                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
-                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_not_setup_by_name("bar");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr1);
-                assert_eq!(ds_list.not_setup_last, ptr4);
-                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr1).next }, ptr3);
-                assert_eq!(unsafe { (*ptr3).prev }, ptr1);
-                assert_eq!(unsafe { (*ptr3).next }, ptr4);
-                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
-                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_not_setup_by_name("foo");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr3);
-                assert_eq!(ds_list.not_setup_last, ptr4);
-                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr3).next }, ptr4);
-                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
-                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_not_setup_by_name("qux");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr3);
-                assert_eq!(ds_list.not_setup_last, ptr3);
-                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-
-                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_not_setup_by_name("baz");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            let mut err_map = HashMap::<String, errs::Err>::new();
+            setup_all_data_srcs(vec, &mut err_map);
+            if !err_map.is_empty() {
+                panic!("{err_map:?}");
             }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "SyncDataSrc 1 closed",
-                    "SyncDataSrc 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "SyncDataSrc 3 closed",
-                    "SyncDataSrc 3 dropped",
-                ]
-            );
         }
 
-        #[test]
-        fn test_of_append_container_ptr_did_setup() {
-            let mut ds_list = DataSrcList::new(false);
+        assert_eq!(
+            *logger.lock().unwrap(),
+            vec!["AsyncDataSrc 2 setupped", "AsyncDataSrc 1 setupped",]
+        );
 
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr1);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr1);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr::null_mut());
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr2);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr2);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr::null_mut());
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
+        {
+            let vec = ds_vec.get_mut_unlocked().unwrap();
+            close_and_drop_all_data_srcs(vec);
         }
 
-        #[test]
-        fn test_of_remove_head_container_ptr_did_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_did_setup(ptr1);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr2);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr2).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_middle_container_ptr_did_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_did_setup(ptr2);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_last_container_ptr_did_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_did_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr2);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_all_container_ptr_did_setup() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr1);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr1).next }, ptr2);
-            assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_did_setup(ptr1);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr2);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr2).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr2).next }, ptr3);
-            assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_did_setup(ptr2);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr3);
-            assert_eq!(ds_list.did_setup_last, ptr3);
-
-            assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
-            assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-            ds_list.remove_container_ptr_did_setup(ptr3);
-
-            assert_eq!(ds_list.local, false);
-            assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-            assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-        }
-
-        #[test]
-        fn test_of_remove_and_drop_container_ptr_did_setup_by_name() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut ds_list = DataSrcList::new(false);
-
-                let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "foo".to_string(),
-                    ds1,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_did_setup(ptr1);
-
-                let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "bar".to_string(),
-                    ds2,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_did_setup(ptr2);
-
-                let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "baz".to_string(),
-                    ds3,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_did_setup(ptr3);
-
-                let ds4 = SyncDataSrc::new(4, logger.clone(), false);
-                let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                    false,
-                    "qux".to_string(),
-                    ds4,
-                ));
-                let typed_ptr = Box::into_raw(boxed);
-                let ptr4 = typed_ptr.cast::<DataSrcContainer>();
-
-                ds_list.append_container_ptr_did_setup(ptr4);
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_head, ptr1);
-                assert_eq!(ds_list.did_setup_last, ptr4);
-
-                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr1).next }, ptr2);
-                assert_eq!(unsafe { (*ptr2).prev }, ptr1);
-                assert_eq!(unsafe { (*ptr2).next }, ptr3);
-                assert_eq!(unsafe { (*ptr3).prev }, ptr2);
-                assert_eq!(unsafe { (*ptr3).next }, ptr4);
-                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
-                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_did_setup_by_name("bar");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_head, ptr1);
-                assert_eq!(ds_list.did_setup_last, ptr4);
-
-                assert_eq!(unsafe { (*ptr1).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr1).next }, ptr3);
-                assert_eq!(unsafe { (*ptr3).prev }, ptr1);
-                assert_eq!(unsafe { (*ptr3).next }, ptr4);
-                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
-                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_did_setup_by_name("foo");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_head, ptr3);
-                assert_eq!(ds_list.did_setup_last, ptr4);
-
-                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr3).next }, ptr4);
-                assert_eq!(unsafe { (*ptr4).prev }, ptr3);
-                assert_eq!(unsafe { (*ptr4).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_did_setup_by_name("qux");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_head, ptr3);
-                assert_eq!(ds_list.did_setup_last, ptr3);
-
-                assert_eq!(unsafe { (*ptr3).prev }, ptr::null_mut());
-                assert_eq!(unsafe { (*ptr3).next }, ptr::null_mut());
-
-                ds_list.remove_and_drop_container_ptr_did_setup_by_name("baz");
-
-                assert_eq!(ds_list.local, false);
-                assert_eq!(ds_list.not_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.not_setup_last, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_head, ptr::null_mut());
-                assert_eq!(ds_list.did_setup_last, ptr::null_mut());
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "SyncDataSrc 1 closed",
-                    "SyncDataSrc 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "SyncDataSrc 3 closed",
-                    "SyncDataSrc 3 dropped",
-                ]
-            );
-        }
-
-        #[test]
-        fn test_of_copy_container_ptrs_did_setup_into() {
-            let mut ds_list = DataSrcList::new(false);
-
-            let mut map = HashMap::<String, *mut DataSrcContainer>::new();
-            ds_list.copy_container_ptrs_did_setup_into(&mut map);
-            assert_eq!(map.len(), 0);
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "foo".to_string(),
-                ds1,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr1 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr1);
-
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "bar".to_string(),
-                ds2,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr2 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr2);
-
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
-            let boxed = Box::new(DataSrcContainer::<SyncDataSrc, SyncDataConn>::new(
-                false,
-                "baz".to_string(),
-                ds3,
-            ));
-            let typed_ptr = Box::into_raw(boxed);
-            let ptr3 = typed_ptr.cast::<DataSrcContainer>();
-
-            ds_list.append_container_ptr_did_setup(ptr3);
-
-            let mut map = HashMap::<String, *mut DataSrcContainer>::new();
-            ds_list.copy_container_ptrs_did_setup_into(&mut map);
-            assert_eq!(map.len(), 3);
-            assert_eq!(map.get("foo").unwrap(), &ptr1);
-            assert_eq!(map.get("bar").unwrap(), &ptr2);
-            assert_eq!(map.get("baz").unwrap(), &ptr3);
-        }
-
-        #[test]
-        fn test_setup_and_create_data_conn_and_close() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut data_src_list = DataSrcList::new(false);
-
-                let ds_async = AsyncDataSrc::new(1, logger.clone(), false);
-                data_src_list.add_data_src("foo".to_string(), ds_async);
-
-                let ds_sync = SyncDataSrc::new(2, logger.clone(), false);
-                data_src_list.add_data_src("bar".to_string(), ds_sync);
-
-                let err_map = data_src_list.setup_data_srcs();
-                assert!(err_map.is_empty());
-
-                let ptr = data_src_list.did_setup_head;
-                let create_fn = unsafe { (*ptr).create_data_conn_fn };
-                match create_fn(ptr) {
-                    Ok(_) => {}
-                    Err(_) => panic!(),
-                }
-
-                let ptr = unsafe { (*ptr).next };
-                let create_fn = unsafe { (*ptr).create_data_conn_fn };
-                match create_fn(ptr) {
-                    Ok(_) => {}
-                    Err(_) => panic!(),
-                }
-
-                data_src_list.close_and_drop_data_srcs();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[test]
-        fn test_fail_to_setup_sync_and_close() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut data_src_list = DataSrcList::new(true);
-
-                let ds_async = AsyncDataSrc::new(1, logger.clone(), false);
-                data_src_list.add_data_src("foo".to_string(), ds_async);
-
-                let ds_sync = SyncDataSrc::new(2, logger.clone(), true);
-                data_src_list.add_data_src("bar".to_string(), ds_sync);
-
-                let err_map = data_src_list.setup_data_srcs();
-                assert_eq!(err_map.len(), 1);
-
-                if let Some(err) = err_map.get("bar") {
-                    if let Ok(r) = err.reason::<String>() {
-                        assert_eq!(r, "XXX");
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-
-                data_src_list.close_and_drop_data_srcs();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 failed to setup",
-                    "AsyncDataSrc 1 setupped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                    "SyncDataSrc 2 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_fail_to_setup_async_and_close() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut data_src_list = DataSrcList::new(true);
-
-                let ds_async = AsyncDataSrc::new(1, logger.clone(), true);
-                data_src_list.add_data_src("foo".to_string(), ds_async);
-
-                let ds_sync = SyncDataSrc::new(2, logger.clone(), false);
-                data_src_list.add_data_src("bar".to_string(), ds_sync);
-
-                let err_map = data_src_list.setup_data_srcs();
-                assert_eq!(err_map.len(), 1);
-
-                if let Some(err) = err_map.get("foo") {
-                    if let Ok(r) = err.reason::<String>() {
-                        assert_eq!(r, "XXX");
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-
-                data_src_list.close_and_drop_data_srcs();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 failed to setup",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_no_data_src() {
-            const LOCAL: bool = true;
-            let mut data_src_list = DataSrcList::new(LOCAL);
-
-            let err_map = data_src_list.setup_data_srcs();
-            assert!(err_map.is_empty());
-
-            data_src_list.close_and_drop_data_srcs();
-
-            assert!(data_src_list.not_setup_head.is_null());
-            assert!(data_src_list.did_setup_head.is_null());
-        }
-
-        #[tokio::test]
-        async fn async_test_setup_and_create_data_conn_and_close() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut data_src_list = DataSrcList::new(false);
-
-                let ds_async = AsyncDataSrc::new(1, logger.clone(), false);
-                data_src_list.add_data_src("foo".to_string(), ds_async);
-
-                let ds_sync = SyncDataSrc::new(2, logger.clone(), false);
-                data_src_list.add_data_src("bar".to_string(), ds_sync);
-
-                let err_map = data_src_list.setup_data_srcs_async().await;
-                assert!(err_map.is_empty());
-
-                let ptr = data_src_list.did_setup_head;
-                let create_fn = unsafe { (*ptr).create_data_conn_fn };
-                match create_fn(ptr) {
-                    Ok(_) => {}
-                    Err(_) => panic!(),
-                }
-
-                let ptr = unsafe { (*ptr).next };
-                let create_fn = unsafe { (*ptr).create_data_conn_fn };
-                match create_fn(ptr) {
-                    Ok(_) => {}
-                    Err(_) => panic!(),
-                }
-
-                data_src_list.close_and_drop_data_srcs();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_fail_to_setup_sync_and_close() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut data_src_list = DataSrcList::new(true);
-
-                let ds_async = AsyncDataSrc::new(1, logger.clone(), false);
-                data_src_list.add_data_src("foo".to_string(), ds_async);
-
-                let ds_sync = SyncDataSrc::new(2, logger.clone(), true);
-                data_src_list.add_data_src("bar".to_string(), ds_sync);
-
-                let err_map = data_src_list.setup_data_srcs_async().await;
-                assert_eq!(err_map.len(), 1);
-
-                if let Some(err) = err_map.get("bar") {
-                    if let Ok(r) = err.reason::<String>() {
-                        assert_eq!(r, "XXX");
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-
-                data_src_list.close_and_drop_data_srcs();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 failed to setup",
-                    "AsyncDataSrc 1 setupped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                    "SyncDataSrc 2 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_fail_to_setup_async_and_close() {
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                let mut data_src_list = DataSrcList::new(true);
-
-                let ds_async = AsyncDataSrc::new(1, logger.clone(), true);
-                data_src_list.add_data_src("foo".to_string(), ds_async);
-
-                let ds_sync = SyncDataSrc::new(2, logger.clone(), false);
-                data_src_list.add_data_src("bar".to_string(), ds_sync);
-
-                let err_map = data_src_list.setup_data_srcs_async().await;
-                assert_eq!(err_map.len(), 1);
-
-                if let Some(err) = err_map.get("foo") {
-                    if let Ok(r) = err.reason::<String>() {
-                        assert_eq!(r, "XXX");
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-
-                data_src_list.close_and_drop_data_srcs();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 failed to setup",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_no_data_src() {
-            const LOCAL: bool = true;
-            let mut data_src_list = DataSrcList::new(LOCAL);
-
-            let err_map = data_src_list.setup_data_srcs_async().await;
-            assert!(err_map.is_empty());
-
-            data_src_list.close_and_drop_data_srcs();
-
-            assert!(data_src_list.not_setup_head.is_null());
-            assert!(data_src_list.did_setup_head.is_null());
-        }
+        assert_eq!(
+            *logger.lock().unwrap(),
+            vec![
+                "AsyncDataSrc 2 setupped",
+                "AsyncDataSrc 1 setupped",
+                "AsyncDataSrc 2 closed",
+                "AsyncDataSrc 2 dropped",
+                "AsyncDataSrc 1 closed",
+                "AsyncDataSrc 1 dropped",
+            ]
+        );
     }
 }
