@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rustver: ['1.85.1', '1.89.0', '1.92.0']
+        rustver: ['1.87.0', '1.89.0', '1.92.0']
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
