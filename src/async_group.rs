@@ -1,890 +1,545 @@
-// Copyright (C) 2024-2025 Takayuki Sato. All Rights Reserved.
+// Copyright (C) 2024-2026 Takayuki Sato. All Rights Reserved.
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use std::collections::{HashMap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
+use crate::AsyncGroup;
 
-use errs::Err;
-use futures::future;
-use tokio::runtime;
+use std::sync::Arc;
+use std::{fmt, mem, thread};
 
-/// The enum type representing the reasons for errors that can occur within an `AsyncGroup`.
+/// The enum type representing the reasons for errors that can occur within an [`AsyncGroup`].
 #[derive(Debug)]
 pub enum AsyncGroupError {
-    /// Indicates a failure to create a new asynchronous runtime, which is necessary
-    /// for executing the tasks within the `AsyncGroup`.
-    FailToCreateAsyncRuntime,
+    /// Indicates that a spawned thread by [`AsyncGroup`] has panicked.
+    /// Contains the panic message if available.
+    ThreadPanicked(String),
 }
 
-/// The structure that allows for the asynchronous execution of multiple functions
-/// and waits for all of them to complete.
-///
-/// Functions are added using the `add` method and are then run concurrently.
-/// The `AsyncGroup` ensures that all tasks finish before proceeding,
-/// and can collect any errors that occur.
-pub struct AsyncGroup<'a> {
-    task_vec: VecDeque<Pin<Box<dyn Future<Output = Result<(), Err>> + Send + 'static>>>,
-    name_vec: VecDeque<String>,
-    pub(crate) name: &'a str,
-}
-
-impl<'a> AsyncGroup<'_> {
+impl AsyncGroup {
     pub(crate) fn new() -> Self {
         Self {
-            task_vec: VecDeque::new(),
-            name_vec: VecDeque::new(),
-            name: "",
+            handlers: Vec::new(),
+            _name: "".into(),
         }
     }
 
-    /// Adds an asynchronous task (a future) to the group.
+    /// Adds a task (a closure) to the group to be executed concurrently.
     ///
-    /// This provided future is executed asynchronously with other added tasks,
-    /// awaiting completion and collecting errors internally.
+    /// This provided closure is executed in a new `std::thread` concurrently
+    /// with other added tasks.
     ///
     /// # Type Parameters
     ///
-    /// * `Fut`: The type of the future, which must be
-    ///   `Future<Output = Result<(), Err>> + Send + 'static`.
+    /// * `F`: The type of the closure, which must be
+    ///   `FnOnce() -> errs::Result<()> + Send + 'static`.
     ///
     /// # Parameters
     ///
-    /// * `future`: The future to be executed.
-    pub fn add<Fut>(&mut self, future: Fut)
+    /// * `f`: The closure to be executed in a separate thread.
+    pub fn add<F>(&mut self, f: F)
     where
-        Fut: Future<Output = Result<(), Err>> + Send + 'static,
+        F: FnOnce() -> errs::Result<()> + Send + 'static,
     {
-        self.task_vec.push_back(Box::pin(future));
-        self.name_vec.push_back(self.name.to_string());
+        self.handlers.push((self._name.clone(), thread::spawn(f)));
     }
 
-    pub(crate) fn join_and_collect_errors(mut self, err_map: &mut HashMap<String, Err>) {
-        match runtime::Runtime::new() {
-            Ok(rt) => {
-                rt.block_on(async {
-                    let result_all = future::join_all(self.task_vec).await;
-                    for result in result_all.into_iter() {
-                        if let Some(name) = self.name_vec.pop_front() {
-                            if let Err(err) = result {
-                                err_map.insert(name, err);
-                            }
-                        }
+    pub(crate) fn join_and_collect_errors(&mut self, errors: &mut Vec<(Arc<str>, errs::Err)>) {
+        if self.handlers.is_empty() {
+            return;
+        }
+
+        let vec = mem::take(&mut self.handlers);
+
+        for h in vec.into_iter() {
+            match h.1.join() {
+                Ok(r) => {
+                    if let Err(e) = r {
+                        errors.push((h.0.clone(), e));
                     }
-                });
-            }
-            Err(err) => {
-                err_map.insert(
-                    "sabi::AsyncGroup".to_string(),
-                    Err::with_source(AsyncGroupError::FailToCreateAsyncRuntime, err),
-                );
-            }
-        }
-    }
-
-    pub(crate) fn join_and_ignore_errors(self) {
-        match runtime::Runtime::new() {
-            Ok(rt) => {
-                rt.block_on(async {
-                    let _ = future::join_all(self.task_vec).await;
-                });
-            }
-            Err(err) => {
-                let _ = Err::with_source(AsyncGroupError::FailToCreateAsyncRuntime, err);
-            }
-        }
-    }
-
-    pub(crate) async fn join_and_collect_errors_async(
-        mut self,
-        err_map: &mut HashMap<String, Err>,
-    ) {
-        let result_all = future::join_all(self.task_vec).await;
-        for result in result_all.into_iter() {
-            if let Some(name) = self.name_vec.pop_front() {
-                if let Err(err) = result {
-                    err_map.insert(name, err);
+                }
+                Err(e) => {
+                    let s = match e.downcast_ref::<Box<dyn fmt::Debug>>() {
+                        Some(d) => format!("{d:?}"),
+                        None => "".to_string(),
+                    };
+                    let e = errs::Err::new(AsyncGroupError::ThreadPanicked(s));
+                    errors.push((h.0.clone(), e));
                 }
             }
         }
     }
 
-    pub(crate) async fn join_and_ignore_errors_async(self) {
-        let _ = future::join_all(self.task_vec).await;
+    pub(crate) fn join_and_ignore_errors(&mut self) {
+        if self.handlers.is_empty() {
+            return;
+        }
+
+        let vec = mem::take(&mut self.handlers);
+
+        for h in vec.into_iter() {
+            let _ = h.1.join();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests_of_async_group {
     use super::*;
-    use std::sync::{Arc, Mutex};
-    use tokio::time;
+    use std::{sync, time};
 
     const BASE_LINE: u32 = line!();
 
     #[derive(Debug, PartialEq)]
     enum Reasons {
-        BadFlag(bool),
         BadString(String),
-        BadNumber(i64),
     }
 
-    struct StructA {
-        flag: Arc<Mutex<bool>>,
-        will_fail: bool,
+    struct MyStruct {
+        string: sync::Arc<sync::Mutex<String>>,
+        fail: bool,
     }
 
-    impl StructA {
-        fn new(will_fail: bool) -> Self {
+    impl MyStruct {
+        fn new(s: String, fail: bool) -> Self {
             Self {
-                flag: Arc::new(Mutex::new(false)),
-                will_fail,
+                string: sync::Arc::new(sync::Mutex::new(s)),
+                fail,
             }
         }
 
         fn process(&self, ag: &mut AsyncGroup) {
-            let flag_clone = self.flag.clone();
-            let will_fail = self.will_fail;
-            ag.add(async move {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(100)).await;
-
+            let s_mutex = self.string.clone();
+            let fail = self.fail;
+            ag.add(move || {
+                let _ = thread::sleep(time::Duration::from_millis(100));
                 {
-                    let mut flag = flag_clone.lock().unwrap();
-                    if will_fail {
-                        return Err(Err::new(Reasons::BadFlag(*flag)));
+                    let mut s = s_mutex.lock().unwrap();
+                    if fail {
+                        return Err(errs::Err::new(Reasons::BadString(s.to_string())));
                     }
-                    *flag = true;
+                    *s = s.to_uppercase();
                 }
-
                 Ok(())
             });
         }
-    }
 
-    struct StructB {
-        string: Arc<Mutex<String>>,
-        flag: Arc<Mutex<bool>>,
-        will_fail: bool,
-    }
-
-    impl StructB {
-        fn new(will_fail: bool) -> Self {
-            Self {
-                string: Arc::new(Mutex::new("-".to_string())),
-                flag: Arc::new(Mutex::new(false)),
-                will_fail,
-            }
-        }
-
-        fn process(&self, ag: &mut AsyncGroup) {
-            let string_clone = self.string.clone();
-            let flag_clone = self.flag.clone();
-            let will_fail = self.will_fail;
-            ag.add(async move {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(300)).await;
-
+        fn process_multiple(&self, ag: &mut AsyncGroup) {
+            let s_mutex = self.string.clone();
+            let fail = self.fail;
+            ag.add(move || {
+                let _ = thread::sleep(time::Duration::from_millis(100));
                 {
-                    let mut string = string_clone.lock().unwrap();
-                    let mut flag = flag_clone.lock().unwrap();
-                    if will_fail {
-                        return Err(Err::new(Reasons::BadString(string.to_string())));
+                    let mut s = s_mutex.lock().unwrap();
+                    if fail {
+                        return Err(errs::Err::new(Reasons::BadString(s.to_string())));
                     }
-                    *flag = true;
-                    *string = "hello".to_string();
+                    *s = s.to_uppercase();
+                }
+                Ok(())
+            });
+
+            let s_mutex = self.string.clone();
+            let fail = self.fail;
+            ag.add(move || {
+                let _ = thread::sleep(time::Duration::from_millis(100));
+                {
+                    let mut s = s_mutex.lock().unwrap();
+                    if fail {
+                        return Err(errs::Err::new(Reasons::BadString(s.to_string())));
+                    }
+                    *s = s.to_uppercase();
                 }
                 Ok(())
             });
         }
     }
 
-    struct StructC {
-        number: Arc<Mutex<i64>>,
-        will_fail: bool,
-    }
-
-    impl StructC {
-        fn new(will_fail: bool) -> Self {
-            Self {
-                number: Arc::new(Mutex::new(123)),
-                will_fail,
-            }
-        }
-
-        fn process(&self, ag: &mut AsyncGroup) {
-            let number_clone = self.number.clone();
-            let will_fail = self.will_fail;
-            ag.add(async move {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(50)).await;
-
-                {
-                    let mut number = number_clone.lock().unwrap();
-                    if will_fail {
-                        return Err(Err::new(Reasons::BadNumber(*number)));
-                    }
-                    *number = 987;
-                }
-                Ok(())
-            });
-        }
-    }
-
-    mod test_join_and_collect_errors {
+    mod tests_of_join_and_collect_errors {
         use super::*;
 
         #[test]
         fn zero() {
-            let ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            ag.join_and_collect_errors(&mut m);
-            assert_eq!(m.len(), 0);
-        }
-
-        #[test]
-        fn single_ok() {
             let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
 
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let mut err_vec = Vec::new();
+            ag.join_and_collect_errors(&mut err_vec);
 
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.join_and_collect_errors(&mut m);
-            assert_eq!(m.len(), 0);
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-        }
-
-        #[test]
-        fn single_fail() {
-            let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.join_and_collect_errors(&mut m);
-            assert_eq!(m.len(), 1);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }"
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }"
-            );
-        }
-
-        #[test]
-        fn multiple_ok() {
-            let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
-            struct_b.process(&mut ag);
-
-            ag.name = "baz";
-            struct_c.process(&mut ag);
-
-            ag.join_and_collect_errors(&mut m);
-            assert_eq!(m.len(), 0);
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.string.lock().unwrap(), "hello".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
-        }
-
-        #[test]
-        fn multiple_processes_and_single_fail() {
-            let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
-            struct_b.process(&mut ag);
-
-            ag.name = "baz";
-            struct_c.process(&mut ag);
-
-            ag.join_and_collect_errors(&mut m);
-            assert_eq!(m.len(), 1);
-
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
-        }
-
-        #[test]
-        fn multiple_fail() {
-            let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(true);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
-            struct_b.process(&mut ag);
-
-            ag.name = "baz";
-            struct_c.process(&mut ag);
-
-            ag.join_and_collect_errors(&mut m);
-            assert_eq!(m.len(), 3);
-
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }",
-            );
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("baz").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 102).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("baz").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 102).to_string() + " }",
-            );
-
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-        }
-    }
-
-    mod test_join_and_ignore_errors {
-        use super::*;
-
-        #[test]
-        fn zero() {
-            let ag = AsyncGroup::new();
-
-            ag.join_and_ignore_errors();
+            assert!(err_vec.is_empty());
         }
 
         #[test]
         fn single_ok() {
             let mut ag = AsyncGroup::new();
 
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let struct_a = MyStruct::new("a".to_string(), false);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            ag.name = "foo";
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
-            ag.join_and_ignore_errors();
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
+            let mut errors = Vec::new();
+            ag.join_and_collect_errors(&mut errors);
+
+            assert!(errors.is_empty());
+            assert_eq!(*struct_a.string.lock().unwrap(), "A");
         }
 
         #[test]
         fn single_fail() {
             let mut ag = AsyncGroup::new();
 
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let struct_a = MyStruct::new("a".to_string(), true);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            ag.name = "foo";
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
-            ag.join_and_ignore_errors();
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let mut errors = Vec::new();
+            ag.join_and_collect_errors(&mut errors);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
+
+            assert_eq!(errors[0].0, "foo".into());
+            #[cfg(unix)]
+            assert_eq!(
+                format!("{:?}", errors[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }"
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                format!("{:?}", errors[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }"
+            );
         }
 
         #[test]
         fn multiple_ok() {
             let mut ag = AsyncGroup::new();
 
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let struct_a = MyStruct::new("a".to_string(), false);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a".to_string());
 
-            let struct_b = StructB::new(false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
+            let struct_b = MyStruct::new("b".to_string(), false);
+            assert_eq!(*struct_b.string.lock().unwrap(), "b".to_string());
 
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
+            let struct_c = MyStruct::new("c".to_string(), false);
+            assert_eq!(*struct_c.string.lock().unwrap(), "c".to_string());
 
-            ag.name = "foo";
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
-            ag.name = "bar";
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
-            ag.name = "baz";
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
-            ag.join_and_ignore_errors();
+            let mut err_vec = Vec::new();
+            ag.join_and_collect_errors(&mut err_vec);
 
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.string.lock().unwrap(), "hello".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
+            assert_eq!(err_vec.len(), 0);
+
+            assert_eq!(*struct_a.string.lock().unwrap(), "A");
+            assert_eq!(*struct_b.string.lock().unwrap(), "B");
+            assert_eq!(*struct_c.string.lock().unwrap(), "C");
         }
 
         #[test]
         fn multiple_processes_and_single_fail() {
             let mut ag = AsyncGroup::new();
 
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let struct_a = MyStruct::new("a".to_string(), false);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
+            let struct_b = MyStruct::new("b".to_string(), true);
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
 
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
+            let struct_c = MyStruct::new("c".to_string(), false);
+            assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag.name = "foo";
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
-            ag.name = "bar";
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
-            ag.name = "baz";
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
-            ag.join_and_ignore_errors();
+            let mut err_vec = Vec::new();
+            ag.join_and_collect_errors(&mut err_vec);
 
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
+            assert_eq!(err_vec.len(), 1);
+            assert_eq!(err_vec[0].0, "bar".into());
+            #[cfg(unix)]
+            assert_eq!(
+                format!("{:?}", err_vec[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                format!("{:?}", err_vec[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+
+            assert_eq!(*struct_a.string.lock().unwrap(), "A");
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
+            assert_eq!(*struct_c.string.lock().unwrap(), "C");
         }
 
         #[test]
         fn multiple_fail() {
             let mut ag = AsyncGroup::new();
 
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let struct_a = MyStruct::new("a".to_string(), true);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
+            let struct_b = MyStruct::new("b".to_string(), true);
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
 
-            let struct_c = StructC::new(true);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
+            let struct_c = MyStruct::new("c".to_string(), true);
+            assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag.name = "foo";
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
-            ag.name = "bar";
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
-            ag.name = "baz";
+            ag._name = "baz".into();
+            struct_c.process(&mut ag);
+
+            let mut err_vec = Vec::new();
+            ag.join_and_collect_errors(&mut err_vec);
+
+            assert_eq!(err_vec.len(), 3);
+
+            assert_eq!(err_vec[0].0, "foo".into());
+            assert_eq!(err_vec[1].0, "bar".into());
+            assert_eq!(err_vec[2].0, "baz".into());
+
+            #[cfg(unix)]
+            assert_eq!(
+                format!("{:?}", err_vec[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                format!("{:?}", err_vec[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+            #[cfg(unix)]
+            assert_eq!(
+                format!("{:?}", err_vec[1].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                format!("{:?}", err_vec[1].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+            #[cfg(unix)]
+            assert_eq!(
+                format!("{:?}", err_vec[2].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"c\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                format!("{:?}", err_vec[2].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"c\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 28).to_string() + " }",
+            );
+
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
+            assert_eq!(*struct_c.string.lock().unwrap(), "c");
+        }
+
+        #[test]
+        fn data_src_execute_multiple_setup_handles() {
+            let mut ag = AsyncGroup::new();
+
+            let struct_d = MyStruct::new("d".to_string(), false);
+            assert_eq!(*struct_d.string.lock().unwrap(), "d");
+
+            ag._name = "foo".into();
+            struct_d.process(&mut ag);
+
+            let mut err_vec = Vec::new();
+            ag.join_and_collect_errors(&mut err_vec);
+
+            assert_eq!(err_vec.len(), 0);
+
+            assert_eq!(*struct_d.string.lock().unwrap(), "D");
+        }
+
+        #[test]
+        fn collect_all_errors_if_data_src_executes_multiple_setup_handles() {
+            let mut ag = AsyncGroup::new();
+
+            let struct_d = MyStruct::new("d".to_string(), true);
+            assert_eq!(*struct_d.string.lock().unwrap(), "d");
+
+            ag._name = "foo".into();
+            struct_d.process_multiple(&mut ag);
+
+            let mut err_vec = Vec::new();
+            ag.join_and_collect_errors(&mut err_vec);
+
+            assert_eq!(err_vec.len(), 2);
+
+            assert_eq!(err_vec[0].0, "foo".into());
+            assert_eq!(err_vec[1].0, "foo".into());
+
+            #[cfg(unix)]
+            assert_eq!(
+                format!("{:?}", err_vec[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 44).to_string() + " }",
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                format!("{:?}", err_vec[0].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 44).to_string() + " }"
+            );
+
+            #[cfg(unix)]
+            assert_eq!(
+                format!("{:?}", err_vec[1].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 58).to_string() + " }",
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                format!("{:?}", err_vec[1].1),
+                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 58).to_string() + " }"
+            );
+
+            assert_eq!(*struct_d.string.lock().unwrap(), "d");
+        }
+    }
+
+    mod tests_of_join_and_ignore_errors {
+        use super::*;
+
+        #[test]
+        fn zero() {
+            let mut ag = AsyncGroup::new();
+
+            ag.join_and_ignore_errors();
+        }
+
+        #[test]
+        fn single_ok() {
+            let mut ag = AsyncGroup::new();
+
+            let struct_a = MyStruct::new("a".to_string(), false);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
+
+            ag._name = "foo".into();
+            struct_a.process(&mut ag);
+
+            ag.join_and_ignore_errors();
+            assert_eq!(*struct_a.string.lock().unwrap(), "A");
+        }
+
+        #[test]
+        fn single_fail() {
+            let mut ag = AsyncGroup::new();
+
+            let struct_a = MyStruct::new("a".to_string(), true);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
+
+            ag._name = "foo".into();
+            struct_a.process(&mut ag);
+
+            ag.join_and_ignore_errors();
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
+        }
+
+        #[test]
+        fn multiple_ok() {
+            let mut ag = AsyncGroup::new();
+
+            let struct_a = MyStruct::new("a".to_string(), false);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
+
+            let struct_b = MyStruct::new("b".to_string(), false);
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
+
+            let struct_c = MyStruct::new("c".to_string(), false);
+            assert_eq!(*struct_c.string.lock().unwrap(), "c");
+
+            ag._name = "foo".into();
+            struct_a.process(&mut ag);
+
+            ag._name = "bar".into();
+            struct_b.process(&mut ag);
+
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
             ag.join_and_ignore_errors();
 
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-        }
-    }
-
-    mod test_join_and_collect_errors_async {
-        use super::*;
-
-        #[tokio::test]
-        async fn zero() {
-            let ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            ag.join_and_collect_errors_async(&mut m).await;
-            assert_eq!(m.len(), 0);
+            assert_eq!(*struct_a.string.lock().unwrap(), "A");
+            assert_eq!(*struct_b.string.lock().unwrap(), "B");
+            assert_eq!(*struct_c.string.lock().unwrap(), "C");
         }
 
-        #[tokio::test]
-        async fn single_ok() {
+        #[test]
+        fn multiple_processes_and_single_fail() {
             let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
 
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let struct_a = MyStruct::new("a".to_string(), false);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            ag.name = "foo";
+            let struct_b = MyStruct::new("b".to_string(), true);
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
+
+            let struct_c = MyStruct::new("c".to_string(), false);
+            assert_eq!(*struct_c.string.lock().unwrap(), "c");
+
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
-            ag.join_and_collect_errors_async(&mut m).await;
-            assert_eq!(m.len(), 0);
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-        }
-
-        #[tokio::test]
-        async fn single_fail() {
-            let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.join_and_collect_errors_async(&mut m).await;
-            assert_eq!(m.len(), 1);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }"
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }"
-            );
-        }
-
-        #[tokio::test]
-        async fn multiple_ok() {
-            let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
-            ag.name = "baz";
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
-            ag.join_and_collect_errors_async(&mut m).await;
-            assert_eq!(m.len(), 0);
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.string.lock().unwrap(), "hello".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
+            ag.join_and_ignore_errors();
+
+            assert_eq!(*struct_a.string.lock().unwrap(), "A");
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
+            assert_eq!(*struct_c.string.lock().unwrap(), "C");
         }
 
-        #[tokio::test]
-        async fn multiple_processes_and_single_fail() {
+        #[test]
+        fn multiple_fail() {
             let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
 
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
+            let struct_a = MyStruct::new("a".to_string(), true);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
+            let struct_b = MyStruct::new("b".to_string(), true);
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
 
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
+            let struct_c = MyStruct::new("c".to_string(), true);
+            assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag.name = "foo";
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
-            ag.name = "bar";
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
-            ag.name = "baz";
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
-            ag.join_and_collect_errors_async(&mut m).await;
-            assert_eq!(m.len(), 1);
+            ag.join_and_ignore_errors();
 
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
-        }
-
-        #[tokio::test]
-        async fn multiple_fail() {
-            let mut ag = AsyncGroup::new();
-            let mut m = HashMap::<String, Err>::new();
-
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(true);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
-            struct_b.process(&mut ag);
-
-            ag.name = "baz";
-            struct_c.process(&mut ag);
-
-            ag.join_and_collect_errors_async(&mut m).await;
-            assert_eq!(m.len(), 3);
-
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("foo").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadFlag(false), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 32).to_string() + " }",
-            );
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("bar").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadString(\"-\"), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 69).to_string() + " }",
-            );
-            #[cfg(unix)]
-            assert_eq!(
-                format!("{:?}", *(m.get("baz").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadNumber(123), file = src/async_group.rs, line = ".to_string() + &(BASE_LINE + 102).to_string() + " }",
-            );
-            #[cfg(windows)]
-            assert_eq!(
-                format!("{:?}", *(m.get("baz").unwrap())),
-                "errs::Err { reason = sabi::async_group::tests_of_async_group::Reasons BadNumber(123), file = src\\async_group.rs, line = ".to_string() + &(BASE_LINE + 102).to_string() + " }",
-            );
-
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-        }
-    }
-
-    mod test_join_and_ignore_errors_async {
-        use super::*;
-
-        #[tokio::test]
-        async fn zero() {
-            let ag = AsyncGroup::new();
-
-            ag.join_and_ignore_errors_async().await;
-        }
-
-        #[tokio::test]
-        async fn single_ok() {
-            let mut ag = AsyncGroup::new();
-
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.join_and_ignore_errors_async().await;
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-        }
-
-        #[tokio::test]
-        async fn single_fail() {
-            let mut ag = AsyncGroup::new();
-
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.join_and_ignore_errors_async().await;
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-        }
-
-        #[tokio::test]
-        async fn multiple_ok() {
-            let mut ag = AsyncGroup::new();
-
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
-            struct_b.process(&mut ag);
-
-            ag.name = "baz";
-            struct_c.process(&mut ag);
-
-            ag.join_and_ignore_errors_async().await;
-
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.string.lock().unwrap(), "hello".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
-        }
-
-        #[tokio::test]
-        async fn multiple_processes_and_single_fail() {
-            let mut ag = AsyncGroup::new();
-
-            let struct_a = StructA::new(false);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(false);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
-            struct_b.process(&mut ag);
-
-            ag.name = "baz";
-            struct_c.process(&mut ag);
-
-            ag.join_and_ignore_errors_async().await;
-
-            assert_eq!(*struct_a.flag.lock().unwrap(), true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 987);
-        }
-
-        #[tokio::test]
-        async fn multiple_fail() {
-            let mut ag = AsyncGroup::new();
-
-            let struct_a = StructA::new(true);
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-
-            let struct_b = StructB::new(true);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-
-            let struct_c = StructC::new(true);
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
-
-            ag.name = "foo";
-            struct_a.process(&mut ag);
-
-            ag.name = "bar";
-            struct_b.process(&mut ag);
-
-            ag.name = "baz";
-            struct_c.process(&mut ag);
-
-            ag.join_and_ignore_errors_async().await;
-
-            assert_eq!(*struct_a.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.flag.lock().unwrap(), false);
-            assert_eq!(*struct_b.string.lock().unwrap(), "-".to_string());
-            assert_eq!(*struct_c.number.lock().unwrap(), 123);
+            assert_eq!(*struct_a.string.lock().unwrap(), "a");
+            assert_eq!(*struct_b.string.lock().unwrap(), "b");
+            assert_eq!(*struct_c.string.lock().unwrap(), "c");
         }
     }
 }
