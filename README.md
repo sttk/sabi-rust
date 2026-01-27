@@ -1,4 +1,4 @@
-# [sabi for Rust][repo-url] [![crates.io][cratesio-img]][cratesio-url] [![doc.rs][docrs-img]][docrs-url] [![CI Status][ci-img]][ci-url] [![MIT License][mit-img]][mit-url]
+# [sabi][repo-url] [![crates.io][cratesio-img]][cratesio-url] [![doc.rs][docrs-img]][docrs-url] [![CI Status][ci-img]][ci-url] [![MIT License][mit-img]][mit-url]
 
 A small framework for Rust designed to separate logic from data access.
 
@@ -97,6 +97,27 @@ impl DataConn for BarDataConn {
     fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
     fn close(&mut self) { /* ... */ }
 }
+
+pub struct BazDataSrc { /* ... */ }
+
+impl DataSrc<BazDataConn> for BazDataSrc {
+    fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+    fn close(&mut self) { /* ... */ }
+    fn create_data_conn(&mut self) -> Result<Box<BazDataConn>, Err> {
+        Ok(Box::new(BazDataConn{ /* ... */ }))
+    }
+}
+
+pub struct BazDataConn { /* ... */ }
+
+impl BazDataConn { /* ... */ }
+
+impl DataConn for BazDataConn {
+    fn commit(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+    fn rollback(&mut self, ag: &mut AsyncGroup) { /* ... */ }
+    fn close(&mut self) { /* ... */ }
+}
+
 ```
 
 ### 2. Implementing logic functions and data traits
@@ -113,21 +134,20 @@ use override_macro::overridable;
 pub trait MyData {
     fn get_text(&mut self) -> Result<String, Err>;
     fn set_text(&mut self, text: String) -> Result<(), Err>;
+    fn set_flag(&mut self, flag: bool) -> Result<(), Err>;
 }
 
 pub fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
     let text = data.get_text()?;
     let _ = data.set_text(text)?;
+    let _ = data.set_flag(true)?;
     Ok(())
 }
 ```
 
 ### 3. Implementing `DataAcc` derived traits
 
-The `DataAcc` trait abstracts access to data connections.
-The methods defined here will be used to obtain data connections via `DataHub` and perform
-actual data operations.
-The `#[overridable]` macro is also used here.
+The `DataAcc` trait in `sabi` provides a simple mechanism to retrieve `DataConn` objects. However, it's the *derived traits* (like `GettingDataAcc` and `SettingDataAcc` in this example) that define the application-specific methods for accessing data. These methods then use `DataAcc::get_data_conn` to obtain the appropriate `DataConn` and perform the actual data operations. The `#[overridable]` macro is also used here to allow these methods to be integrated with `DataHub`.
 
 ```rust
 use sabi::DataAcc;
@@ -153,6 +173,15 @@ pub trait SettingDataAcc: DataAcc {
         Ok(())
     }
 }
+
+#[overridable]
+pub trait UpdatingDataAcc: DataAcc {
+    fn set_flag(&mut self, flag: bool) -> Result<(), Err> {
+        let conn = self.get_data_conn::<BazDataConn>("baz")?;
+        /* ... */
+        Ok(())
+    }
+}
 ```
 
 ### 4. Integrating data traits and `DataAcc` derived traits into `DataHub`
@@ -170,12 +199,13 @@ use override_macro::override_with;
 use errs::Err;
 
 use crate::logic_layer::MyData;
-use crate::data_access_layer::{GettingDataAcc, SettingDataAcc};
+use crate::data_access_layer::{GettingDataAcc, SettingDataAcc, UpdatingDataAcc};
 
 impl GettingDataAcc for DataHub {}
 impl SettingDataAcc for DataHub {}
+impl UpdatingDataAcc for DataHub {}
 
-#[override_with(GettingDataAcc, SettingDataAcc)]
+#[override_with(GettingDataAcc, SettingDataAcc, UpdatingDataAcc)]
 impl MyData for DataHub {}
 ```
 
@@ -189,14 +219,19 @@ function (`my_logic`) within a transaction.
 This automatically handles transaction commits and rollbacks.
 
 ```rust
-use sabi::{uses, setup, shutdown_later, DataHub};
+use sabi::{uses, setup, DataHub};
 
-use crate::data_src::{FooDataSrc, BarDataSrc};
+use crate::data_src::{FooDataSrc, BarDataSrc, BazDataSrc};
 use crate::logic_layer::my_logic;
 
+// Register global DataSrc using the `sabi::uses!` macro.
+// This makes `FooDataSrc` available throughout the application.
+uses!("foo", FooDataSrc{});
+
 fn main() {
-    // Register global DataSrc
-    uses("foo", FooDataSrc{});
+    // Register global DataSrc using the `sabi::uses` function.
+    // This makes `BazDataSrc` available throughout the application.
+    uses("baz", BazDataSrc{});
 
     // Set up the sabi framework
     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
@@ -205,82 +240,53 @@ fn main() {
 
     // Create a new instance of DataHub
     let mut data = DataHub::new();
-    // Register session-local DataSrc with DataHub
+    // Register session-local DataSrc with DataHub using the `uses` method.
+    // This makes `BarDataSrc` available only within this `DataHub` instance's session.
     data.uses("bar", BarDataSrc{});
 
     // Execute application logic within a transaction
-    // my_logic performs data operations via DataHub
-    let _ = txn!(my_logic, data).unwrap();
-}
-```
+    // my_logic performs data operations via DataHub by getting a text, setting it, and setting a flag.
+    let _ = data.txn(my_logic).unwrap();
 
-### Using this framework in async function/block
-
-If you want to run this framework within an async function/block, you should use `setup_async`
-instead of `setup`, `run_async!` instead of `run!`, and `txn_async!` instead of `txn!`, as shown
-below.
-
-```rust
-async fn my_logic(data: &mut impl MyData) -> Result<(), Err> {
-    let text = data.get_text()?;
-    let _ = data.set_text(text)?;
-    Ok(())
-}
-
-#[tokio::main]
-async fn main() {
-    // Register global DataSrc.
-    uses("foo", FooDataSrc{}).await;
-
-    // Set up the sabi framework.
-    // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
-    // NOTE: Don't write as `let _ = ...` because the return variable is dropped immediately.
-    let _auto_shutdown = setup_async().await.unwrap();
-
-    // Create a new instance of DataHub.
-    let mut data = DataHub::new();
-    // Register session-local DataSrc with DataHub.
-    data.uses("bar", BarDataSrc{});
-
-    // Execute application logic within a transaction.
-    // my_logic performs data operations via DataHub.
-    let _ = txn_async!(my_logic, data).await.unwrap();
+    // If you need to execute logic without transactional control (e.g., for read-only operations),
+    // use the `run` method instead of `txn`.
+    // let _ = data.run(my_logic).unwrap();
 }
 ```
 
 ## Supported Rust versions
 
-This crate supports Rust 1.85.1 or later.
+This crate supports Rust 1.87.0 or later.
 
 ```bash
 % ./build.sh msrv
-  [Meta]   cargo-msrv 0.18.4
+  [Meta]   cargo-msrv 0.18.4  
 
-Compatibility Check #1: Rust 1.73.0
-  [FAIL]   Is incompatible
+Compatibility Check #1: Rust 1.75.0
+  [FAIL]   Is incompatible 
 
-Compatibility Check #2: Rust 1.81.0
-  [FAIL]   Is incompatible
+Compatibility Check #2: Rust 1.84.1
+  [FAIL]   Is incompatible 
 
-Compatibility Check #3: Rust 1.85.1
-  [OK]     Is compatible
+Compatibility Check #3: Rust 1.89.0
+  [OK]     Is compatible 
 
-Compatibility Check #4: Rust 1.83.0
-  [FAIL]   Is incompatible
+Compatibility Check #4: Rust 1.86.0
+  [FAIL]   Is incompatible 
 
-Compatibility Check #5: Rust 1.84.1
-  [FAIL]   Is incompatible
+Compatibility Check #5: Rust 1.87.0
+  [OK]     Is compatible 
 
 Result:
-   Considered (min … max):   Rust 1.56.1 … Rust 1.89.0
-   Search method:            bisect
-   MSRV:                     1.85.1
-   Target:                   x86_64-apple-darwin
+   Considered (min … max):   Rust 1.56.1 … Rust 1.93.0 
+   Search method:            bisect                    
+   MSRV:                     1.87.0                    
+   Target:                   x86_64-apple-darwin 
 ```
 
 ## License
 
-Copyright (C) 2024-2025 Takayuki Sato
+Copyright (C) 2024-2026 Takayuki Sato
 
 This program is free software under MIT License.<br>
 See the file LICENSE in this distribution for more details.
