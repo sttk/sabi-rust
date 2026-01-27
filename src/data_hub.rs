@@ -1,307 +1,97 @@
-// Copyright (C) 2024-2025 Takayuki Sato. All Rights Reserved.
+// Copyright (C) 2024-2026 Takayuki Sato. All Rights Reserved.
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use std::any;
+use crate::data_src::{copy_global_data_srcs_to_map, create_data_conn_from_global_data_src};
+use crate::{DataConn, DataConnManager, DataHub, DataSrc, DataSrcManager};
+
+#[allow(unused)] // for rustdoc
+use crate::DataAcc;
+
+use crate::DataConnContainer;
+
 use std::collections::HashMap;
-use std::sync;
+use std::sync::Arc;
+use std::{any, ptr};
 
-use errs::Err;
-
-use crate::data_conn::DataConnList;
-use crate::data_src::DataSrcList;
-use crate::{AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer};
-
-static mut GLOBAL_DATA_SRC_LIST: DataSrcList = DataSrcList::new(false);
-
-#[cfg(not(test))]
-static GLOBAL_DATA_SRCS_FIXED: sync::OnceLock<()> = sync::OnceLock::new();
-#[cfg(test)]
-static GLOBAL_DATA_SRCS_FIXED: sync::atomic::AtomicBool = sync::atomic::AtomicBool::new(false);
-
-/// An enum type representing the reasons for errors that can occur within `DataHub` operations.
+/// An enum type representing the reasons for errors that can occur within [`DataHub`] operations.
 #[derive(Debug)]
 pub enum DataHubError {
-    /// Indicates a failure during the setup process of one or more global data sources.
-    /// Contains a map of data source names to their corresponding errors.
-    FailToSetupGlobalDataSrcs {
-        /// The map contains errors that occurred in each `DataSrc` object.
-        errors: HashMap<String, Err>,
-    },
-
     /// Indicates a failure during the setup process of one or more session-local data sources.
-    /// Contains a map of data source names to their corresponding errors.
+    /// Contains a vector of data source names and their corresponding errors.
     FailToSetupLocalDataSrcs {
-        /// The map contains errors that occurred in each `DataSrc` object.
-        errors: HashMap<String, Err>,
+        /// The vector contains errors that occurred in each [`DataSrc`] object.
+        errors: Vec<(Arc<str>, errs::Err)>,
     },
 
-    /// Indicates a failure during the commit process of one or more `DataConn` instances
-    /// involved in a transaction. Contains a map of data connection names to their errors.
-    FailToCommitDataConn {
-        /// The map contains errors that occurred in each `DataConn` object.
-        errors: HashMap<String, Err>,
-    },
-
-    /// Indicates a failure during the pre commit process of one or more `DataConn` instances
-    /// involved in a transaction. Contains a map of data connection names to their errors.
-    FailToPreCommitDataConn {
-        /// The map contains errors that occurred in each `DataConn` object.
-        errors: HashMap<String, Err>,
-    },
-
-    /// Indicates that no `DataSrc` was found to create a `DataConn` for the specified name
+    /// Indicates that no [`DataSrc`] was found to create a [`DataConn`] for the specified name
     /// and type.
     NoDataSrcToCreateDataConn {
         /// The name of the data source that could not be found.
-        name: String,
-
-        /// The type name of the `DataConn` that was requested.
+        name: Arc<str>,
+        /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
     },
-
-    /// Indicates a failure to create a `DataConn` object.
-    FailToCreateDataConn {
-        /// The name of the data source that failed to be created.
-        name: String,
-
-        /// The type name of the `DataConn` that failed to be created.
-        data_conn_type: &'static str,
-    },
-
-    /// Indicates a failure to cast a retrieved `DataConn` to the expected type.
-    FailToCastDataConn {
-        /// The name of the data connection that failed to cast.
-        name: String,
-
-        /// The type name to which the `DataConn` attempted to cast.
-        cast_to_type: &'static str,
-    },
-}
-
-/// Registers a global data source that can be used throughout the application.
-///
-/// This function associates a given `DataSrc` implementation with a unique name.
-/// This name will later be used to retrieve session-specific `DataConn` instances
-/// from this data source.
-///
-/// Global data sources are set up once via the `setup` function and are available
-/// to all `DataHub` instances.
-///
-/// # Parameters
-///
-/// * `name`: The unique name for the data source.
-/// * `ds`: The `DataSrc` instance to register.
-pub fn uses<S, C>(name: &str, ds: S)
-where
-    S: DataSrc<C>,
-    C: DataConn + 'static,
-{
-    #[cfg(not(test))]
-    let fixed = GLOBAL_DATA_SRCS_FIXED.get().is_some();
-    #[cfg(test)]
-    let fixed = GLOBAL_DATA_SRCS_FIXED.load(sync::atomic::Ordering::Relaxed);
-
-    if !fixed {
-        #[allow(static_mut_refs)]
-        unsafe {
-            GLOBAL_DATA_SRC_LIST.add_data_src(name.to_string(), ds);
-        }
-    }
-}
-
-/// Executes the setup process for all globally registered data sources.
-///
-/// This setup typically involves tasks such as creating connection pools,
-/// opening global connections, or performing initial configurations necessary
-/// for creating session-specific connections. The setup can run synchronously
-/// or asynchronously using an `AsyncGroup` if operations are time-consuming.
-///
-/// If any data source fails to set up, this function returns an `Err` with
-/// `DataHubError::FailToSetupGlobalDataSrcs`, containing a map of the names
-/// of the failed data sources and their corresponding `Err` objects. In such a case,
-/// all global data sources that were successfully set up are also closed and dropped.
-///
-/// If all data source setups are successful, the `Result::Ok` which contains an object
-/// is returned. This object is designed to close and drop global data sources when
-/// it's dropped.
-/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
-/// automatically cleaned up when the return value goes out of scope.
-///
-/// **NOTE:** Do not receive the `Result` or its inner object into an anonymous
-/// variable using `let _ = ...`.
-/// If you do, the inner object is dropped immediately at that point.
-///
-/// # Returns
-///
-/// * `Result<AutoShutdown, Err>`: An `AutoShutdown` if all global data sources are
-///   set up successfully, or an `Err` if any setup fails.
-pub fn setup() -> Result<AutoShutdown, Err> {
-    #[cfg(not(test))]
-    let ok = GLOBAL_DATA_SRCS_FIXED.set(()).is_ok();
-    #[cfg(test)]
-    let ok = GLOBAL_DATA_SRCS_FIXED
-        .compare_exchange(
-            false,
-            true,
-            sync::atomic::Ordering::Relaxed,
-            sync::atomic::Ordering::Relaxed,
-        )
-        .is_ok();
-
-    if ok {
-        #[allow(static_mut_refs)]
-        let err_map = unsafe { GLOBAL_DATA_SRC_LIST.setup_data_srcs() };
-        if err_map.len() > 0 {
-            #[allow(static_mut_refs)]
-            unsafe {
-                GLOBAL_DATA_SRC_LIST.close_and_drop_data_srcs();
-            }
-            return Err(Err::new(DataHubError::FailToSetupGlobalDataSrcs {
-                errors: err_map,
-            }));
-        }
-    }
-
-    Ok(AutoShutdown {})
-}
-
-/// Executes asynchronously the setup process for all globally registered data sources.
-///
-/// This setup typically involves tasks such as creating connection pools,
-/// opening global connections, or performing initial configurations necessary
-/// for creating session-specific connections. The setup can run synchronously
-/// or asynchronously using an `AsyncGroup` if operations are time-consuming.
-///
-/// If any data source fails to set up, this function returns an `Err` with
-/// `DataHubError::FailToSetupGlobalDataSrcs`, containing a map of the names
-/// of the failed data sources and their corresponding `Err` objects. In such a case,
-/// all global data sources that were successfully set up are also closed and dropped.
-///
-/// If all data source setups are successful, the `Result::Ok` which contains an object
-/// is returned. This object is designed to close and drop global data sources when
-/// it's dropped.
-/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
-/// automatically cleaned up when the return value goes out of scope.
-///
-/// **NOTE:** Do not receive the `Result` or its inner object into an anonymous
-/// variable using `let _ = ...`.
-/// If you do, the inner object is dropped immediately at that point.
-///
-/// # Returns
-///
-/// * `Result<AutoShutdown, Err>`: An `AutoShutdown` if all global data sources are
-///   set up successfully, or an `Err` if any setup fails.
-pub async fn setup_async() -> Result<AutoShutdown, Err> {
-    #[cfg(not(test))]
-    let ok = GLOBAL_DATA_SRCS_FIXED.set(()).is_ok();
-    #[cfg(test)]
-    let ok = GLOBAL_DATA_SRCS_FIXED
-        .compare_exchange(
-            false,
-            true,
-            sync::atomic::Ordering::Relaxed,
-            sync::atomic::Ordering::Relaxed,
-        )
-        .is_ok();
-
-    if ok {
-        #[allow(static_mut_refs)]
-        let err_map = unsafe { GLOBAL_DATA_SRC_LIST.setup_data_srcs_async() }.await;
-        if err_map.len() > 0 {
-            #[allow(static_mut_refs)]
-            unsafe {
-                GLOBAL_DATA_SRC_LIST.close_and_drop_data_srcs();
-            }
-            return Err(Err::new(DataHubError::FailToSetupGlobalDataSrcs {
-                errors: err_map,
-            }));
-        }
-    }
-
-    Ok(AutoShutdown {})
-}
-
-/// A utility struct that ensure to close and drop global data sources when it goes out scope.
-///
-/// This struct implements the `Drop` trait, and its `drop` method handles the closing and
-/// dropping of registered global data sources.
-/// Therefore this ensures that these operations are automatically executed at the end of
-/// the scope.
-///
-/// **NOTE:** Do not receive this an instance of this struct into an anonymous variable
-/// (`let _ = ...`), because an anonymous variable dropped immediately at that point.
-pub struct AutoShutdown {}
-
-impl Drop for AutoShutdown {
-    fn drop(&mut self) {
-        #[allow(static_mut_refs)]
-        unsafe {
-            GLOBAL_DATA_SRC_LIST.close_and_drop_data_srcs();
-        }
-    }
-}
-
-/// The struct that acts as a central hub for data input/output operations, integrating
-/// multiple *Data* traits (which are passed to business logic functions as their arguments) with
-/// `DataAcc` traits (which implement default data I/O methods for external services).
-///
-/// It facilitates data access by providing `DataConn` objects, created from
-/// both global data sources (registered via the global `uses` function) and
-/// session-local data sources (registered via `DataHub::uses` method).
-///
-/// The `DataHub` is capable of performing aggregated transactional operations
-/// on all `DataConn` objects created from its registered `DataSrc` instances.
-pub struct DataHub {
-    local_data_src_list: DataSrcList,
-    data_src_map: HashMap<String, *mut DataSrcContainer>,
-    data_conn_list: DataConnList,
-    data_conn_map: HashMap<String, *mut DataConnContainer>,
-    fixed: bool,
 }
 
 impl DataHub {
-    /// Creates a new `DataHub` instance.
+    /// Creates a new [`DataHub`] instance.
     ///
-    /// Upon creation, it attempts to "fix" the global data sources (making them immutable
-    /// for further registration) and copies references to already set-up global data
-    /// sources into its internal map for quick access.
+    /// Upon creation, it collects references to globally set-up data sources
+    /// into its internal map for quick access.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        #[cfg(not(test))]
-        let _ = GLOBAL_DATA_SRCS_FIXED.set(());
-        #[cfg(test)]
-        GLOBAL_DATA_SRCS_FIXED.store(true, sync::atomic::Ordering::Relaxed);
-
         let mut data_src_map = HashMap::new();
-
-        #[allow(static_mut_refs)]
-        unsafe {
-            GLOBAL_DATA_SRC_LIST.copy_container_ptrs_did_setup_into(&mut data_src_map);
-        }
+        copy_global_data_srcs_to_map(&mut data_src_map);
 
         Self {
-            local_data_src_list: DataSrcList::new(true),
+            local_data_src_manager: DataSrcManager::new(true),
             data_src_map,
-            data_conn_list: DataConnList::new(),
-            data_conn_map: HashMap::new(),
+            data_conn_manager: DataConnManager::new(),
             fixed: false,
         }
     }
 
-    /// Registers a session-local data source with this `DataHub` instance.
+    /// Creates a new [`DataHub`] instance with a specified commit order for data connections.
     ///
-    /// This method is similar to the global `uses` function but registers a data source
-    /// that is local to this specific `DataHub` session. Once the `DataHub`'s state is
-    /// "fixed" (while `run!` or `txn!` macro is executing), further calls
-    /// to `uses` are ignored. However, after `run!` or `txn!` completes, the `DataHub`'s
-    /// "fixed" state is reset, allowing for new data sources to be registered or removed
-    /// via `disuses` method in subsequent operations.
+    /// This constructor allows defining a specific order for pre-commit, commit, and post-commit
+    /// operations for named data connections. Data connections not specified in `names` will
+    /// be processed after the named ones, in their order of acquisition.
+    ///
+    /// Upon creation, it collects references to globally set-up data sources
+    /// into its internal map for quick access.
+    ///
+    /// # Parameters
+    ///
+    /// * `names`: A slice of `&str` representing the names of data connections to commit in a
+    ///   specific order.
+    pub fn with_commit_order(names: &[&str]) -> Self {
+        let mut data_src_map = HashMap::new();
+        copy_global_data_srcs_to_map(&mut data_src_map);
+
+        Self {
+            local_data_src_manager: DataSrcManager::new(true),
+            data_src_map,
+            data_conn_manager: DataConnManager::with_commit_order(names),
+            fixed: false,
+        }
+    }
+
+    #[allow(rustdoc::broken_intra_doc_links)]
+    /// Registers a session-local data source with this [`DataHub`] instance.
+    ///
+    /// This method is similar to the global [`uses!`] macro but registers a data source
+    /// that is local to this specific [`DataHub`] session. Once the [`DataHub`]'s state is
+    /// "fixed" (while [`DataHub::run`] or [`DataHub::txn`] method is executing),
+    /// further calls to `uses` are ignored. However, after the method completes,
+    /// the [`DataHub`]'s "fixed" state is reset, allowing for new data sources to be
+    /// registered or removed via [`DataHub::disuses`] method in subsequent operations.
     ///
     /// # Parameters
     ///
     /// * `name`: The unique name for the local data source.
-    /// * `ds`: The `DataSrc` instance to register.
-    pub fn uses<S, C>(&mut self, name: &str, ds: S)
+    /// * `ds`: The [`DataSrc`] instance to register.
+    pub fn uses<S, C>(&mut self, name: impl Into<Arc<str>>, ds: S)
     where
         S: DataSrc<C>,
         C: DataConn + 'static,
@@ -309,288 +99,132 @@ impl DataHub {
         if self.fixed {
             return;
         }
-
-        self.local_data_src_list.add_data_src(name.to_string(), ds);
+        self.local_data_src_manager.add(name, ds);
     }
 
     /// Unregisters and drops a session-local data source by its name.
     ///
-    /// This method removes a data source that was previously registered via `DataHub::uses`.
-    /// This operation is ignored if the `DataHub`'s state is already "fixed".
+    /// This method removes a data source that was previously registered via [`DataHub::uses`].
+    /// This operation is ignored if the [`DataHub`]'s state is already "fixed".
     ///
     /// # Parameters
     ///
     /// * `name`: The name of the local data source to unregister.
-    pub fn disuses(&mut self, name: &str) {
+    pub fn disuses(&mut self, name: impl AsRef<str>) {
         if self.fixed {
             return;
         }
-
-        self.data_src_map
-            .retain(|nm, p| unsafe { !(*(*p)).local } || nm != name);
-        self.local_data_src_list
-            .remove_and_drop_container_ptr_did_setup_by_name(name);
-        self.local_data_src_list
-            .remove_and_drop_container_ptr_not_setup_by_name(name);
+        self.data_src_map.remove(name.as_ref());
+        self.local_data_src_manager.remove(name);
     }
 
-    #[doc(hidden)]
-    pub fn begin(&mut self) -> Result<(), Err> {
+    #[inline]
+    fn begin(&mut self) -> errs::Result<()> {
         self.fixed = true;
 
-        let err_map = self.local_data_src_list.setup_data_srcs();
+        let mut errors = Vec::new();
 
-        self.local_data_src_list
-            .copy_container_ptrs_did_setup_into(&mut self.data_src_map);
-
-        if err_map.len() > 0 {
-            return Err(Err::new(DataHubError::FailToSetupLocalDataSrcs {
-                errors: err_map,
-            }));
+        self.local_data_src_manager.setup(&mut errors);
+        if errors.is_empty() {
+            self.local_data_src_manager
+                .copy_ds_ready_to_map(&mut self.data_src_map);
+            Ok(())
+        } else {
+            Err(errs::Err::new(DataHubError::FailToSetupLocalDataSrcs {
+                errors,
+            }))
         }
-
-        Ok(())
     }
 
-    #[doc(hidden)]
-    pub async fn begin_async(&mut self) -> Result<(), Err> {
-        self.fixed = true;
-
-        let err_map = self.local_data_src_list.setup_data_srcs_async().await;
-
-        self.local_data_src_list
-            .copy_container_ptrs_did_setup_into(&mut self.data_src_map);
-
-        if err_map.len() > 0 {
-            return Err(Err::new(DataHubError::FailToSetupLocalDataSrcs {
-                errors: err_map,
-            }));
-        }
-
-        Ok(())
+    #[inline]
+    fn commit(&mut self) -> errs::Result<()> {
+        self.data_conn_manager.commit()
     }
 
-    #[doc(hidden)]
-    pub fn commit(&mut self) -> Result<(), Err> {
-        let mut err_map = HashMap::new();
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let pre_commit_fn = unsafe { (*ptr).pre_commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            if let Err(err) = pre_commit_fn(ptr, &mut ag) {
-                err_map.insert(name.to_string(), err);
-                break;
-            }
-
-            ptr = next;
-        }
-
-        ag.join_and_collect_errors(&mut err_map);
-
-        if !err_map.is_empty() {
-            return Err(Err::new(DataHubError::FailToPreCommitDataConn {
-                errors: err_map,
-            }));
-        }
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let commit_fn = unsafe { (*ptr).commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            if let Err(err) = commit_fn(ptr, &mut ag) {
-                err_map.insert(name.to_string(), err);
-                break;
-            }
-
-            ptr = next;
-        }
-
-        ag.join_and_collect_errors(&mut err_map);
-
-        if !err_map.is_empty() {
-            return Err(Err::new(DataHubError::FailToCommitDataConn {
-                errors: err_map,
-            }));
-        }
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let post_commit_fn = unsafe { (*ptr).post_commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            post_commit_fn(ptr, &mut ag);
-
-            ptr = next;
-        }
-
-        ag.join_and_ignore_errors();
-
-        return Ok(());
+    #[inline]
+    fn rollback(&mut self) {
+        self.data_conn_manager.rollback()
     }
 
-    #[doc(hidden)]
-    pub async fn commit_async(&mut self) -> Result<(), Err> {
-        let mut err_map = HashMap::new();
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let pre_commit_fn = unsafe { (*ptr).pre_commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            if let Err(err) = pre_commit_fn(ptr, &mut ag) {
-                err_map.insert(name.to_string(), err);
-                break;
-            }
-
-            ptr = next;
-        }
-
-        ag.join_and_collect_errors_async(&mut err_map).await;
-
-        if !err_map.is_empty() {
-            return Err(Err::new(DataHubError::FailToPreCommitDataConn {
-                errors: err_map,
-            }));
-        }
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let commit_fn = unsafe { (*ptr).commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            if let Err(err) = commit_fn(ptr, &mut ag) {
-                err_map.insert(name.to_string(), err);
-                break;
-            }
-
-            ptr = next;
-        }
-
-        ag.join_and_collect_errors_async(&mut err_map).await;
-
-        if !err_map.is_empty() {
-            return Err(Err::new(DataHubError::FailToCommitDataConn {
-                errors: err_map,
-            }));
-        }
-
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let post_commit_fn = unsafe { (*ptr).post_commit_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            post_commit_fn(ptr, &mut ag);
-
-            ptr = next;
-        }
-
-        ag.join_and_ignore_errors_async().await;
-
-        return Ok(());
-    }
-
-    #[doc(hidden)]
-    pub fn rollback(&mut self) {
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let should_force_back_fn = unsafe { (*ptr).should_force_back_fn };
-            let force_back_fn = unsafe { (*ptr).force_back_fn };
-            let rollback_fn = unsafe { (*ptr).rollback_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            if should_force_back_fn(ptr) {
-                force_back_fn(ptr, &mut ag);
-            } else {
-                rollback_fn(ptr, &mut ag);
-            }
-
-            ptr = next;
-        }
-
-        ag.join_and_ignore_errors();
-    }
-
-    #[doc(hidden)]
-    pub async fn rollback_async(&mut self) {
-        let mut ag = AsyncGroup::new();
-
-        let mut ptr = self.data_conn_list.head();
-        while !ptr.is_null() {
-            let should_force_back_fn = unsafe { (*ptr).should_force_back_fn };
-            let force_back_fn = unsafe { (*ptr).force_back_fn };
-            let rollback_fn = unsafe { (*ptr).rollback_fn };
-            let name = unsafe { &(*ptr).name };
-            let next = unsafe { (*ptr).next };
-
-            ag.name = name;
-
-            if should_force_back_fn(ptr) {
-                force_back_fn(ptr, &mut ag);
-            } else {
-                rollback_fn(ptr, &mut ag);
-            }
-
-            ptr = next;
-        }
-
-        ag.join_and_ignore_errors_async().await;
-    }
-
-    #[doc(hidden)]
-    pub fn end(&mut self) {
-        self.data_conn_map.clear();
-        self.data_conn_list.close_and_drop_data_conns();
+    #[inline]
+    fn end(&mut self) {
+        self.data_conn_manager.close();
         self.fixed = false;
     }
 
-    /// Retrieves a mutable reference to a `DataConn` object by name, creating it if necessary.
+    /// Executes a given logic function without transaction control.
     ///
-    /// This is the core method used by `DataAcc` implementations to obtain connections
-    /// to external data services. It first checks if a `DataConn` with the given name
-    /// already exists in the `DataHub`'s session. If not, it attempts to find a
-    /// corresponding `DataSrc` and create a new `DataConn` from it.
+    /// This method sets up local data sources, runs the provided closure,
+    /// and then cleans up the [`DataHub`]'s session resources. It does not
+    /// perform commit or rollback operations.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+    ///   It takes a mutable reference to [`DataHub`] as an argument.
+    ///
+    /// # Returns
+    ///
+    /// * `errs::Result<()>`: The result of the logic function's execution,
+    ///   or an error if executing `logic_fn` fails.
+    pub fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>,
+    {
+        let mut r = self.begin();
+        if r.is_ok() {
+            r = logic_fn(self);
+        }
+        self.end();
+        r
+    }
+
+    /// Executes a given logic function within a transaction.
+    ///
+    /// This method first sets up local data sources, then runs the provided closure.
+    /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
+    /// or if the logic function itself returns an [`errs::Err`], a rollback operation
+    /// is performed. After succeeding `pre_commit` and `commit` methods of all [`DataConn`]s,
+    /// `post_commit` methods of all [`DataConn`]s are executed.
+    /// Finally, it cleans up the [`DataHub`]'s session resources.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+    ///   It takes a mutable reference to [`DataHub`] as an argument.
+    ///
+    /// # Returns
+    ///
+    /// * `errs::Result<()>`: The final result of the transaction (success or failure of
+    ///   logic/commit), or an error if executing `logic_fn` fails.
+    pub fn txn<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>,
+    {
+        let mut r = self.begin();
+        if r.is_ok() {
+            r = logic_fn(self);
+        }
+        if r.is_ok() {
+            r = self.commit();
+        }
+        if r.is_err() {
+            self.rollback();
+        }
+        self.end();
+        r
+    }
+
+    /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
+    ///
+    /// This is the core method used by [`DataAcc`] implementations to obtain connections
+    /// to external data services. It first checks if a [`DataConn`] with the given name
+    /// already exists in the [`DataHub`]'s session. If not, it attempts to find a
+    /// corresponding [`DataSrc`] and create a new [`DataConn`] from it.
     ///
     /// # Type Parameters
     ///
-    /// * `C`: The concrete type of `DataConn` expected.
+    /// * `C`: The concrete type of [`DataConn`] expected.
     ///
     /// # Parameters
     ///
@@ -598,5472 +232,811 @@ impl DataHub {
     ///
     /// # Returns
     ///
-    /// * `Result<&mut C, Err>`: A mutable reference to the `DataConn` instance if successful,
-    ///   or an `Err` if the data source is not found, or if the retrieved/created `DataConn`
-    ///   cannot be cast to the specified type `C`.
-    pub fn get_data_conn<C>(&mut self, name: &str) -> Result<&mut C, Err>
+    /// * `errs::Result<&mut C>`: A mutable reference to the [`DataConn`] instance if successful,
+    ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
+    ///   [`DataConn`] cannot be cast to the specified type `C`.
+    pub fn get_data_conn<C>(&mut self, name: impl AsRef<str>) -> errs::Result<&mut C>
     where
         C: DataConn + 'static,
     {
-        match self.data_conn_map.get(name) {
-            Some(conn_ptr) => {
-                let type_id = any::TypeId::of::<C>();
-                let is_fn = unsafe { (*(*conn_ptr)).is_fn };
-                if !is_fn(type_id) {
-                    return Err(Err::new(DataHubError::FailToCastDataConn {
-                        name: name.to_string(),
-                        cast_to_type: any::type_name::<C>(),
-                    }));
-                }
-                let typed_ptr = (*conn_ptr) as *mut DataConnContainer<C>;
-                return Ok(unsafe { &mut ((*typed_ptr).data_conn) });
-            }
-            None => match self.data_src_map.get(name) {
-                Some(src_ptr) => {
-                    let type_id = any::TypeId::of::<C>();
-                    let is_data_conn_fn = unsafe { (*(*src_ptr)).is_data_conn_fn };
-                    if !is_data_conn_fn(type_id) {
-                        return Err(Err::new(DataHubError::FailToCastDataConn {
-                            name: name.to_string(),
-                            cast_to_type: any::type_name::<C>(),
-                        }));
-                    }
-
-                    let create_data_conn_fn = unsafe { (*(*src_ptr)).create_data_conn_fn };
-                    match create_data_conn_fn(*src_ptr) {
-                        Ok(boxed) => {
-                            let raw_ptr = Box::into_raw(boxed);
-                            let conn_ptr = raw_ptr.cast::<DataConnContainer>();
-
-                            self.data_conn_list.append_container_ptr(conn_ptr);
-                            self.data_conn_map.insert(name.to_string(), conn_ptr);
-
-                            let typed_ptr = raw_ptr.cast::<DataConnContainer<C>>();
-                            return Ok(unsafe { &mut (*typed_ptr).data_conn });
-                        }
-                        Err(err) => {
-                            return Err(Err::with_source(
-                                DataHubError::FailToCreateDataConn {
-                                    name: name.to_string(),
-                                    data_conn_type: any::type_name::<C>(),
-                                },
-                                err,
-                            ));
-                        }
-                    }
-                }
-                None => {
-                    return Err(Err::new(DataHubError::NoDataSrcToCreateDataConn {
-                        name: name.to_string(),
-                        data_conn_type: any::type_name::<C>(),
-                    }));
-                }
-            },
+        if let Some(nnptr) = self.data_conn_manager.find_by_name(name.as_ref()) {
+            let typed_nnptr = DataConnManager::to_typed_ptr::<C>(&nnptr)?;
+            return Ok(unsafe { &mut (*typed_nnptr).data_conn });
         }
+
+        if let Some((local, index)) = self.data_src_map.get(name.as_ref()) {
+            let boxed = if *local {
+                self.local_data_src_manager
+                    .create_data_conn::<C>(*index, name.as_ref())?
+            } else {
+                create_data_conn_from_global_data_src::<C>(*index, name.as_ref())?
+            };
+
+            let ptr = Box::into_raw(boxed);
+            if let Some(nnptr) = ptr::NonNull::new(ptr) {
+                self.data_conn_manager
+                    .add(nnptr.cast::<DataConnContainer>());
+
+                let typed_ptr = ptr.cast::<DataConnContainer<C>>();
+                return Ok(unsafe { &mut (*typed_ptr).data_conn });
+            } else {
+                // impossible case.
+            }
+        }
+
+        Err(errs::Err::new(DataHubError::NoDataSrcToCreateDataConn {
+            name: name.as_ref().into(),
+            data_conn_type: any::type_name::<C>(),
+        }))
     }
 }
 
-impl Drop for DataHub {
-    fn drop(&mut self) {
-        self.data_conn_map.clear();
-        self.data_conn_list.close_and_drop_data_conns();
-
-        self.data_src_map.clear();
-        self.local_data_src_list.close_and_drop_data_srcs();
-    }
-}
-
-/// Executes a given logic function without transaction control.
-///
-/// This macro sets up local data sources, runs the provided closure,
-/// and then cleans up the `DataHub`'s session resources. It does not
-/// perform commit or rollback operations.
-///
-/// # Parameters
-///
-/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-///   It takes a mutable reference to `DataHub` as an argument.
-/// * `hub`: A hub struct instance for data input/output operations.
-///
-/// # Returns
-///
-/// * `Result<(), Err>`: The result of the logic function's execution,
-///   or an error if executing `logic_fn` fails.
-#[macro_export]
-macro_rules! run {
-    ($logic_fn:expr, $hub:expr) => {{
-        let hub = &mut ($hub);
-        let mut r = hub.begin();
-        if r.is_ok() {
-            r = ($logic_fn)(hub);
-        }
-        hub.end();
-        r
-    }};
-}
-
-/// Executes a given logic function within a transaction.
-///
-/// This macro first sets up local data sources, then runs the provided closure.
-/// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
-/// or if the logic function itself returns an `Err`, a rollback operation
-/// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
-/// `post_commit` methods of all `DataConn`s are executed.
-/// Finally, it cleans up the `DataHub`'s session resources.
-///
-/// # Parameters
-///
-/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-///   It takes a mutable reference to `DataHub` as an argument.
-/// * `hub`: A hub struct instance for data input/output operations.
-///
-/// # Returns
-///
-/// * `Result<(), Err>`: The final result of the transaction (success or failure of
-///   logic/commit), or an error if executing `logic_fn` fails.
-#[macro_export]
-macro_rules! txn {
-    ($logic_fn:expr, $hub:expr) => {{
-        let hub = &mut ($hub);
-        let mut r = hub.begin();
-        if r.is_ok() {
-            r = ($logic_fn)(hub);
-        }
-        if r.is_ok() {
-            r = hub.commit();
-        }
-        if r.is_err() {
-            hub.rollback();
-        }
-        hub.end();
-        r
-    }};
-}
-
-/// Executes asynchronously a given logic function without transaction control.
-///
-/// This macro sets up local data sources, runs the provided closure,
-/// and then cleans up the `DataHub`'s session resources. It does not
-/// perform commit or rollback operations.
-///
-/// # Parameters
-///
-/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-///   It takes a mutable reference to `DataHub` as an argument.
-/// * `hub`: A hub struct instance for data input/output operations.
-///
-/// # Returns
-///
-/// * `Result<(), Err>`: The result of the logic function's execution,
-///   or an error if executing `logic_fn` fails.
-#[macro_export]
-macro_rules! run_async {
-    ($logic_fn:expr, $hub:expr) => {
-        async {
-            let hub = &mut ($hub);
-            let mut r = hub.begin_async().await;
-            if r.is_ok() {
-                r = ($logic_fn)(hub).await;
-            }
-            hub.end();
-            r
-        }
-    };
-}
-
-/// Executes asynchronously a given logic function within a transaction.
-///
-/// This macro first sets up local data sources, then runs the provided closure.
-/// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
-/// or if the logic function itself returns an `Err`, a rollback operation
-/// is performed. After succeeding `pre_commit` and `commit` methods of all `DataConn`s,
-/// `post_commit` methods of all `DataConn`s are executed.
-/// Finally, it cleans up the `DataHub`'s session resources.
-///
-/// # Parameters
-///
-/// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-///   It takes a mutable reference to `DataHub` as an argument.
-/// * `hub`: A hub struct instance for data input/output operations.
-///
-/// # Returns
-///
-/// * `Result<(), Err>`: The final result of the transaction (success or failure of
-///   logic/commit), or an error if executing `logic_fn` fails.
-#[macro_export]
-macro_rules! txn_async {
-    ($logic_fn:expr, $hub:expr) => {
-        async {
-            let hub = &mut ($hub);
-            let mut r = hub.begin_async().await;
-            if r.is_ok() {
-                r = ($logic_fn)(hub).await;
-            }
-            if r.is_ok() {
-                r = hub.commit_async().await;
-            }
-            if r.is_err() {
-                hub.rollback_async().await;
-            }
-            hub.end();
-            r
-        }
-    };
-}
-
 #[cfg(test)]
-pub(crate) fn clear_global_data_srcs_fixed() {
-    GLOBAL_DATA_SRCS_FIXED.store(false, sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-pub(crate) static TEST_SEQ: sync::LazyLock<sync::Mutex<()>> =
-    sync::LazyLock::new(|| sync::Mutex::new(()));
-
-#[cfg(test)]
-mod tests_data_hub {
+mod tests_of_data_hub {
     use super::*;
-    use std::sync::{Arc, Mutex};
-    use tokio::time;
+    use crate::AsyncGroup;
+    use std::sync::Mutex;
 
-    #[derive(PartialEq, Copy, Clone)]
-    enum Fail {
-        Not,
-        Setup,
-        CreateDataConn,
-        Commit,
-        PreCommit,
+    #[derive(Clone, Copy, PartialEq)]
+    enum Failure {
+        None,
+        FailToPreCommit,
+        FailToCommit,
+        FailToSetup,
+        FailToCreateDataConn,
     }
 
-    struct SyncDataSrc {
+    struct MyDataConn {
         id: i8,
-        fail: Fail,
+        failure: Failure,
+        committed: bool,
         logger: Arc<Mutex<Vec<String>>>,
     }
-
-    impl SyncDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: Fail) -> Self {
-            Self { id, fail, logger }
-        }
-    }
-
-    impl Drop for SyncDataSrc {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataSrc {} dropped", self.id));
-        }
-    }
-
-    impl DataSrc<SyncDataConn> for SyncDataSrc {
-        fn setup(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.fail == Fail::Setup {
-                logger.push(format!("SyncDataSrc {} failed to setup", self.id));
-                return Err(Err::new("XXX".to_string()));
+    impl MyDataConn {
+        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, failure: Failure) -> Self {
+            logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataConn::new {}", id));
+            Self {
+                id,
+                failure,
+                committed: false,
+                logger,
             }
-            logger.push(format!("SyncDataSrc {} setupped", self.id));
-            Ok(())
-        }
-
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataSrc {} closed", self.id));
-        }
-
-        fn create_data_conn(&mut self) -> Result<Box<SyncDataConn>, Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.fail == Fail::CreateDataConn {
-                logger.push(format!(
-                    "SyncDataSrc {} failed to create a DataConn",
-                    self.id
-                ));
-                return Err(Err::new("xxx".to_string()));
-            }
-            logger.push(format!("SyncDataSrc {} created DataConn", self.id));
-            let conn = SyncDataConn::new(self.id, self.logger.clone(), self.fail);
-            Ok(Box::new(conn))
         }
     }
-
-    struct AsyncDataSrc {
-        id: i8,
-        fail: Fail,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-
-    impl AsyncDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: Fail) -> Self {
-            Self { id, fail, logger }
-        }
-    }
-
-    impl Drop for AsyncDataSrc {
+    impl Drop for MyDataConn {
         fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataSrc {} dropped", self.id));
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataConn::drop {}", self.id));
         }
     }
-
-    impl DataSrc<AsyncDataConn> for AsyncDataSrc {
-        fn setup(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> {
-            let fail = self.fail;
-            let logger = self.logger.clone();
-            let id = self.id;
-
-            ag.add(async move {
-                // The `.await` must be executed outside the Mutex lock.
-                let _ = time::sleep(time::Duration::from_millis(100)).await;
-
-                if fail == Fail::Setup {
-                    logger
-                        .lock()
-                        .unwrap()
-                        .push(format!("AsyncDataSrc {} failed to setup", id));
-                    return Err(Err::new("YYY".to_string()));
-                }
-
-                logger
+    impl DataConn for MyDataConn {
+        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            if self.failure == Failure::FailToPreCommit {
+                self.logger
                     .lock()
                     .unwrap()
-                    .push(format!("AsyncDataSrc {} setupped", id));
+                    .push(format!("MyDataConn::pre_commit {} failed", self.id));
+                Err(errs::Err::new("pre commit error"))
+            } else {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataConn::pre_commit {}", self.id));
                 Ok(())
-            });
-            Ok(())
+            }
         }
-
+        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            if self.failure == Failure::FailToCommit {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataConn::commit {} failed", self.id));
+                Err(errs::Err::new("commit error"))
+            } else {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataConn::commit {}", self.id));
+                self.committed = true;
+                Ok(())
+            }
+        }
+        fn post_commit(&mut self, _ag: &mut AsyncGroup) {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataConn::post_commit {}", self.id));
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataConn::rollback {}", self.id));
+        }
+        fn force_back(&mut self, _ag: &mut AsyncGroup) {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataConn::force_back {}", self.id));
+        }
         fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataSrc {} closed", self.id));
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataConn::close {}", self.id));
         }
+    }
 
-        fn create_data_conn(&mut self) -> Result<Box<AsyncDataConn>, Err> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataSrc {} created DataConn", self.id));
-            let conn = AsyncDataConn::new(self.id, self.logger.clone(), self.fail);
+    struct MyDataSrc {
+        id: i8,
+        failure: Failure,
+        logger: Arc<Mutex<Vec<String>>>,
+    }
+    impl MyDataSrc {
+        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, failure: Failure) -> Self {
+            logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataSrc::new {}", id));
+            Self {
+                id,
+                failure,
+                logger,
+            }
+        }
+    }
+    impl Drop for MyDataSrc {
+        fn drop(&mut self) {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataSrc::drop {}", self.id));
+        }
+    }
+    impl DataSrc<MyDataConn> for MyDataSrc {
+        fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            if self.failure == Failure::FailToSetup {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataSrc::setup {} failed", self.id));
+                Err(errs::Err::new("setup error".to_string()))
+            } else {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataSrc::setup {}", self.id));
+                Ok(())
+            }
+        }
+        fn close(&mut self) {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("MyDataSrc::close {}", self.id));
+        }
+        fn create_data_conn(&mut self) -> errs::Result<Box<MyDataConn>> {
+            if self.failure == Failure::FailToCreateDataConn {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataSrc::create_data_conn {} failed", self.id));
+                return Err(errs::Err::new("eeee".to_string()));
+            }
+            {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataSrc::create_data_conn {}", self.id));
+            }
+            let conn = MyDataConn::new(self.id, self.logger.clone(), self.failure);
             Ok(Box::new(conn))
         }
     }
 
-    struct SyncDataConn {
-        id: i8,
-        committed: bool,
-        fail: Fail,
-        logger: Arc<Mutex<Vec<String>>>,
+    #[test]
+    fn test_new() {
+        let hub = DataHub::new();
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert!(hub.data_conn_manager.vec.is_empty());
+        assert!(hub.data_conn_manager.index_map.is_empty());
+        assert!(!hub.fixed);
     }
 
-    impl SyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: Fail) -> Self {
-            Self {
-                id,
-                committed: false,
-                fail,
-                logger,
-            }
-        }
+    #[test]
+    fn test_with_commit_order() {
+        let hub = DataHub::with_commit_order(&["bar", "qux", "foo"]);
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 3);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 3);
+        assert!(!hub.fixed);
     }
 
-    impl Drop for SyncDataConn {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} dropped", self.id));
-        }
+    #[test]
+    fn test_uses_and_ok() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let mut hub = DataHub::new();
+        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        assert!(hub.begin().is_ok());
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 2);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(hub.fixed);
     }
 
-    impl DataConn for SyncDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.fail == Fail::Commit {
-                logger.push(format!("SyncDataConn {} failed to commit", self.id));
-                return Err(Err::new("ZZZ".to_string()));
-            }
-            self.committed = true;
-            logger.push(format!("SyncDataConn {} committed", self.id));
-            Ok(())
-        }
+    #[test]
+    fn test_uses_but_already_fixed() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.fail == Fail::PreCommit {
-                logger.push(format!("SyncDataConn {} failed to pre commit", self.id));
-                return Err(Err::new("zzz".to_string()));
-            }
-            logger.push(format!("SyncDataConn {} pre committed", self.id));
-            Ok(())
-        }
+        let mut hub = DataHub::new();
+        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
 
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} post committed", self.id));
-        }
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 1);
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 0);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 0);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
 
-        fn should_force_back(&self) -> bool {
-            self.committed
-        }
+        assert!(hub.begin().is_ok());
 
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} rollbacked", self.id));
-        }
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 1);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 1);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(hub.fixed);
 
-        fn force_back(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} forced back", self.id));
-        }
+        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
 
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn {} closed", self.id));
-        }
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 1);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 1);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(hub.fixed);
     }
 
-    struct AsyncDataConn {
-        id: i8,
-        committed: bool,
-        fail: Fail,
-        logger: Arc<Mutex<Vec<String>>>,
+    #[test]
+    fn test_disuses_and_ok() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let mut hub = DataHub::new();
+        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        hub.disuses("foo");
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 1);
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        hub.disuses("bar");
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
     }
 
-    impl AsyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: Fail) -> Self {
-            Self {
-                id,
-                committed: false,
-                fail,
-                logger,
-            }
-        }
+    #[test]
+    fn test_disuses_and_fix() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let mut hub = DataHub::new();
+        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        hub.disuses("foo");
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 1);
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        hub.disuses("bar");
+
+        assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert!(hub.data_src_map.is_empty());
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+        assert!(hub.begin().is_ok());
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 2);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(hub.fixed);
+
+        hub.uses("baz", MyDataSrc::new(3, logger.clone(), Failure::None));
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 2);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(hub.fixed);
+
+        hub.disuses("bar");
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 2);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(hub.fixed);
+
+        hub.end();
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 2);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        hub.disuses("bar");
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(hub.local_data_src_manager.vec_ready.len(), 1);
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 1);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
+
+        hub.disuses("foo");
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 0);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
     }
 
-    impl Drop for AsyncDataConn {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataConn {} dropped", self.id));
-        }
+    #[test]
+    fn test_begin_if_empty() {
+        let mut hub = DataHub::new();
+        assert!(hub.begin().is_ok());
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 0);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(hub.fixed);
+
+        hub.end();
+
+        assert!(hub.local_data_src_manager.vec_unready.is_empty());
+        assert!(hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(hub.local_data_src_manager.local);
+        assert_eq!(hub.data_src_map.len(), 0);
+        assert_eq!(hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+        assert!(!hub.fixed);
     }
 
-    impl DataConn for AsyncDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.fail == Fail::Commit {
-                logger.push(format!("AsyncDataConn {} failed to commit", self.id));
-                return Err(Err::new("VVV".to_string()));
-            }
-            self.committed = true;
-            logger.push(format!("AsyncDataConn {} committed", self.id));
-            Ok(())
-        }
-
-        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> Result<(), Err> {
-            let mut logger = self.logger.lock().unwrap();
-            if self.fail == Fail::PreCommit {
-                logger.push(format!("AsyncDataConn {} failed to pre commit", self.id));
-                return Err(Err::new("vvv".to_string()));
-            }
-            logger.push(format!("AsyncDataConn {} pre committed", self.id));
-            Ok(())
-        }
-
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataConn {} post committed", self.id));
-        }
-
-        fn should_force_back(&self) -> bool {
-            self.committed
-        }
-
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataConn {} rollbacked", self.id));
-        }
-
-        fn force_back(&mut self, _ag: &mut AsyncGroup) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataConn {} forced back", self.id));
-        }
-
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("AsyncDataConn {} closed", self.id));
-        }
-    }
-
-    mod tests_of_global_functions {
-        use super::*;
-
-        #[test]
-        fn test_setup_and_shutdown() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "bar");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            {
-                let result = setup();
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_shutdown_later() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(ptr.is_null());
-                }
-
-                uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-                uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-
-                    let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(ptr.is_null());
-                }
-
-                let result = setup();
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_fail_to_setup() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Setup));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "bar");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            match setup() {
-                Ok(_) => panic!(),
-                Err(err) => match err.reason::<DataHubError>() {
-                    Ok(r) => match r {
-                        DataHubError::FailToSetupGlobalDataSrcs { errors } => {
-                            let err = errors.get("foo").unwrap();
-                            match err.reason::<String>() {
-                                Ok(s) => assert_eq!(s, "YYY"),
-                                Err(_) => panic!(),
-                            }
-                            let err = errors.get("bar").unwrap();
-                            match err.reason::<String>() {
-                                Ok(s) => assert_eq!(s, "XXX"),
-                                Err(_) => panic!(),
-                            }
-                        }
-                        _ => panic!(),
-                    },
-                    Err(_) => panic!(),
-                },
-            }
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            assert_eq!(
-                logger.lock().unwrap().clone(),
-                vec![
-                    "SyncDataSrc 2 failed to setup",
-                    "AsyncDataSrc 1 failed to setup",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[test]
-        fn test_cannot_add_global_data_src_after_setup() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            {
-                let result = setup();
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-
-                uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[test]
-        fn test_do_nothing_if_executing_setup_twice() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            {
-                let result = setup();
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-
-                let result = setup();
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            assert_eq!(
-                logger.lock().unwrap().clone(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_setup_and_shutdown() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "bar");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            {
-                let result = setup_async().await;
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_shutdown_later() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            {
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(ptr.is_null());
-                }
-
-                uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-                uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-
-                    let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(ptr.is_null());
-                }
-
-                let result = setup_async().await;
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_fail_to_setup() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Setup));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "bar");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            match setup_async().await {
-                Ok(_) => panic!(),
-                Err(err) => match err.reason::<DataHubError>() {
-                    Ok(r) => match r {
-                        DataHubError::FailToSetupGlobalDataSrcs { errors } => {
-                            let err = errors.get("foo").unwrap();
-                            match err.reason::<String>() {
-                                Ok(s) => assert_eq!(s, "YYY"),
-                                Err(_) => panic!(),
-                            }
-                            let err = errors.get("bar").unwrap();
-                            match err.reason::<String>() {
-                                Ok(s) => assert_eq!(s, "XXX"),
-                                Err(_) => panic!(),
-                            }
-                        }
-                        _ => panic!(),
-                    },
-                    Err(_) => panic!(),
-                },
-            }
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            assert_eq!(
-                logger.lock().unwrap().clone(),
-                vec![
-                    "SyncDataSrc 2 failed to setup",
-                    "AsyncDataSrc 1 failed to setup",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_cannot_add_global_data_src_after_setup() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            {
-                let result = setup_async().await;
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-
-                uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_do_nothing_if_executing_setup_twice() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            #[allow(static_mut_refs)]
-            unsafe {
-                let mut ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                assert!(!ptr.is_null());
-                assert_eq!((*ptr).name, "foo");
-                ptr = (*ptr).next;
-                assert!(ptr.is_null());
-
-                let ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                assert!(ptr.is_null());
-            }
-
-            {
-                let result = setup_async().await;
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-
-                let result = setup();
-                assert!(result.is_ok());
-
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-            }
-
-            assert_eq!(
-                logger.lock().unwrap().clone(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-    }
-
-    mod tests_of_data_hub_local {
-        use super::*;
-        use std::error::Error;
-
-        #[test]
-        fn test_new_and_close_with_no_global_data_srcs() {
-            let _unused = TEST_SEQ.lock().unwrap();
-
-            let hub = DataHub::new();
-
-            assert!(hub.local_data_src_list.not_setup_head().is_null());
-            assert!(hub.local_data_src_list.did_setup_head().is_null());
-            assert!(hub.data_conn_list.head().is_null());
+    #[test]
+    fn test_begin_and_ok() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(hub.local_data_src_manager.local, true);
             assert_eq!(hub.data_src_map.len(), 0);
-            assert_eq!(hub.data_conn_map.len(), 0);
+            assert_eq!(hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(hub.fixed, false);
+
+            assert_eq!(hub.begin().is_ok(), true);
+
+            assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(hub.local_data_src_manager.local, true);
+            assert_eq!(hub.data_src_map.len(), 2);
+            assert_eq!(hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(hub.fixed, true);
+
+            hub.end();
+
+            assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(hub.local_data_src_manager.local, true);
+            assert_eq!(hub.data_src_map.len(), 2);
+            assert_eq!(hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(hub.data_conn_manager.index_map.len(), 0);
             assert_eq!(hub.fixed, false);
         }
 
-        #[test]
-        fn test_new_and_close_with_global_data_srcs() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
 
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+    #[test]
+    fn test_begin_but_failed() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
+        {
+            let mut hub = DataHub::new();
 
-            if let Ok(_auto_shutdown) = setup() {
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-
-                let hub = DataHub::new();
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                #[allow(static_mut_refs)]
-                let mut ptr = unsafe { GLOBAL_DATA_SRC_LIST.did_setup_head() };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                #[allow(static_mut_refs)]
-                let ptr = unsafe { GLOBAL_DATA_SRC_LIST.not_setup_head() };
-                assert!(ptr.is_null());
-            } else {
-                panic!();
-            }
-
-            #[allow(static_mut_refs)]
-            let ptr = unsafe { GLOBAL_DATA_SRC_LIST.did_setup_head() };
-            assert!(ptr.is_null());
-            #[allow(static_mut_refs)]
-            let ptr = unsafe { GLOBAL_DATA_SRC_LIST.not_setup_head() };
-            assert!(ptr.is_null());
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses(
+                "bar",
+                MyDataSrc::new(2, logger.clone(), Failure::FailToSetup),
             );
-        }
+            hub.uses("baz", MyDataSrc::new(3, logger.clone(), Failure::None));
 
-        #[test]
-        fn test_uses_and_disuses() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
+            assert_eq!(hub.local_data_src_manager.vec_unready.len(), 3);
+            assert_eq!(hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(hub.local_data_src_manager.local, true);
+            assert_eq!(hub.data_src_map.len(), 0);
+            assert_eq!(hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(hub.fixed, false);
 
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::Not));
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("qux", AsyncDataSrc::new(4, logger.clone(), Fail::Not));
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("foo"); // do nothing because of global
-                hub.disuses("bar"); // do nothing because of global
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("baz");
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("qux");
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 3 closed",
-                    "SyncDataSrc 3 dropped",
-                    "AsyncDataSrc 4 closed",
-                    "AsyncDataSrc 4 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[test]
-        fn test_cannot_add_and_remove_data_src_between_begin_and_end() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let ptr = hub.local_data_src_list.did_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 0);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("baz", SyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let ptr = hub.local_data_src_list.did_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 0);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                assert!(hub.begin().is_ok());
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.uses("foo", AsyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.disuses("baz");
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("foo", AsyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("baz");
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let ptr = hub.local_data_src_list.did_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 0);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            }
-        }
-
-        #[test]
-        fn test_begin_and_end() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-
-                hub.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", AsyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                assert!(hub.begin().is_ok());
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 4);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 4);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 3 setupped",
-                    "AsyncDataSrc 4 setupped",
-                    "AsyncDataSrc 4 closed",
-                    "AsyncDataSrc 4 dropped",
-                    "SyncDataSrc 3 closed",
-                    "SyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[test]
-        fn test_begin_and_end_but_fail_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Setup));
-
-                if let Err(err) = hub.begin() {
-                    match err.reason::<DataHubError>() {
-                        Ok(r) => match r {
-                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
-                                assert_eq!(errors.len(), 1);
-                                if let Some(err) = errors.get("qux") {
-                                    match err.reason::<String>() {
-                                        Ok(s) => assert_eq!(s, "XXX"),
-                                        Err(_) => panic!(),
-                                    }
-                                } else {
-                                    panic!();
-                                }
-                            }
-                            _ => panic!(),
-                        },
-                        Err(_) => panic!(),
+            if let Err(err) = hub.begin() {
+                match err.reason::<DataHubError>() {
+                    Ok(DataHubError::FailToSetupLocalDataSrcs { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].0, "bar".into());
+                        assert_eq!(errors[0].1.reason::<String>().unwrap(), "setup error");
                     }
-                } else {
-                    panic!();
-                }
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            } else {
-                panic!();
-            }
-        }
-
-        #[test]
-        fn test_begin_and_end_but_fail_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(1, logger.clone(), Fail::Setup));
-                hub.uses("qux", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                if let Err(err) = hub.begin() {
-                    match err.reason::<DataHubError>() {
-                        Ok(r) => match r {
-                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
-                                assert_eq!(errors.len(), 1);
-                                if let Some(err) = errors.get("baz") {
-                                    match err.reason::<String>() {
-                                        Ok(s) => assert_eq!(s, "YYY"),
-                                        Err(_) => panic!(),
-                                    }
-                                } else {
-                                    panic!();
-                                }
-                            }
-                            _ => panic!(),
-                        },
-                        Err(_) => panic!(),
-                    }
-                } else {
-                    panic!();
-                }
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            } else {
-                panic!();
-            }
-        }
-
-        #[test]
-        fn test_commit_and_post_commit() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    assert!(hub.commit().is_ok());
-                    hub.end();
-                } else {
-                    panic!();
+                    _ => panic!(),
                 }
             } else {
                 panic!();
             }
 
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 committed",
-                    "SyncDataConn 4 committed",
-                    "AsyncDataConn 1 post committed",
-                    "SyncDataConn 2 post committed",
-                    "AsyncDataConn 3 post committed",
-                    "SyncDataConn 4 post committed",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
+            hub.end();
         }
 
-        #[test]
-        fn test_fail_to_cast_new_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::new 3",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2 failed",
+                "MyDataSrc::close 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 3",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
 
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+    #[test]
+    fn test_run_and_ok() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
 
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
+            let logger_clone = logger.clone();
+            assert!(hub
+                .run(move |_data| {
+                    logger_clone
+                        .lock()
+                        .unwrap()
+                        .push("execute logic".to_string());
+                    Ok(())
+                })
+                .is_ok());
+        }
 
-                if let Ok(_) = hub.begin() {
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("foo") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "foo");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
 
-                    if let Err(err) = hub.get_data_conn::<AsyncDataConn>("bar") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "bar");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
+    #[test]
+    fn test_run_but_failed() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone = logger.clone();
+            if let Err(err) = hub.run(move |_data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic but fail".to_string());
+                Err(errs::Err::new("logic error".to_string()))
+            }) {
+                match err.reason::<String>() {
+                    Ok(s) => assert_eq!(s, "logic error"),
+                    _ => panic!(),
                 }
             } else {
                 panic!();
             }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
         }
 
-        #[test]
-        fn test_fail_to_cast_reused_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic but fail",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
 
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+    #[test]
+    fn test_txn_and_no_data_access_and_ok() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
 
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
 
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
+            let logger_clone = logger.clone();
+            assert!(hub
+                .txn(move |_data| {
+                    logger_clone
+                        .lock()
+                        .unwrap()
+                        .push("execute logic".to_string());
+                    Ok(())
+                })
+                .is_ok());
+        }
 
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
 
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("foo") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "foo");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
+    #[test]
+    fn test_txn_and_has_data_access_and_ok() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
 
-                    if let Err(err) = hub.get_data_conn::<AsyncDataConn>("bar") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "bar");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone = logger.clone();
+            hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
+                Ok(())
+            })
+            .unwrap();
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataSrc::create_data_conn 2",
+                "MyDataConn::new 2",
+                "MyDataConn::pre_commit 1",
+                "MyDataConn::pre_commit 2",
+                "MyDataConn::commit 1",
+                "MyDataConn::commit 2",
+                "MyDataConn::post_commit 1",
+                "MyDataConn::post_commit 2",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataConn::close 2",
+                "MyDataConn::drop 2",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_txn_but_failed() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone = logger.clone();
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
+                Err(errs::Err::new("logic error"))
+            }) {
+                match e.reason::<&str>() {
+                    Ok(s) => assert_eq!(s, &"logic error"),
+                    _ => panic!(),
                 }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_fail_to_create_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses(
-                    "bar",
-                    SyncDataSrc::new(2, logger.clone(), Fail::CreateDataConn),
-                );
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCreateDataConn {
-                                    name,
-                                    data_conn_type,
-                                } => {
-                                    assert_eq!(name, "bar");
-                                    assert_eq!(
-                                        *data_conn_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                        match err.source() {
-                            Some(e) => {
-                                assert_eq!(
-                                    e.downcast_ref::<errs::Err>()
-                                        .unwrap()
-                                        .reason::<String>()
-                                        .unwrap(),
-                                    "xxx"
-                                );
-                            }
-                            None => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 failed to create a DataConn",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_fail_to_create_data_conn_because_of_no_data_src() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("baz") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::NoDataSrcToCreateDataConn {
-                                    name,
-                                    data_conn_type,
-                                } => {
-                                    assert_eq!(name, "baz");
-                                    assert_eq!(
-                                        *data_conn_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-
-                    if let Err(err) = hub.get_data_conn::<AsyncDataConn>("qux") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::NoDataSrcToCreateDataConn {
-                                    name,
-                                    data_conn_type,
-                                } => {
-                                    assert_eq!(name, "qux");
-                                    assert_eq!(
-                                        *data_conn_type,
-                                        "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_commit_when_no_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    assert!(hub.commit().is_ok());
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_commit_but_fail_global_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Commit));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("bar") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "ZZZ");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_commit_but_fail_global_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Commit));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("foo") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "VVV");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_commit_but_fail_local_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Commit));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("qux") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "ZZZ");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 committed",
-                    "SyncDataConn 4 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_commit_but_fail_local_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Commit));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("baz") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "VVV");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_pre_commit_but_fail_global_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::PreCommit));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("bar") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "zzz");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_pre_commit_but_fail_global_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::PreCommit));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("foo") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "vvv");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_pre_commit_but_fail_local_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::PreCommit));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("qux") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "zzz");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_pre_commit_but_fail_local_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::PreCommit));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit() {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("baz") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "vvv");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_rollback() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    hub.rollback();
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 rollbacked",
-                    "SyncDataConn 2 rollbacked",
-                    "AsyncDataConn 3 rollbacked",
-                    "SyncDataConn 4 rollbacked",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[test]
-        fn test_force_back() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup() {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin() {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    assert!(hub.commit().is_ok());
-                    hub.rollback();
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 committed",
-                    "SyncDataConn 4 committed",
-                    "AsyncDataConn 1 post committed",
-                    "SyncDataConn 2 post committed",
-                    "AsyncDataConn 3 post committed",
-                    "SyncDataConn 4 post committed",
-                    "AsyncDataConn 1 forced back",
-                    "SyncDataConn 2 forced back",
-                    "AsyncDataConn 3 forced back",
-                    "SyncDataConn 4 forced back",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_new_and_close_with_global_data_srcs() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                #[allow(static_mut_refs)]
-                unsafe {
-                    let ptr = GLOBAL_DATA_SRC_LIST.not_setup_head();
-                    assert!(ptr.is_null());
-
-                    let mut ptr = GLOBAL_DATA_SRC_LIST.did_setup_head();
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "foo");
-                    ptr = (*ptr).next;
-                    assert!(!ptr.is_null());
-                    assert_eq!((*ptr).name, "bar");
-                    ptr = (*ptr).next;
-                    assert!(ptr.is_null());
-                }
-
-                let hub = DataHub::new();
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                #[allow(static_mut_refs)]
-                let mut ptr = unsafe { GLOBAL_DATA_SRC_LIST.did_setup_head() };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                #[allow(static_mut_refs)]
-                let ptr = unsafe { GLOBAL_DATA_SRC_LIST.not_setup_head() };
-                assert!(ptr.is_null());
-            } else {
-                panic!();
-            }
-
-            #[allow(static_mut_refs)]
-            let ptr = unsafe { GLOBAL_DATA_SRC_LIST.did_setup_head() };
-            assert!(ptr.is_null());
-            #[allow(static_mut_refs)]
-            let ptr = unsafe { GLOBAL_DATA_SRC_LIST.not_setup_head() };
-            assert!(ptr.is_null());
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_uses_and_disuses() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::Not));
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("qux", AsyncDataSrc::new(4, logger.clone(), Fail::Not));
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("foo"); // do nothing because of global
-                hub.disuses("bar"); // do nothing because of global
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("baz");
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("qux");
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 3 closed",
-                    "SyncDataSrc 3 dropped",
-                    "AsyncDataSrc 4 closed",
-                    "AsyncDataSrc 4 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_cannot_add_and_remove_data_src_between_begin_and_end() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let ptr = hub.local_data_src_list.did_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 0);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("baz", SyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let ptr = hub.local_data_src_list.did_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 0);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                assert!(hub.begin_async().await.is_ok());
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.uses("foo", AsyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.disuses("baz");
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                let ptr = hub.local_data_src_list.not_setup_head();
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.uses("foo", AsyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 1);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                hub.disuses("baz");
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let ptr = hub.local_data_src_list.did_setup_head();
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 0);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
             }
         }
 
-        #[tokio::test]
-        async fn async_test_begin_and_end() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataSrc::create_data_conn 2",
+                "MyDataConn::new 2",
+                "MyDataConn::rollback 1",
+                "MyDataConn::rollback 2",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataConn::close 2",
+                "MyDataConn::drop 2",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
 
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-
-                hub.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", AsyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.local_data_src_list.did_setup_head().is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 2);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-
-                assert!(hub.begin_async().await.is_ok());
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 4);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                assert!(hub.local_data_src_list.not_setup_head().is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 4);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 3 setupped",
-                    "AsyncDataSrc 4 setupped",
-                    "AsyncDataSrc 4 closed",
-                    "AsyncDataSrc 4 dropped",
-                    "SyncDataSrc 3 closed",
-                    "SyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ]
-            );
+    #[test]
+    fn test_txn_with_commit_order() {
+        let _logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut _hub = DataHub::new();
         }
+    }
 
-        #[tokio::test]
-        async fn async_test_begin_and_end_but_fail_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Setup));
-
-                if let Err(err) = hub.begin_async().await {
-                    match err.reason::<DataHubError>() {
-                        Ok(r) => match r {
-                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
-                                assert_eq!(errors.len(), 1);
-                                if let Some(err) = errors.get("qux") {
-                                    match err.reason::<String>() {
-                                        Ok(s) => assert_eq!(s, "XXX"),
-                                        Err(_) => panic!(),
-                                    }
-                                } else {
-                                    panic!();
-                                }
-                            }
-                            _ => panic!(),
-                        },
-                        Err(_) => panic!(),
-                    }
-                } else {
-                    panic!();
-                }
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            } else {
-                panic!();
-            }
+    #[test]
+    fn test_get_data_conn_and_ok() {
+        let _logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut _hub = DataHub::new();
         }
-
-        #[tokio::test]
-        async fn async_test_begin_and_end_but_fail_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(1, logger.clone(), Fail::Setup));
-                hub.uses("qux", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                if let Err(err) = hub.begin_async().await {
-                    match err.reason::<DataHubError>() {
-                        Ok(r) => match r {
-                            DataHubError::FailToSetupLocalDataSrcs { errors } => {
-                                assert_eq!(errors.len(), 1);
-                                if let Some(err) = errors.get("baz") {
-                                    match err.reason::<String>() {
-                                        Ok(s) => assert_eq!(s, "YYY"),
-                                        Err(_) => panic!(),
-                                    }
-                                } else {
-                                    panic!();
-                                }
-                            }
-                            _ => panic!(),
-                        },
-                        Err(_) => panic!(),
-                    }
-                } else {
-                    panic!();
-                }
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, true);
-
-                hub.end();
-
-                let mut ptr = hub.local_data_src_list.not_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                let mut ptr = hub.local_data_src_list.did_setup_head();
-                assert!(!ptr.is_null());
-                ptr = unsafe { (*ptr).next };
-                assert!(ptr.is_null());
-                assert!(hub.data_conn_list.head().is_null());
-                assert_eq!(hub.data_src_map.len(), 3);
-                assert_eq!(hub.data_conn_map.len(), 0);
-                assert_eq!(hub.fixed, false);
-            } else {
-                panic!();
-            }
-        }
-
-        #[tokio::test]
-        async fn async_test_commit_and_post_commit() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    assert!(hub.commit_async().await.is_ok());
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 committed",
-                    "SyncDataConn 4 committed",
-                    "AsyncDataConn 1 post committed",
-                    "SyncDataConn 2 post committed",
-                    "AsyncDataConn 3 post committed",
-                    "SyncDataConn 4 post committed",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_fail_to_cast_new_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("foo") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "foo");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-
-                    if let Err(err) = hub.get_data_conn::<AsyncDataConn>("bar") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "bar");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_fail_to_cast_reused_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("foo") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "foo");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-
-                    if let Err(err) = hub.get_data_conn::<AsyncDataConn>("bar") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCastDataConn { name, cast_to_type } => {
-                                    assert_eq!(name, "bar");
-                                    assert_eq!(
-                                        *cast_to_type,
-                                        "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_fail_to_create_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses(
-                    "bar",
-                    SyncDataSrc::new(2, logger.clone(), Fail::CreateDataConn),
-                );
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCreateDataConn {
-                                    name,
-                                    data_conn_type,
-                                } => {
-                                    assert_eq!(name, "bar");
-                                    assert_eq!(
-                                        *data_conn_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                        match err.source() {
-                            Some(e) => {
-                                assert_eq!(
-                                    e.downcast_ref::<errs::Err>()
-                                        .unwrap()
-                                        .reason::<String>()
-                                        .unwrap(),
-                                    "xxx"
-                                );
-                            }
-                            None => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 failed to create a DataConn",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_fail_to_create_data_conn_because_of_no_data_src() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Err(err) = hub.get_data_conn::<SyncDataConn>("baz") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::NoDataSrcToCreateDataConn {
-                                    name,
-                                    data_conn_type,
-                                } => {
-                                    assert_eq!(name, "baz");
-                                    assert_eq!(
-                                        *data_conn_type,
-                                        "sabi::data_hub::tests_data_hub::SyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-
-                    if let Err(err) = hub.get_data_conn::<AsyncDataConn>("qux") {
-                        match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::NoDataSrcToCreateDataConn {
-                                    name,
-                                    data_conn_type,
-                                } => {
-                                    assert_eq!(name, "qux");
-                                    assert_eq!(
-                                        *data_conn_type,
-                                        "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                                    );
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        }
-                    } else {
-                        panic!();
-                    }
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 2 setupped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_commit_and_post_commit_when_no_data_conn() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    assert!(hub.commit_async().await.is_ok());
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_commit_and_but_fail_global_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Commit));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("bar") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "ZZZ");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_commit_but_fail_global_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Commit));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("foo") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "VVV");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_commit_but_fail_local_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Commit));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("qux") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "ZZZ");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 committed",
-                    "SyncDataConn 4 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_commit_but_fail_local_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Commit));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("baz") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "VVV");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 failed to commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_pre_commit_but_fail_global_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::PreCommit));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("bar") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "zzz");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_pre_commit_but_fail_global_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::PreCommit));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("foo") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "vvv");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_pre_commit_but_fail_local_sync() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::PreCommit));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("qux") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "zzz");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_pre_commit_but_fail_local_async() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::PreCommit));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    match hub.commit_async().await {
-                        Ok(_) => panic!(),
-                        Err(err) => match err.reason::<DataHubError>() {
-                            Ok(r) => match r {
-                                DataHubError::FailToPreCommitDataConn { errors } => {
-                                    assert_eq!(errors.len(), 1);
-                                    if let Some(e) = errors.get("baz") {
-                                        if let Ok(s) = e.reason::<String>() {
-                                            assert_eq!(s, "vvv");
-                                        } else {
-                                            panic!();
-                                        }
-                                    } else {
-                                        panic!();
-                                    }
-                                }
-                                _ => panic!(),
-                            },
-                            Err(_) => panic!(),
-                        },
-                    }
-
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 failed to pre commit",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_rollback() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    hub.rollback_async().await;
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 rollbacked",
-                    "SyncDataConn 2 rollbacked",
-                    "AsyncDataConn 3 rollbacked",
-                    "SyncDataConn 4 rollbacked",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn async_test_force_back() {
-            let _unused = TEST_SEQ.lock().unwrap();
-            clear_global_data_srcs_fixed();
-
-            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-
-            uses("foo", AsyncDataSrc::new(1, logger.clone(), Fail::Not));
-            uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Not));
-
-            if let Ok(_auto_shutdown) = setup_async().await {
-                let mut hub = DataHub::new();
-                hub.uses("baz", AsyncDataSrc::new(3, logger.clone(), Fail::Not));
-                hub.uses("qux", SyncDataSrc::new(4, logger.clone(), Fail::Not));
-
-                if let Ok(_) = hub.begin_async().await {
-                    if let Ok(conn1) = hub.get_data_conn::<AsyncDataConn>("foo") {
-                        assert_eq!(
-                            any::type_name_of_val(conn1),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn2) = hub.get_data_conn::<SyncDataConn>("bar") {
-                        assert_eq!(
-                            any::type_name_of_val(conn2),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn3) = hub.get_data_conn::<AsyncDataConn>("baz") {
-                        assert_eq!(
-                            any::type_name_of_val(conn3),
-                            "sabi::data_hub::tests_data_hub::AsyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-                    if let Ok(conn4) = hub.get_data_conn::<SyncDataConn>("qux") {
-                        assert_eq!(
-                            any::type_name_of_val(conn4),
-                            "sabi::data_hub::tests_data_hub::SyncDataConn"
-                        );
-                    } else {
-                        panic!();
-                    }
-
-                    assert!(hub.commit_async().await.is_ok());
-                    hub.rollback_async().await;
-                    hub.end();
-                } else {
-                    panic!();
-                }
-            } else {
-                panic!();
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "SyncDataSrc 2 setupped",
-                    "AsyncDataSrc 1 setupped",
-                    "SyncDataSrc 4 setupped",
-                    "AsyncDataSrc 3 setupped",
-                    "AsyncDataSrc 1 created DataConn",
-                    "SyncDataSrc 2 created DataConn",
-                    "AsyncDataSrc 3 created DataConn",
-                    "SyncDataSrc 4 created DataConn",
-                    "AsyncDataConn 1 pre committed",
-                    "SyncDataConn 2 pre committed",
-                    "AsyncDataConn 3 pre committed",
-                    "SyncDataConn 4 pre committed",
-                    "AsyncDataConn 1 committed",
-                    "SyncDataConn 2 committed",
-                    "AsyncDataConn 3 committed",
-                    "SyncDataConn 4 committed",
-                    "AsyncDataConn 1 post committed",
-                    "SyncDataConn 2 post committed",
-                    "AsyncDataConn 3 post committed",
-                    "SyncDataConn 4 post committed",
-                    "AsyncDataConn 1 forced back",
-                    "SyncDataConn 2 forced back",
-                    "AsyncDataConn 3 forced back",
-                    "SyncDataConn 4 forced back",
-                    "SyncDataConn 4 closed",
-                    "SyncDataConn 4 dropped",
-                    "AsyncDataConn 3 closed",
-                    "AsyncDataConn 3 dropped",
-                    "SyncDataConn 2 closed",
-                    "SyncDataConn 2 dropped",
-                    "AsyncDataConn 1 closed",
-                    "AsyncDataConn 1 dropped",
-                    "SyncDataSrc 4 closed",
-                    "SyncDataSrc 4 dropped",
-                    "AsyncDataSrc 3 closed",
-                    "AsyncDataSrc 3 dropped",
-                    "SyncDataSrc 2 closed",
-                    "SyncDataSrc 2 dropped",
-                    "AsyncDataSrc 1 closed",
-                    "AsyncDataSrc 1 dropped",
-                ],
-            );
+    }
+
+    #[test]
+    fn test_get_data_conn_and_failed() {
+        let _logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut _hub = DataHub::new();
         }
     }
 }
