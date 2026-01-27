@@ -83,7 +83,7 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
 /// If any data source fails to set up, this function returns an [`errs::Err`] with
 /// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
 /// of the failed data sources and their corresponding [`errs::Err`] objects. In such a case,
-/// all global data sources that were successfully set up are also closed and dropped.
+/// all global data sources that were successfully set up are also closed.
 ///
 /// If all data source setups are successful, the [`Result::Ok`] which contains an
 /// [`AutoShutdown`] object is returned. This object is designed to close and drop global
@@ -136,7 +136,7 @@ pub fn setup() -> errs::Result<AutoShutdown> {
 /// If any data source fails to set up, this function returns an [`errs::Err`] with
 /// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
 /// of the failed data sources and their corresponding [`errs::Err`] objects. In such a case,
-/// all global data sources that were successfully set up are also closed and dropped.
+/// all global data sources that were successfully set up are also closed.
 ///
 /// If all data source setups are successful, the [`Result::Ok`] which contains an
 /// [`AutoShutdown`] object is returned. This object is designed to close and drop global
