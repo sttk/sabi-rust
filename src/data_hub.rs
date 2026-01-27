@@ -24,22 +24,6 @@ pub enum DataHubError {
         errors: Vec<(Arc<str>, errs::Err)>,
     },
 
-    /// Indicates a failure during the pre-commit process of one or more [`DataConn`] instances
-    /// involved in a transaction.
-    /// Contains a vector of data connection names and their corresponding errors.
-    FailToPreCommitDataConn {
-        /// The vector contains errors that occurred in each [`DataConn`] object.
-        errors: Vec<(Arc<str>, errs::Err)>,
-    },
-
-    /// Indicates a failure during the commit process of one or more [`DataConn`] instances
-    /// involved in a transaction.
-    /// Contains a vector of data connection names and their corresponding errors.
-    FailToCommitDataConn {
-        /// The vector contains errors that occurred in each [`DataConn`] object.
-        errors: Vec<(Arc<str>, errs::Err)>,
-    },
-
     /// Indicates that no [`DataSrc`] was found to create a [`DataConn`] for the specified name
     /// and type.
     NoDataSrcToCreateDataConn {
