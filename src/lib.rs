@@ -41,6 +41,9 @@ pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
 pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses, DataSrcError};
 
+#[cfg(feature = "tokio")]
+pub mod tokio;
+
 /// The structure that allows for the concurrent execution of multiple functions
 /// using `std::thread` and waits for all of them to complete.
 ///

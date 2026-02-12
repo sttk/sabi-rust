@@ -16,7 +16,7 @@ impl DataAcc for DataHub {
 #[cfg(test)]
 mod tests_of_data_acc {
     use super::*;
-    use crate::{AsyncGroup, DataConn, DataSrc};
+    use crate::{AsyncGroup, DataSrc};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
