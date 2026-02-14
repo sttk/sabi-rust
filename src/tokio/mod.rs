@@ -2,6 +2,14 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
+//! This module provides Tokio-specific implementations for asynchronous data access,
+//! including `AsyncGroup` for concurrent task management, `DataConn` for
+//! transactional data connections, `DataSrc` for data source management,
+//! and `DataHub` as a central orchestrator.
+//!
+//! It leverages Rust's asynchronous capabilities with the Tokio runtime
+//! to enable efficient and concurrent handling of data operations.
+
 mod async_group;
 mod data_acc;
 mod data_conn;
