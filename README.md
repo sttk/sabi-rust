@@ -42,14 +42,14 @@ In Cargo.toml, write this crate as a dependency:
 
 ```toml
 [dependencies]
-sabi-rust = "0.5.0" # For synchronous APIs
+sabi-rust = "0.6.0" # For synchronous APIs
 ```
 
 For asynchronous APIs with `tokio` runtime, enable the `tokio` feature:
 
 ```toml
 [dependencies]
-sabi-rust = { version = "0.5.0", features = ["tokio"] }
+sabi-rust = { version = "0.6.0", features = ["tokio"] }
 tokio = { version = "1", features = ["full"] } # Required for tokio runtime
 ```
 
@@ -461,7 +461,7 @@ See the file LICENSE in this distribution for more details.
 
 
 [repo-url]: https://github.com/sttk/sabi-rust
-[cratesio-img]: https://img.shields.io/badge/crates.io-ver.0.5.0-fc8d62?logo=rust
+[cratesio-img]: https://img.shields.io/badge/crates.io-ver.0.6.0-fc8d62?logo=rust
 [cratesio-url]: https://crates.io/crates/sabi-rust
 [docrs-img]: https://img.shields.io/badge/doc.rs-sabi_rust-66c2a5?logo=docs.rs
 [docrs-url]: https://docs.rs/sabi-rust
