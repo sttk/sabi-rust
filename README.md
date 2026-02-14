@@ -256,6 +256,8 @@ fn main() {
     // my_logic performs data operations via DataHub by getting a text, setting it, and setting a flag.
     let _ = data.txn(my_logic).unwrap();
 
+    // If you need to execute logic without transactional control (e.g., for read-only operations),
+    // use the `run` method instead of `txn`.
     // let _ = data.run(my_logic).unwrap();
 }
 ```
@@ -418,7 +420,6 @@ async fn main() {
     // If you need to execute logic without transactional control, use `run_async`.
     // let _ = data.run_async(logic!(my_async_logic)).await.unwrap();
 }
-```
 ```
 
 ## Supported Rust versions
