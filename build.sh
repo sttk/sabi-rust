@@ -28,6 +28,15 @@ compile() {
 }
 
 test() {
+  echo "### features: default"
+  cargo test -- --show-output
+  errcheck $?
+
+  echo "### features: tokio"
+  cargo test --features tokio -- --show-output
+  errcheck $?
+
+  echo "### features: full"
   cargo test --all-features -- --show-output
   errcheck $?
 }

@@ -25,6 +25,8 @@
 //!
 //! This framework brings clear separation and robustness to Rust application design.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 mod async_group;
 mod data_acc;
 mod data_conn;
@@ -40,6 +42,10 @@ pub use async_group::AsyncGroupError;
 pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
 pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses, DataSrcError};
+
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+#[cfg(feature = "tokio")]
+pub mod tokio;
 
 /// The structure that allows for the concurrent execution of multiple functions
 /// using `std::thread` and waits for all of them to complete.
@@ -214,7 +220,7 @@ where
     /// Closes the data source and releases any globally held resources.
     ///
     /// This method should perform cleanup operations, such as closing global connections
-    /// or shutting down connection pools, that were established during the `setup` phase.
+    /// or shutting down connection pools, that were established during the setup process.
     fn close(&mut self);
 
     /// Creates a new [`DataConn`] instance which is a connection per session.
