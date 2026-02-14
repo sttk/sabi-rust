@@ -217,7 +217,7 @@ where
     /// Closes the data source and releases any globally held resources.
     ///
     /// This method should perform cleanup operations, such as closing global connections
-    /// or shutting down connection pools, that were established during the `setup` phase.
+    /// or shutting down connection pools, that were established during the setup process.
     fn close(&mut self);
 
     /// Creates a new [`DataConn`] instance which is a connection per session.

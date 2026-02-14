@@ -34,7 +34,7 @@ impl Drop for AutoShutdown {
 /// Registers a global data source, making it available throughout the application.
 ///
 /// Global data sources are managed by a singleton and can be set up once for the application's lifetime.
-/// If `setup_async` or `setup_with_order_async` has already been called, this function will log an error.
+/// If `setup_async` or `setup_with_order_async` has already been called, this function will do nothing.
 ///
 /// # Arguments
 ///
@@ -74,9 +74,8 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
 
 /// Asynchronously sets up all globally registered data sources.
 ///
-/// This function transitions the global data source manager into a "read" phase,
-/// setting up all data sources that have been registered via `uses_async` or
-/// `inventory::submit!`. It collects any setup errors.
+/// This function sets up all data sources that have been registered via `uses_async` function or
+/// `uses_async!` macro. It collects any setup errors.
 ///
 /// # Returns
 ///
@@ -188,7 +187,6 @@ pub(crate) fn copy_global_data_srcs_to_map(index_map: &mut HashMap<Arc<str>, (bo
 }
 
 #[doc(hidden)]
-/// Creates a `StaticDataSrcContainer` for a given data source. Internal use only.
 pub fn create_static_data_src_container<S, C>(
     name: &'static str,
     data_src: S,
@@ -205,23 +203,13 @@ where
 }
 
 impl StaticDataSrcRegistration {
-    /// Creates a new `StaticDataSrcRegistration` with the provided factory function.
-    ///
-    /// This is used internally by the `inventory` crate to register static data sources.
-    ///
-    /// # Arguments
-    ///
-    /// * `factory` - A function that returns a `StaticDataSrcContainer`.
     pub const fn new(factory: fn() -> StaticDataSrcContainer) -> Self {
         Self { factory }
     }
 }
 inventory::collect!(StaticDataSrcRegistration);
 
-/// Macro for registering a global data source using `inventory`.
-///
-/// This macro simplifies the process of making a `DataSrc` globally available
-/// at compile time.
+/// Macro for registering a global data source at the top-level.
 ///
 /// # Arguments
 ///

@@ -14,13 +14,13 @@ use std::{any, mem, ptr};
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
-    /// An error indicating that one or more data connections failed during the pre-commit phase.
+    /// An error indicating that one or more data connections failed during the pre-commit process.
     FailToPreCommitDataConn {
         /// A vector of errors, each containing the name of the data connection and the error itself.
         errors: Vec<(Arc<str>, errs::Err)>,
     },
 
-    /// An error indicating that one or more data connections failed during the commit phase.
+    /// An error indicating that one or more data connections failed during the commit process.
     FailToCommitDataConn {
         /// A vector of errors, each containing the name of the data connection and the error itself.
         errors: Vec<(Arc<str>, errs::Err)>,

@@ -25,6 +25,7 @@ impl AsyncGroup {
     ///
     /// * `future` - The future to add. It must implement `Future<Output = errs::Result<()>>`,
     ///              `Send`, and have a `'static` lifetime.
+    #[allow(clippy::doc_overindented_list_items)]
     pub fn add<Fut>(&mut self, future: Fut)
     where
         Fut: Future<Output = errs::Result<()>> + Send + 'static,

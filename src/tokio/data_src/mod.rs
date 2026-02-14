@@ -25,7 +25,7 @@ use std::{any, mem, ptr};
 /// Represents errors that can occur during data source operations.
 #[derive(Debug)]
 pub enum DataSrcError {
-    /// An error indicating that one or more global data sources failed during their setup phase.
+    /// An error indicating that one or more global data sources failed during their setup process.
     FailToSetupGlobalDataSrcs {
         /// A vector of errors, each containing the name of the data source and the error itself.
         errors: Vec<(Arc<str>, errs::Err)>,

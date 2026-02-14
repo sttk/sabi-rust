@@ -14,7 +14,7 @@ use std::{any, ptr};
 /// Represents errors that can occur within the `DataHub`.
 #[derive(Debug)]
 pub enum DataHubError {
-    /// An error indicating that one or more local data sources failed during their setup phase.
+    /// An error indicating that one or more local data sources failed during their setup processes.
     FailToSetupLocalDataSrcs {
         /// A vector of errors, each containing the name of the data source and the error itself.
         errors: Vec<(Arc<str>, errs::Err)>,
@@ -163,6 +163,7 @@ impl DataHub {
     ///
     /// A `Result` indicating the success or failure of the `logic_fn` execution or
     /// the setup of data sources.
+    #[allow(clippy::doc_overindented_list_items)]
     pub async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
         for<'a> F: FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + 'a>>,
@@ -196,6 +197,7 @@ impl DataHub {
     ///
     /// A `Result` indicating the success or failure of the `logic_fn` execution,
     /// the setup of data sources, or the commit/rollback operations.
+    #[allow(clippy::doc_overindented_list_items)]
     pub async fn txn_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
         for<'a> F: FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + 'a>>,

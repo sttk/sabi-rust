@@ -40,7 +40,7 @@ pub struct AsyncGroup {
 pub trait DataConn {
     /// Attempts to commit the changes made within this data connection.
     ///
-    /// This is typically the main commit phase, executed after `pre_commit_async`.
+    /// This is typically the main commit process, executed after `pre_commit_async`.
     ///
     /// # Arguments
     ///
@@ -51,7 +51,7 @@ pub trait DataConn {
     /// A `Result` indicating success or failure of the commit operation.
     async fn commit_async(&mut self, ag: &mut AsyncGroup) -> errs::Result<()>;
 
-    /// Performs preparatory actions before the main commit phase.
+    /// Performs preparatory actions before the main commit process.
     ///
     /// This method is called before `commit_async` and can be used for tasks like
     /// validation or preparing data.
@@ -67,7 +67,7 @@ pub trait DataConn {
         Ok(())
     }
 
-    /// Performs actions after the main commit phase, regardless of its success or failure.
+    /// Performs actions after the main commit process, only if it succeeds.
     ///
     /// This can be used for cleanup or post-transaction logging. Errors returned from
     /// tasks added to `ag` in this method are ignored.
@@ -178,10 +178,10 @@ pub(crate) struct DataConnManager {
 ///
 /// Implementors of this trait define how to prepare a data source and how to instantiate
 /// data connections of a specific type `C`.
-#[trait_variant::make(DataSrc: Send)]
+#[trait_variant::make(Send)]
 #[allow(async_fn_in_trait)]
 #[allow(unused_variables)] // for rustdoc
-pub trait LocalDataSrc<C>
+pub trait DataSrc<C>
 where
     C: DataConn + 'static,
 {
@@ -300,13 +300,11 @@ pub trait DataAcc {
 }
 
 #[doc(hidden)]
-/// A hidden internal struct for managing static data source containers.
 pub struct StaticDataSrcContainer {
     pub(crate) ssnnptr: SendSyncNonNull<DataSrcContainer>,
 }
 
 #[doc(hidden)]
-/// A hidden internal struct for registering static data sources.
 pub struct StaticDataSrcRegistration {
     pub(crate) factory: fn() -> StaticDataSrcContainer,
 }
