@@ -25,6 +25,8 @@
 //!
 //! This framework brings clear separation and robustness to Rust application design.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 mod async_group;
 mod data_acc;
 mod data_conn;
@@ -41,6 +43,7 @@ pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
 pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses, DataSrcError};
 
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
