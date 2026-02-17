@@ -272,27 +272,9 @@ impl DataHub {
     }
 }
 
-/// A convenience macro to easily convert an asynchronous function into a `Pin<Box<dyn Future>>`
-/// closure suitable for `DataHub`'s `run_async` or `txn_async` methods.
-///
-/// This macro simplifies passing async functions by handling the boxing and pinning.
-///
-/// # Example
-///
-/// ```ignore
-/// async fn my_logic(data_hub: &mut DataHub) -> errs::Result<()> {
-///     // ... some logic using data_hub
-///     Ok(())
-/// }
-///
-/// #[tokio::main]
-/// async fn main() {
-///     let mut hub = DataHub::new();
-///     hub.txn_async(logic!(my_logic)).await.unwrap();
-/// }
-/// ```
 #[macro_export]
-macro_rules! logic {
+#[doc(hidden)]
+macro_rules! _logic {
     ($f:expr) => {
         |data| Box::pin($f(data))
     };

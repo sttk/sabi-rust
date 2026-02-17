@@ -75,7 +75,7 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
 /// Asynchronously sets up all globally registered data sources.
 ///
 /// This function sets up all data sources that have been registered via `uses_async` function or
-/// `uses_async!` macro. It collects any setup errors.
+/// `uses!` macro. It collects any setup errors.
 ///
 /// # Returns
 ///
@@ -209,25 +209,14 @@ impl StaticDataSrcRegistration {
 }
 inventory::collect!(StaticDataSrcRegistration);
 
-/// Macro for registering a global data source at the top-level.
-///
-/// # Arguments
-///
-/// * `$name` - The name of the data source (must be a string literal).
-/// * `$data_src` - The data source instance.
-///
-/// # Examples
-///
-/// ```ignore
-/// uses_async!("my_global_source", MyDataSource::new());
-/// ```
 #[macro_export]
-macro_rules! uses_async {
+#[doc(hidden)]
+macro_rules! _uses_for_async {
     ($name:tt, $data_src:expr) => {
         const _: () = {
             inventory::submit! {
-                $crate::StaticDataSrcRegistration::new(async || {
-                    $crate::create_static_data_src_container_async($name, $data_src).await
+                $crate::tokio::StaticDataSrcRegistration::new(|| {
+                    $crate::tokio::create_static_data_src_container($name, $data_src)
                 })
             }
         };
