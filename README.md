@@ -391,22 +391,22 @@ impl MyAsyncData for DataHub {}
 
 ### 5. Using logic functions and `DataHub` (Asynchronous)
 
-Use the `#[tokio::main]` macro to run your main asynchronous function. Register global `DataSrc` using `sabi::tokio::uses_async!`. Set up the framework with `sabi::tokio::setup_async`. Execute your logic with `data.txn_async` or `data.run_async`.
+Use the `#[tokio::main]` macro to run your main asynchronous function. Register global `DataSrc` using `sabi::tokio::uses!`. Set up the framework with `sabi::tokio::setup_async`. Execute your logic with `data.txn_async` or `data.run_async`.
 
 ```rust
-use sabi::tokio::{uses_async, setup_async, DataHub, logic};
+use sabi::tokio::{uses, uses_async, setup_async, DataHub, logic};
 use tokio; // Ensure tokio is in scope for #[tokio::main]
 
 use crate::data_src::{FooDataSrc, BarDataSrc};
 use crate::logic_layer::my_async_logic;
 
-// Register global DataSrc using the `sabi::tokio::uses_async!` macro.
-uses_async!("foo", FooDataSrc{});
+// Register global DataSrc using the `sabi::tokio::uses!` macro.
+uses!("foo", FooDataSrc{});
 
 #[tokio::main]
 async fn main() {
     // Register global DataSrc using the `sabi::tokio::uses_async` function.
-    uses_async!("bar", BarDataSrc{}).await;
+    uses_async("bar", BarDataSrc{}).await;
 
     // Set up the sabi framework for async operations
     let _auto_shutdown = setup_async().await.unwrap();
