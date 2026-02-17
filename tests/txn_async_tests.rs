@@ -1,6 +1,7 @@
+#[cfg(feature = "tokio")]
 #[cfg(test)]
-mod run_tests {
-    use sabi::{AsyncGroup, DataConn, DataSrc};
+mod txn_async_tests {
+    use sabi::tokio::{AsyncGroup, DataConn, DataSrc};
     use std::sync::Arc;
 
     mod data_src {
@@ -17,11 +18,11 @@ mod run_tests {
         }
 
         impl DataSrc<FooDataConn> for FooDataSrc {
-            fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            async fn setup_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 Ok(())
             }
             fn close(&mut self) {}
-            fn create_data_conn(&mut self) -> errs::Result<Box<FooDataConn>> {
+            async fn create_data_conn_async(&mut self) -> errs::Result<Box<FooDataConn>> {
                 Ok(Box::new(FooDataConn::new(self.text.clone())))
             }
         }
@@ -39,22 +40,22 @@ mod run_tests {
                 }
             }
 
-            pub fn get_text(&self) -> String {
+            pub async fn get_text_async(&self) -> String {
                 self.temp.clone()
             }
 
-            pub fn set_text(&mut self, s: String) {
+            pub async fn set_text_async(&mut self, s: String) {
                 self.temp = s;
             }
         }
 
         impl DataConn for FooDataConn {
-            fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-                *Arc::get_mut(&mut self.text).unwrap() = self.temp.clone();
+            async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+                *Arc::make_mut(&mut self.text) = self.temp.clone();
                 println!("commit text: {}", self.text.clone());
                 Ok(())
             }
-            fn rollback(&mut self, _ag: &mut AsyncGroup) {
+            async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {
                 self.temp = self.text.to_string();
             }
             fn close(&mut self) {}
@@ -71,11 +72,11 @@ mod run_tests {
         }
 
         impl DataSrc<BarDataConn> for BarDataSrc {
-            fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            async fn setup_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 Ok(())
             }
             fn close(&mut self) {}
-            fn create_data_conn(&mut self) -> errs::Result<Box<BarDataConn>> {
+            async fn create_data_conn_async(&mut self) -> errs::Result<Box<BarDataConn>> {
                 Ok(Box::new(BarDataConn::new(self.num.clone())))
             }
         }
@@ -93,22 +94,22 @@ mod run_tests {
                 }
             }
 
-            pub fn get_num(&self) -> u32 {
+            pub async fn get_num_async(&self) -> u32 {
                 self.tmp
             }
 
-            pub fn set_num(&mut self, n: u32) {
+            pub async fn set_num_async(&mut self, n: u32) {
                 self.tmp = n;
             }
         }
 
         impl DataConn for BarDataConn {
-            fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-                *Arc::get_mut(&mut self.num).unwrap() = self.tmp.clone();
+            async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+                *Arc::make_mut(&mut self.num) = self.tmp.clone();
                 println!("commit num: {}", self.num.clone());
                 Ok(())
             }
-            fn rollback(&mut self, _ag: &mut AsyncGroup) {
+            async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {
                 self.tmp = *self.num;
             }
             fn close(&mut self) {}
@@ -120,55 +121,55 @@ mod run_tests {
 
         #[overridable]
         pub trait MyData {
-            fn get_text(&mut self) -> errs::Result<String>;
-            fn set_text(&mut self, text: String) -> errs::Result<()>;
-            fn get_num(&mut self) -> errs::Result<u32>;
-            fn set_num(&mut self, num: u32) -> errs::Result<()>;
+            async fn get_text_async(&mut self) -> errs::Result<String>;
+            async fn set_text_async(&mut self, text: String) -> errs::Result<()>;
+            async fn get_num_async(&mut self) -> errs::Result<u32>;
+            async fn set_num_async(&mut self, num: u32) -> errs::Result<()>;
         }
 
-        pub fn my_logic(data: &mut impl MyData) -> errs::Result<()> {
-            let mut text = data.get_text()?;
+        pub async fn my_logic_async(data: &mut impl MyData) -> errs::Result<()> {
+            let mut text = data.get_text_async().await?;
             text = text.to_uppercase();
-            data.set_text(text)?;
-            let mut num = data.get_num()?;
+            data.set_text_async(text).await?;
+            let mut num = data.get_num_async().await?;
             num += 100;
-            data.set_num(num)?;
+            data.set_num_async(num).await?;
             Ok(())
         }
     }
 
     mod data_access_layer {
         use override_macro::overridable;
-        use sabi::DataAcc;
+        use sabi::tokio::DataAcc;
 
         use super::data_src::{BarDataConn, FooDataConn};
 
         #[overridable]
         pub trait GettingDataAcc: DataAcc {
-            fn get_text(&mut self) -> errs::Result<String> {
-                let conn = self.get_data_conn::<FooDataConn>("foo")?;
-                Ok(conn.get_text())
+            async fn get_text_async(&mut self) -> errs::Result<String> {
+                let conn = self.get_data_conn_async::<FooDataConn>("foo").await?;
+                Ok(conn.get_text_async().await)
             }
 
-            fn get_num(&mut self) -> errs::Result<u32> {
-                let conn = self.get_data_conn::<BarDataConn>("bar")?;
-                Ok(conn.get_num())
+            async fn get_num_async(&mut self) -> errs::Result<u32> {
+                let conn = self.get_data_conn_async::<BarDataConn>("bar").await?;
+                Ok(conn.get_num_async().await)
             }
         }
 
         #[overridable]
         pub trait SettingDataAcc: DataAcc {
-            fn set_text(&mut self, text: String) -> errs::Result<()> {
-                let conn = self.get_data_conn::<FooDataConn>("foo")?;
+            async fn set_text_async(&mut self, text: String) -> errs::Result<()> {
+                let conn = self.get_data_conn_async::<FooDataConn>("foo").await?;
                 println!("set text: {}", text.clone());
-                conn.set_text(text);
+                conn.set_text_async(text).await;
                 Ok(())
             }
 
-            fn set_num(&mut self, num: u32) -> errs::Result<()> {
-                let conn = self.get_data_conn::<BarDataConn>("bar")?;
+            async fn set_num_async(&mut self, num: u32) -> errs::Result<()> {
+                let conn = self.get_data_conn_async::<BarDataConn>("bar").await?;
                 println!("set num: {}", num.clone());
-                conn.set_num(num);
+                conn.set_num_async(num).await;
                 Ok(())
             }
         }
@@ -176,7 +177,7 @@ mod run_tests {
 
     mod data_hub {
         use override_macro::override_with;
-        use sabi::DataHub;
+        use sabi::tokio::DataHub;
 
         use super::data_access_layer::{GettingDataAcc, SettingDataAcc};
         use super::logic_layer::MyData;
@@ -189,28 +190,28 @@ mod run_tests {
     }
 
     mod app {
-        use sabi::DataHub;
+        use sabi::tokio::DataHub;
         use std::sync::Arc;
 
         use super::data_src::{BarDataSrc, FooDataSrc};
-        use super::logic_layer::my_logic;
+        use super::logic_layer::my_logic_async;
 
-        #[test]
-        fn test() {
+        #[tokio::test]
+        async fn test() {
             let text = Arc::new("hello".to_string());
             let num = Arc::new(23);
 
             let foo_ds = FooDataSrc::new(text.clone());
             let bar_ds = BarDataSrc::new(num.clone());
 
-            sabi::uses("foo", foo_ds);
+            sabi::tokio::uses_async("foo", foo_ds).await;
 
-            let _auto_shutdown = sabi::setup().unwrap();
+            let _auto_shutdown = sabi::tokio::setup_async().await.unwrap();
 
             let mut data = DataHub::new();
             data.uses("bar", bar_ds);
 
-            if let Err(e) = data.run(my_logic) {
+            if let Err(e) = data.txn_async(sabi::tokio::logic!(my_logic_async)).await {
                 panic!("{e:?}");
             }
 
