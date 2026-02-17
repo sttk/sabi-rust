@@ -30,6 +30,43 @@ pub use data_src::{
     create_static_data_src_container, setup_async, setup_with_order_async, uses_async, DataSrcError,
 };
 
+/// A convenience macro to easily convert an asynchronous function into a `Pin<Box<dyn Future>>`
+/// closure suitable for `DataHub`'s `run_async` or `txn_async` methods.
+///
+/// This macro simplifies passing async functions by handling the boxing and pinning.
+///
+/// # Example
+///
+/// ```ignore
+/// async fn my_logic(data_hub: &mut DataHub) -> errs::Result<()> {
+///     // ... some logic using data_hub
+///     Ok(())
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let mut hub = DataHub::new();
+///     hub.txn_async(logic!(my_logic)).await.unwrap();
+/// }
+/// ```
+#[doc(inline)]
+pub use crate::_logic as logic;
+
+/// Macro for registering a global data source at the top-level.
+///
+/// # Arguments
+///
+/// * `$name` - The name of the data source (must be a string literal).
+/// * `$data_src` - The data source instance.
+///
+/// # Examples
+///
+/// ```ignore
+/// uses!("my_global_source", MyDataSource::new());
+/// ```
+#[doc(inline)]
+pub use crate::_uses_for_async as uses;
+
 /// Manages a collection of asynchronous tasks, allowing them to be executed concurrently
 /// and their results (or errors) collected.
 #[allow(clippy::type_complexity)]

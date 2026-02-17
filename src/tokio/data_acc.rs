@@ -381,7 +381,7 @@ mod tests_of_data_acc {
 
     mod test_txn_async_method {
         use super::*;
-        use crate::logic;
+        use crate::tokio::logic;
         use override_macro::{overridable, override_with};
 
         #[overridable(mod = test_txn_async_method)]
