@@ -239,7 +239,7 @@ uses!("foo", FooDataSrc{});
 fn main() {
     // Register global DataSrc using the `sabi::uses` function.
     // This makes `BazDataSrc` available throughout the application.
-    uses("baz", BazDataSrc{});
+    uses("baz", BazDataSrc{}).unwrap();
 
     // Set up the sabi framework
     // _auto_shutdown automatically closes and drops global DataSrc at the end of the scope.
@@ -406,7 +406,10 @@ uses!("foo", FooDataSrc{});
 #[tokio::main]
 async fn main() {
     // Register global DataSrc using the `sabi::tokio::uses_async` function.
-    uses_async("bar", BarDataSrc{}).await;
+    uses_async("bar", BarDataSrc{}).await.unwrap();
+    // If there is no risk of conflict with other Tokio tasks, you can use the
+    // `sabi::tokio::uses` function, which does not wait for the lock to be released.
+    //uses("bar", BarDataSrc{}).unwrap();
 
     // Set up the sabi framework for async operations
     let _auto_shutdown = setup_async().await.unwrap();
