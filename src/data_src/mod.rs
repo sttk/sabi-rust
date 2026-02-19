@@ -21,6 +21,13 @@ use std::{any, mem, ptr};
 /// An enum type representing the reasons for errors that can occur within [`DataSrc`] operations.
 #[derive(Debug)]
 pub enum DataSrcError {
+    /// Indicates a failure to register a global data source.
+    /// This can happen if the global data source manager is in an invalid state.
+    FailToRegisterGlobalDataSrc {
+        /// The name of the data source that failed to register.
+        name: Arc<str>,
+    },
+
     /// Indicates a failure during the setup process of one or more global data sources.
     /// Contains a vector of data source names and their corresponding errors.
     FailToSetupGlobalDataSrcs {

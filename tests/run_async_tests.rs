@@ -204,7 +204,7 @@ mod run_async_tests {
             let foo_ds = FooDataSrc::new(text.clone());
             let bar_ds = BarDataSrc::new(num.clone());
 
-            sabi::tokio::uses_async("foo", foo_ds).await;
+            assert!(sabi::tokio::uses_async("foo", foo_ds).await.is_ok());
 
             let _auto_shutdown = sabi::tokio::setup_async().await.unwrap();
 

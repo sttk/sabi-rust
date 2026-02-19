@@ -8,7 +8,7 @@ pub(crate) use global_setup::{
     copy_global_data_srcs_to_map, create_data_conn_from_global_data_src_async,
 };
 pub use global_setup::{
-    create_static_data_src_container, setup_async, setup_with_order_async, uses_async,
+    create_static_data_src_container, setup_async, setup_with_order_async, uses, uses_async,
 };
 
 use crate::tokio::{
@@ -25,6 +25,13 @@ use std::{any, mem, ptr};
 /// Represents errors that can occur during data source operations.
 #[derive(Debug)]
 pub enum DataSrcError {
+    /// An error indicating a failure to register a global data source.
+    /// This can happen if the global data source manager is in an invalid state.
+    FailToRegisterGlobalDataSrc {
+        /// The name of the data source that failed to register.
+        name: Arc<str>,
+    },
+
     /// An error indicating that one or more global data sources failed during their setup process.
     FailToSetupGlobalDataSrcs {
         /// A vector of errors, each containing the name of the data source and the error itself.

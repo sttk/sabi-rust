@@ -203,7 +203,7 @@ mod run_tests {
             let foo_ds = FooDataSrc::new(text.clone());
             let bar_ds = BarDataSrc::new(num.clone());
 
-            sabi::uses("foo", foo_ds);
+            assert!(sabi::uses("foo", foo_ds).is_ok());
 
             let _auto_shutdown = sabi::setup().unwrap();
 

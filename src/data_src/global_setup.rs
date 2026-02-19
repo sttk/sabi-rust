@@ -43,20 +43,32 @@ impl Drop for AutoShutdown {
 ///
 /// Global data sources added via this function can be set up via [`setup`] or [`setup_with_order`].
 ///
+/// If `setup` or `setup_with_order` has already been called, this function will return an `errs::Err`.  
+///
 /// # Parameters
 ///
 /// * `name`: The unique name for the data source.
 /// * `ds`: The [`DataSrc`] instance to register.
-pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S)
+///
+/// # Returns
+///
+/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an [`errs::Err`] if
+///   the global data source manager is in an invalid state or if [`setup`] or [`setup_with_order`]
+///   has already been called.
+pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C>,
     C: DataConn + 'static,
 {
     match DS_MANAGER.get_mut_unlocked() {
-        Ok(dsm) => dsm.add(name, ds),
-        Err(e) => {
-            eprintln!("ERROR(sabi): Fail to add a global DataSrc: {e:?}");
+        Ok(dsm) => {
+            dsm.add(name, ds);
+            Ok(())
         }
+        Err(e) => Err(errs::Err::with_source(
+            DataSrcError::FailToRegisterGlobalDataSrc { name: name.into() },
+            e,
+        )),
     }
 }
 
