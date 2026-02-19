@@ -64,8 +64,8 @@ mod uses_and_setup_in_func_tests {
     fn test() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
-            sabi::uses("foo", MyDataSrc::new(1, logger.clone(), false));
-            sabi::uses("bar", MyDataSrc::new(2, logger.clone(), false));
+            assert!(sabi::uses("foo", MyDataSrc::new(1, logger.clone(), false)).is_ok());
+            assert!(sabi::uses("bar", MyDataSrc::new(2, logger.clone(), false)).is_ok());
 
             let _auto_shutdown = sabi::setup().unwrap();
         }

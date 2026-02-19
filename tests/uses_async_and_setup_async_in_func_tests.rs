@@ -66,8 +66,12 @@ mod uses_async_and_setup_async_in_func_tests {
     async fn test() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
-            sabi::tokio::uses_async("foo", MyDataSrc::new(1, logger.clone(), false)).await;
-            sabi::tokio::uses_async("bar", MyDataSrc::new(2, logger.clone(), false)).await;
+            assert!(sabi::tokio::uses("foo", MyDataSrc::new(1, logger.clone(), false)).is_ok());
+            assert!(
+                sabi::tokio::uses_async("bar", MyDataSrc::new(2, logger.clone(), false))
+                    .await
+                    .is_ok()
+            );
 
             let _auto_shutdown = sabi::tokio::setup_async().await.unwrap();
         }

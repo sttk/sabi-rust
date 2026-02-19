@@ -27,7 +27,8 @@ use std::{any, ptr};
 pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
 pub use data_src::{
-    create_static_data_src_container, setup_async, setup_with_order_async, uses_async, DataSrcError,
+    create_static_data_src_container, setup_async, setup_with_order_async, uses, uses_async,
+    DataSrcError,
 };
 
 /// A convenience macro to easily convert an asynchronous function into a `Pin<Box<dyn Future>>`

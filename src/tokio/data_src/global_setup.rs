@@ -34,7 +34,7 @@ impl Drop for AutoShutdown {
 /// Registers a global data source, making it available throughout the application.
 ///
 /// Global data sources are managed by a singleton and can be set up once for the application's lifetime.
-/// If `setup_async` or `setup_with_order_async` has already been called, this function will do nothing.
+/// If `setup_async` or `setup_with_order_async` has already been called, this function will return an `errs::Err`.
 ///
 /// # Arguments
 ///
@@ -45,16 +45,62 @@ impl Drop for AutoShutdown {
 ///
 /// * `S` - The type of the data source.
 /// * `C` - The type of the data connection provided by the data source.
-pub async fn uses_async<S, C>(name: impl Into<Arc<str>>, ds: S)
+///
+/// # Returns
+///
+/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an [`errs::Err`] if
+///   the global data source manager is in an invalid state or setup has already occurred.
+pub async fn uses_async<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C> + 'static,
     C: DataConn + 'static,
 {
     match DS_MANAGER.lock_async().await {
-        Ok(mut dsm) => dsm.add(name, ds),
-        Err(e) => {
-            eprintln!("ERROR(sabi): Fail to add a global DataSrc: {e:?}");
+        Ok(mut dsm) => {
+            dsm.add(name, ds);
+            Ok(())
         }
+        Err(e) => Err(errs::Err::with_source(
+            DataSrcError::FailToRegisterGlobalDataSrc { name: name.into() },
+            e,
+        )),
+    }
+}
+
+/// Registers a global data source, making it available throughout the application.
+///
+/// This is the synchronous version of `uses_async`.
+/// Global data sources are managed by a singleton and can be set up once for the application's lifetime.
+/// If `setup_async` or `setup_with_order_async` has already been called, this function will return an `errs::Err`.
+///
+/// # Arguments
+///
+/// * `name` - The name to associate with this data source.
+/// * `ds` - The data source instance, which must implement `DataSrc` and have a `'static` lifetime.
+///
+/// # Type Parameters
+///
+/// * `S` - The type of the data source.
+/// * `C` - The type of the data connection provided by the data source.
+///
+/// # Returns
+///
+/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an [`errs::Err`] if
+///   the global data source manager is in an invalid state or setup has already occurred.
+pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
+where
+    S: DataSrc<C> + 'static,
+    C: DataConn + 'static,
+{
+    match DS_MANAGER.try_lock() {
+        Ok(mut dsm) => {
+            dsm.add(name, ds);
+            Ok(())
+        }
+        Err(e) => Err(errs::Err::with_source(
+            DataSrcError::FailToRegisterGlobalDataSrc { name: name.into() },
+            e,
+        )),
     }
 }
 
