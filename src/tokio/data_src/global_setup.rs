@@ -35,6 +35,7 @@ impl Drop for AutoShutdown {
 ///
 /// Global data sources are managed by a singleton and can be set up once for the application's lifetime.
 /// If `setup_async` or `setup_with_order_async` has already been called, this function will return an `errs::Err`.
+/// If another Tokio task holds the lock of the global data source manager, this function will wait until the lock is released.
 ///
 /// # Arguments
 ///
@@ -72,6 +73,7 @@ where
 /// This is the synchronous version of `uses_async`.
 /// Global data sources are managed by a singleton and can be set up once for the application's lifetime.
 /// If `setup_async` or `setup_with_order_async` has already been called, this function will return an `errs::Err`.
+/// If another Tokio task holds the lock of the global data source manager, this function will return an error immediately without waiting.
 ///
 /// # Arguments
 ///
