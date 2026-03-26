@@ -40,8 +40,8 @@ pub use data_src::{
 /// # Example
 ///
 /// ```ignore
-/// async fn my_logic(data_hub: &mut DataHub) -> errs::Result<()> {
-///     // ... some logic using data_hub
+/// async fn my_logic(data: &mut (impl MyData + Send)) -> errs::Result<()> {
+///     // ... some logic using data
 ///     Ok(())
 /// }
 ///
@@ -313,6 +313,8 @@ pub struct AutoShutdown {}
 ///
 /// `DataHub` provides mechanisms to register data sources, acquire data connections,
 /// and execute transactional or non-transactional asynchronous logic.
+///
+/// This structure implements `Send`.
 pub struct DataHub {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,

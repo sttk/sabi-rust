@@ -195,7 +195,7 @@ pub trait UpdatingDataAcc: DataAcc {
 ### 4. Integrating data traits and `DataAcc` derived traits into `DataHub`
 
 The `DataHub` is the central component that manages all `DataSrc` and `DataConn`,
-providing access to them for your application logic.
+providing access to them for your application logic. It implements `Send`.
 By implementing the data traits (`MyData`) from step 2 and the `DataAcc` traits
 from step 3 on `DataHub`, you integrate them.
 The `#[override_with]` macro indicates that the methods of the `MyData` trait
@@ -315,11 +315,33 @@ impl DataConn for BarDataConn {
     async fn rollback_async(&mut self, ag: &mut AsyncGroup) { /* ... */ }
     fn close(&mut self) { /* ... */ }
 }
+
+pub struct BazDataSrc { /* ... */ }
+
+impl DataSrc<BazDataConn> for BazDataSrc {
+    async fn setup_async(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+    fn close(&mut self) { /* ... */ }
+    async fn create_data_conn_async(&mut self) -> Result<Box<BazDataConn>, Err> {
+        Ok(Box::new(BazDataConn{ /* ... */ }))
+    }
+}
+
+pub struct BazDataConn { /* ... */ }
+
+impl BazDataConn { /* ... */ }
+
+impl DataConn for BazDataConn {
+    async fn commit_async(&mut self, ag: &mut AsyncGroup) -> Result<(), Err> { /* ... */ Ok(()) }
+    async fn rollback_async(&mut self, ag: &mut AsyncGroup) { /* ... */ }
+    fn close(&mut self) { /* ... */ }
+}
 ```
 
 ### 2. Implementing logic functions and data traits (Asynchronous)
 
 Your application logic functions and their associated traits will now be `async`. The `#[overridable]` macro still functions the same way to allow trait implementations to be overridden.
+
+Note that if the logic function is executed within a spawned task (e.g., via `tokio::spawn`), the data access trait argument must also implement `Send`. This is because the future returned by the logic function captures the argument and must itself be `Send`.
 
 ```rust
 use errs::Err;
@@ -332,7 +354,7 @@ pub trait MyAsyncData {
     async fn set_flag_async(&mut self, flag: bool) -> Result<(), Err>;
 }
 
-pub async fn my_async_logic(data: &mut impl MyAsyncData) -> Result<(), Err> {
+pub async fn my_async_logic(data: &mut (impl MyAsyncData + Send)) -> Result<(), Err> {
     let text = data.get_text_async().await?;
     let _ = data.set_text_async(text).await?;
     let _ = data.set_flag_async(true).await?;
@@ -368,11 +390,20 @@ pub trait SettingAsyncDataAcc: DataAcc {
         Ok(())
     }
 }
+
+#[overridable]
+pub trait UpdatingAsyncDataAcc: DataAcc {
+    async fn set_flag_async(&mut self, flag: bool) -> Result<(), Err> {
+        let conn = self.get_data_conn_async::<BazDataConn>("baz").await?;
+        // ... perform async operations with conn
+        Ok(())
+    }
+}
 ```
 
 ### 4. Integrating data traits and `DataAcc` derived traits into `DataHub` (Asynchronous)
 
-The `sabi::tokio::DataHub` serves the same central role, but operates asynchronously. The integration with traits using `#[override_with]` remains conceptually similar.
+The `sabi::tokio::DataHub` serves the same central role, but operates asynchronously. It also implements `Send`. The integration with traits using `#[override_with]` remains conceptually similar.
 
 ```rust
 use sabi::tokio::DataHub;
@@ -380,12 +411,13 @@ use override_macro::override_with;
 use errs::Err;
 
 use crate::logic_layer::MyAsyncData;
-use crate::data_access_layer::{GettingAsyncDataAcc, SettingAsyncDataAcc};
+use crate::data_access_layer::{GettingAsyncDataAcc, SettingAsyncDataAcc, UpdatingAsyncDataAcc};
 
 impl GettingAsyncDataAcc for DataHub {}
 impl SettingAsyncDataAcc for DataHub {}
+impl UpdatingAsyncDataAcc for DataHub {}
 
-#[override_with(GettingAsyncDataAcc, SettingAsyncDataAcc)]
+#[override_with(GettingAsyncDataAcc, SettingAsyncDataAcc, UpdatingAsyncDataAcc)]
 impl MyAsyncData for DataHub {}
 ```
 
@@ -397,7 +429,7 @@ Use the `#[tokio::main]` macro to run your main asynchronous function. Register 
 use sabi::tokio::{uses, uses_async, setup_async, DataHub, logic};
 use tokio; // Ensure tokio is in scope for #[tokio::main]
 
-use crate::data_src::{FooDataSrc, BarDataSrc};
+use crate::data_src::{FooDataSrc, BarDataSrc, BazDataSrc};
 use crate::logic_layer::my_async_logic;
 
 // Register global DataSrc using the `sabi::tokio::uses!` macro.
@@ -406,22 +438,33 @@ uses!("foo", FooDataSrc{});
 #[tokio::main]
 async fn main() {
     // Register global DataSrc using the `sabi::tokio::uses_async` function.
-    uses_async("bar", BarDataSrc{}).await.unwrap();
+    uses_async("baz", BazDataSrc{}).await.unwrap();
     // If there is no risk of conflict with other Tokio tasks, you can use the
     // `sabi::tokio::uses` function, which does not wait for the lock to be released.
-    //uses("bar", BarDataSrc{}).unwrap();
+    //uses("baz", BazDataSrc{}).unwrap();
 
     // Set up the sabi framework for async operations
     let _auto_shutdown = setup_async().await.unwrap();
 
-    let mut data = DataHub::new();
+    // Create a new instance of DataHub.
+    // Since DataHub is Send, it can be moved into another task.
+    tokio::spawn(async move {
+        let mut data = DataHub::new();
+        // Register session-local DataSrc with DataHub using the `uses` method.
+        // This makes `BarDataSrc` available only within this `DataHub` instance's session.
+        // If this `DataHub` is moved between threads, `ds` must also implement `Send`.
+        data.uses("bar", BarDataSrc{});
 
-    // Execute application logic within an asynchronous transaction
-    // The `logic!` macro helps convert an async function into the required closure type.
-    let _ = data.txn_async(logic!(my_async_logic)).await.unwrap();
+        // Execute application logic within an asynchronous transaction
+        // The `logic!` macro helps convert an async function into the required closure type.
+        // The resulting future is `Send`.
+        let _ = data.txn_async(logic!(my_async_logic)).await.unwrap();
 
-    // If you need to execute logic without transactional control, use `run_async`.
-    // let _ = data.run_async(logic!(my_async_logic)).await.unwrap();
+        // If you need to execute logic without transactional control, use `run_async`.
+        // let _ = data.run_async(logic!(my_async_logic)).await.unwrap();
+    })
+    .await
+    .unwrap();
 }
 ```
 
