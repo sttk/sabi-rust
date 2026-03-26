@@ -4,6 +4,7 @@
 
 use super::data_src::{copy_global_data_srcs_to_map, create_data_conn_from_global_data_src_async};
 use super::{DataConn, DataConnContainer, DataConnManager, DataHub, DataSrc, DataSrcManager};
+use crate::SendSyncNonNull;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -78,6 +79,7 @@ impl DataHub {
     ///
     /// * `name` - The name to associate with this data source.
     /// * `ds` - The data source instance, which must implement `DataSrc` and have a `'static` lifetime.
+    ///   If this `DataHub` is moved between threads, `ds` must also implement `Send`.
     ///
     /// # Type Parameters
     ///
@@ -154,6 +156,7 @@ impl DataHub {
     ///
     /// * `logic_fn` - An asynchronous function that takes a mutable reference to `DataHub`
     ///                and returns a `Result`. This function contains the application's logic.
+    ///                The returned `Future` must implement `Send`.
     ///
     /// # Type Parameters
     ///
@@ -166,7 +169,8 @@ impl DataHub {
     #[allow(clippy::doc_overindented_list_items)]
     pub async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
-        for<'a> F: FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + 'a>>,
+        for<'a> F:
+            FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'a>>,
     {
         let mut r = self.begin_async().await;
         if r.is_ok() {
@@ -188,6 +192,7 @@ impl DataHub {
     ///
     /// * `logic_fn` - An asynchronous function that takes a mutable reference to `DataHub`
     ///                and returns a `Result`. This function contains the application's transactional logic.
+    ///                The returned `Future` must implement `Send`.
     ///
     /// # Type Parameters
     ///
@@ -200,7 +205,8 @@ impl DataHub {
     #[allow(clippy::doc_overindented_list_items)]
     pub async fn txn_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
-        for<'a> F: FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + 'a>>,
+        for<'a> F:
+            FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'a>>,
     {
         let mut r = self.begin_async().await;
         if r.is_ok() {
@@ -255,8 +261,8 @@ impl DataHub {
 
             let ptr = Box::into_raw(boxed);
             if let Some(nnptr) = ptr::NonNull::new(ptr) {
-                self.data_conn_manager
-                    .add(nnptr.cast::<DataConnContainer>());
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                self.data_conn_manager.add(ssnnptr);
 
                 let typed_ptr = ptr.cast::<DataConnContainer<C>>();
                 return Ok(unsafe { &mut (*typed_ptr).data_conn });
@@ -276,7 +282,11 @@ impl DataHub {
 #[doc(hidden)]
 macro_rules! _logic {
     ($f:expr) => {
-        |data| Box::pin($f(data))
+        |data| {
+            let fut: std::pin::Pin<Box<dyn std::future::Future<Output = errs::Result<()>> + Send>> =
+                Box::pin(async move { $f(data).await });
+            fut
+        }
     };
 }
 
@@ -1162,5 +1172,22 @@ mod tests_of_data_hub {
                 "MyDataSrc::drop 1",
             ]
         );
+    }
+
+    trait Data {}
+    impl Data for DataHub {}
+
+    async fn process_async(_data: &mut impl Data) -> errs::Result<()> {
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn data_hub_implements_send_trait() {
+        let handle = tokio::spawn(async {
+            let mut data = DataHub::new();
+            data.run_async(_logic!(process_async)).await.unwrap();
+        });
+
+        handle.await.unwrap();
     }
 }

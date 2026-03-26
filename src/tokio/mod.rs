@@ -18,11 +18,11 @@ mod data_src;
 
 use crate::SendSyncNonNull;
 
+use std::any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::{any, ptr};
 
 pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
@@ -35,6 +35,7 @@ pub use data_src::{
 /// closure suitable for `DataHub`'s `run_async` or `txn_async` methods.
 ///
 /// This macro simplifies passing async functions by handling the boxing and pinning.
+/// The resulting `Future` implements `Send`.
 ///
 /// # Example
 ///
@@ -216,7 +217,7 @@ where
 }
 
 pub(crate) struct DataConnManager {
-    vec: Vec<Option<ptr::NonNull<DataConnContainer>>>,
+    vec: Vec<Option<SendSyncNonNull<DataConnContainer>>>,
     index_map: HashMap<Arc<str>, usize>,
 }
 
@@ -290,7 +291,7 @@ where
     create_data_conn_fn: fn(
         *const DataSrcContainer,
     ) -> Pin<
-        Box<dyn Future<Output = errs::Result<Box<DataConnContainer<C>>>> + 'static>,
+        Box<dyn Future<Output = errs::Result<Box<DataConnContainer<C>>>> + Send + 'static>,
     >,
 
     local: bool,

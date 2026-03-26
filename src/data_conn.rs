@@ -2,11 +2,11 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::{AsyncGroup, DataConn, DataConnContainer, DataConnManager};
+use crate::{AsyncGroup, DataConn, DataConnContainer, DataConnManager, SendSyncNonNull};
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{any, mem, ptr};
+use std::{any, mem};
 
 /// An enum type representing the reasons for errors that can occur within `DataConn` operations.
 #[allow(clippy::enum_variant_names)]
@@ -162,13 +162,13 @@ impl DataConnManager {
         }
     }
 
-    pub(crate) fn add(&mut self, nnptr: ptr::NonNull<DataConnContainer>) {
-        let name = unsafe { (*nnptr.as_ptr()).name.clone() };
+    pub(crate) fn add(&mut self, ssnnptr: SendSyncNonNull<DataConnContainer>) {
+        let name = unsafe { (*ssnnptr.non_null_ptr.as_ptr()).name.clone() };
         if let Some(index) = self.index_map.get(&name) {
-            self.vec[*index] = Some(nnptr);
+            self.vec[*index] = Some(ssnnptr);
         } else {
             let index = self.vec.len();
-            self.vec.push(Some(nnptr));
+            self.vec.push(Some(ssnnptr));
             self.index_map.insert(name.clone(), index);
         }
     }
@@ -176,14 +176,14 @@ impl DataConnManager {
     pub(crate) fn find_by_name(
         &self,
         name: impl AsRef<str>,
-    ) -> Option<ptr::NonNull<DataConnContainer>> {
+    ) -> Option<SendSyncNonNull<DataConnContainer>> {
         if let Some(index) = self.index_map.get(name.as_ref()) {
             if *index < self.vec.len() {
-                if let Some(nnptr) = self.vec[*index] {
-                    let ptr = nnptr.as_ptr();
+                if let Some(ssnnptr) = &self.vec[*index] {
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
                     let cont_name = unsafe { &(*ptr).name };
                     if cont_name.as_ref() == name.as_ref() {
-                        return Some(nnptr);
+                        return Some(ssnnptr.clone());
                     }
                 }
             }
@@ -193,12 +193,12 @@ impl DataConnManager {
     }
 
     pub(crate) fn to_typed_ptr<C>(
-        nnptr: &ptr::NonNull<DataConnContainer>,
+        ssnnptr: &SendSyncNonNull<DataConnContainer>,
     ) -> errs::Result<*mut DataConnContainer<C>>
     where
         C: DataConn + 'static,
     {
-        let ptr = nnptr.as_ptr();
+        let ptr = ssnnptr.non_null_ptr.as_ptr();
         let name = unsafe { &(*ptr).name };
         let type_id = any::TypeId::of::<C>();
         let is_fn = unsafe { (*ptr).is_fn };
@@ -218,8 +218,8 @@ impl DataConnManager {
         let mut errors = Vec::new();
 
         let mut ag = AsyncGroup::new();
-        for nnptr in self.vec.iter().flatten() {
-            let ptr = nnptr.as_ptr();
+        for ssnnptr in self.vec.iter().flatten() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
             let pre_commit_fn = unsafe { (*ptr).pre_commit_fn };
             ag._name = unsafe { (*ptr).name.clone() };
             if let Err(err) = pre_commit_fn(ptr, &mut ag) {
@@ -236,8 +236,8 @@ impl DataConnManager {
         }
 
         let mut ag = AsyncGroup::new();
-        for nnptr in self.vec.iter().flatten() {
-            let ptr = nnptr.as_ptr();
+        for ssnnptr in self.vec.iter().flatten() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
             let commit_fn = unsafe { (*ptr).commit_fn };
             ag._name = unsafe { (*ptr).name.clone() };
             if let Err(err) = commit_fn(ptr, &mut ag) {
@@ -254,8 +254,8 @@ impl DataConnManager {
         }
 
         let mut ag = AsyncGroup::new();
-        for nnptr in self.vec.iter().flatten() {
-            let ptr = nnptr.as_ptr();
+        for ssnnptr in self.vec.iter().flatten() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
             let post_commit_fn = unsafe { (*ptr).post_commit_fn };
             ag._name = unsafe { (*ptr).name.clone() };
             post_commit_fn(ptr, &mut ag);
@@ -267,8 +267,8 @@ impl DataConnManager {
 
     pub(crate) fn rollback(&mut self) {
         let mut ag = AsyncGroup::new();
-        for nnptr in self.vec.iter().flatten() {
-            let ptr = nnptr.as_ptr();
+        for ssnnptr in self.vec.iter().flatten() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
             let should_force_back_fn = unsafe { (*ptr).should_force_back_fn };
             let force_back_fn = unsafe { (*ptr).force_back_fn };
             let rollback_fn = unsafe { (*ptr).rollback_fn };
@@ -286,10 +286,10 @@ impl DataConnManager {
     pub(crate) fn close(&mut self) {
         self.index_map.clear();
 
-        let vec: Vec<Option<ptr::NonNull<DataConnContainer>>> = mem::take(&mut self.vec);
+        let vec: Vec<Option<SendSyncNonNull<DataConnContainer>>> = mem::take(&mut self.vec);
 
-        for nnptr in vec.iter().flatten() {
-            let ptr = nnptr.as_ptr();
+        for ssnnptr in vec.iter().flatten() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
             let close_fn = unsafe { (*ptr).close_fn };
             let drop_fn = unsafe { (*ptr).drop_fn };
             close_fn(ptr);
@@ -311,7 +311,7 @@ mod tests_of_data_conn {
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     };
-    use std::{thread, time};
+    use std::{ptr, thread, time};
 
     #[derive(PartialEq, Copy, Clone)]
     enum Fail {
@@ -540,7 +540,10 @@ mod tests_of_data_conn {
         #[test]
         fn test_with_commit_order() {
             let manager = DataConnManager::with_commit_order(&["bar", "baz", "foo"]);
-            assert_eq!(manager.vec, vec![None, None, None]);
+            assert_eq!(manager.vec.len(), 3);
+            assert!(manager.vec[0].is_none());
+            assert!(manager.vec[1].is_none());
+            assert!(manager.vec[2].is_none());
             assert_eq!(manager.index_map.len(), 3);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
             assert_eq!(*manager.index_map.get("bar").unwrap(), 0);
@@ -558,7 +561,8 @@ mod tests_of_data_conn {
             let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
             assert_eq!(manager.vec.len(), 1);
             assert_eq!(manager.index_map.len(), 1);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 0);
@@ -566,7 +570,8 @@ mod tests_of_data_conn {
             let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
             assert_eq!(manager.vec.len(), 2);
             assert_eq!(manager.index_map.len(), 2);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 0);
@@ -578,7 +583,10 @@ mod tests_of_data_conn {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             let mut manager = DataConnManager::with_commit_order(&["bar", "baz", "foo"]);
-            assert_eq!(manager.vec, vec![None, None, None]);
+            assert_eq!(manager.vec.len(), 3);
+            assert!(manager.vec[0].is_none());
+            assert!(manager.vec[1].is_none());
+            assert!(manager.vec[2].is_none());
             assert_eq!(manager.index_map.len(), 3);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
             assert_eq!(*manager.index_map.get("bar").unwrap(), 0);
@@ -587,7 +595,8 @@ mod tests_of_data_conn {
             let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
             assert_eq!(manager.vec.len(), 3);
             assert_eq!(manager.index_map.len(), 3);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
@@ -595,7 +604,8 @@ mod tests_of_data_conn {
             let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
             assert_eq!(manager.vec.len(), 3);
             assert_eq!(manager.index_map.len(), 3);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
@@ -604,7 +614,8 @@ mod tests_of_data_conn {
             let conn = SyncDataConn::new(3, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("qux", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
             assert_eq!(manager.vec.len(), 4);
             assert_eq!(manager.index_map.len(), 4);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
@@ -628,22 +639,24 @@ mod tests_of_data_conn {
             let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
 
             let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
 
-            if let Some(nnptr) = manager.find_by_name("foo") {
-                let name = unsafe { (*nnptr.as_ptr()).name.clone() };
+            if let Some(ssnnptr) = manager.find_by_name("foo") {
+                let name = unsafe { (*ssnnptr.non_null_ptr.as_ptr()).name.clone() };
                 assert_eq!(name.as_ref(), "foo");
             } else {
                 panic!();
             }
 
-            if let Some(nnptr) = manager.find_by_name("bar") {
-                let name = unsafe { (*nnptr.as_ptr()).name.clone() };
+            if let Some(ssnnptr) = manager.find_by_name("bar") {
+                let name = unsafe { (*ssnnptr.non_null_ptr.as_ptr()).name.clone() };
                 assert_eq!(name.as_ref(), "bar");
             } else {
                 panic!();
@@ -659,25 +672,27 @@ mod tests_of_data_conn {
             let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
 
             let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
 
-            let nnptr = manager.find_by_name("foo").unwrap();
-            if let Ok(typed_nnptr) = DataConnManager::to_typed_ptr::<SyncDataConn>(&nnptr) {
-                assert_eq!(any::type_name_of_val(&typed_nnptr), "*mut sabi::DataConnContainer<sabi::data_conn::tests_of_data_conn::SyncDataConn>");
-                assert_eq!(unsafe { (*typed_nnptr).name.clone() }, "foo".into());
+            let ssnnptr = manager.find_by_name("foo").unwrap();
+            if let Ok(typed_ssnnptr) = DataConnManager::to_typed_ptr::<SyncDataConn>(&ssnnptr) {
+                assert_eq!(any::type_name_of_val(&typed_ssnnptr), "*mut sabi::DataConnContainer<sabi::data_conn::tests_of_data_conn::SyncDataConn>");
+                assert_eq!(unsafe { (*typed_ssnnptr).name.clone() }, "foo".into());
             } else {
                 panic!();
             }
 
-            let nnptr = manager.find_by_name("bar").unwrap();
-            if let Ok(typed_nnptr) = DataConnManager::to_typed_ptr::<AsyncDataConn>(&nnptr) {
-                assert_eq!(any::type_name_of_val(&typed_nnptr), "*mut sabi::DataConnContainer<sabi::data_conn::tests_of_data_conn::AsyncDataConn>");
-                assert_eq!(unsafe { (*typed_nnptr).name.clone() }, "bar".into());
+            let ssnnptr = manager.find_by_name("bar").unwrap();
+            if let Ok(typed_ssnnptr) = DataConnManager::to_typed_ptr::<AsyncDataConn>(&ssnnptr) {
+                assert_eq!(any::type_name_of_val(&typed_ssnnptr), "*mut sabi::DataConnContainer<sabi::data_conn::tests_of_data_conn::AsyncDataConn>");
+                assert_eq!(unsafe { (*typed_ssnnptr).name.clone() }, "bar".into());
             } else {
                 panic!();
             }
@@ -692,15 +707,17 @@ mod tests_of_data_conn {
             let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
 
             let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-            manager.add(nnptr);
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
 
-            let nnptr = manager.find_by_name("foo").unwrap();
-            if let Err(err) = DataConnManager::to_typed_ptr::<AsyncDataConn>(&nnptr) {
+            let ssnnptr = manager.find_by_name("foo").unwrap();
+            if let Err(err) = DataConnManager::to_typed_ptr::<AsyncDataConn>(&ssnnptr) {
                 match err.reason::<DataConnError>() {
                     Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                         assert_eq!(name.as_ref(), "foo");
@@ -715,8 +732,8 @@ mod tests_of_data_conn {
                 panic!();
             }
 
-            let nnptr = manager.find_by_name("bar").unwrap();
-            if let Err(err) = DataConnManager::to_typed_ptr::<SyncDataConn>(&nnptr) {
+            let ssnnptr = manager.find_by_name("bar").unwrap();
+            if let Err(err) = DataConnManager::to_typed_ptr::<SyncDataConn>(&ssnnptr) {
                 match err.reason::<DataConnError>() {
                     Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                         assert_eq!(name.as_ref(), "bar");
@@ -742,12 +759,14 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 assert!(manager.commit().is_ok());
             }
@@ -781,17 +800,20 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = SyncDataConn::new(3, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("qux", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 assert!(manager.commit().is_ok());
             }
@@ -831,12 +853,14 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::PreCommit);
                 let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::PreCommit);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 if let Err(e) = manager.commit() {
                     match e.reason::<DataConnError>() {
@@ -876,12 +900,14 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::PreCommit);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::PreCommit);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 if let Err(e) = manager.commit() {
                     match e.reason::<DataConnError>() {
@@ -921,12 +947,14 @@ mod tests_of_data_conn {
                 let conn = AsyncDataConn::new(1, logger.clone(), Fail::PreCommit);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 if let Err(e) = manager.commit() {
                     match e.reason::<DataConnError>() {
@@ -967,12 +995,14 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::Commit);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::Commit);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 if let Err(e) = manager.commit() {
                     match e.reason::<DataConnError>() {
@@ -1014,12 +1044,14 @@ mod tests_of_data_conn {
                 let conn = AsyncDataConn::new(1, logger.clone(), Fail::Commit);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 if let Err(e) = manager.commit() {
                     match e.reason::<DataConnError>() {
@@ -1062,12 +1094,14 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::Commit);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 if let Err(e) = manager.commit() {
                     match e.reason::<DataConnError>() {
@@ -1110,12 +1144,14 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 manager.rollback();
             }
@@ -1145,12 +1181,14 @@ mod tests_of_data_conn {
                 let conn = AsyncDataConn::new(1, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 manager.rollback();
             }
@@ -1180,12 +1218,14 @@ mod tests_of_data_conn {
                 let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 assert!(manager.commit().is_ok());
                 manager.rollback();
@@ -1222,12 +1262,14 @@ mod tests_of_data_conn {
                 let conn = AsyncDataConn::new(1, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
                 let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
-                manager.add(nnptr);
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                manager.add(ssnnptr);
 
                 assert!(manager.commit().is_ok());
                 manager.rollback();

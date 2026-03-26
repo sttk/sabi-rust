@@ -3,7 +3,7 @@
 // See the file LICENSE in this distribution for more details.
 
 use crate::data_src::{copy_global_data_srcs_to_map, create_data_conn_from_global_data_src};
-use crate::{DataConn, DataConnManager, DataHub, DataSrc, DataSrcManager};
+use crate::{DataConn, DataConnManager, DataHub, DataSrc, DataSrcManager, SendSyncNonNull};
 
 #[allow(unused)] // for rustdoc
 use crate::DataAcc;
@@ -239,9 +239,9 @@ impl DataHub {
     where
         C: DataConn + 'static,
     {
-        if let Some(nnptr) = self.data_conn_manager.find_by_name(name.as_ref()) {
-            let typed_nnptr = DataConnManager::to_typed_ptr::<C>(&nnptr)?;
-            return Ok(unsafe { &mut (*typed_nnptr).data_conn });
+        if let Some(ssnnptr) = self.data_conn_manager.find_by_name(name.as_ref()) {
+            let typed_ssnnptr = DataConnManager::to_typed_ptr::<C>(&ssnnptr)?;
+            return Ok(unsafe { &mut (*typed_ssnnptr).data_conn });
         }
 
         if let Some((local, index)) = self.data_src_map.get(name.as_ref()) {
@@ -254,8 +254,8 @@ impl DataHub {
 
             let ptr = Box::into_raw(boxed);
             if let Some(nnptr) = ptr::NonNull::new(ptr) {
-                self.data_conn_manager
-                    .add(nnptr.cast::<DataConnContainer>());
+                let ssnnptr = SendSyncNonNull::new(nnptr);
+                self.data_conn_manager.add(ssnnptr);
 
                 let typed_ptr = ptr.cast::<DataConnContainer<C>>();
                 return Ok(unsafe { &mut (*typed_ptr).data_conn });
@@ -1038,5 +1038,15 @@ mod tests_of_data_hub {
         {
             let mut _hub = DataHub::new();
         }
+    }
+
+    #[test]
+    fn data_hub_implements_send_trait() {
+        let mut data = DataHub::new();
+        let handle = std::thread::spawn(move || {
+            data.run(|_data| Ok(())).unwrap();
+        });
+
+        handle.join().unwrap();
     }
 }
