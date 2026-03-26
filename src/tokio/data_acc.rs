@@ -33,7 +33,7 @@ impl DataAcc for DataHub {
 
 #[cfg(test)]
 mod tests_of_data_acc {
-    use super::super::{AsyncGroup, DataSrc};
+    use super::super::{logic, AsyncGroup, DataSrc};
     use super::*;
     use std::future::Future;
     use std::pin::Pin;
@@ -298,16 +298,12 @@ mod tests_of_data_acc {
             async fn set_value_async(&mut self, v: &str) -> errs::Result<()>;
         }
 
-        fn sample_logic_async(
-            data: &mut impl SampleAsyncData,
-        ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + '_>> {
-            Box::pin(async move {
-                let v = data.get_value_async().await?;
-                let _ = data.set_value_async(&v).await;
-                let v = data.get_value_async().await?;
-                let _ = data.set_value_async(&v).await;
-                Ok(())
-            })
+        async fn sample_logic_async(data: &mut (impl SampleAsyncData + Send)) -> errs::Result<()> {
+            let v = data.get_value_async().await?;
+            let _ = data.set_value_async(&v).await;
+            let v = data.get_value_async().await?;
+            let _ = data.set_value_async(&v).await;
+            Ok(())
         }
 
         #[overridable(mod = test_run_async_method)]
@@ -335,7 +331,7 @@ mod tests_of_data_acc {
         impl SampleAsyncData for DataHub {}
 
         #[tokio::test]
-        async fn test() {
+        async fn test_logic() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
@@ -344,7 +340,7 @@ mod tests_of_data_acc {
                 data.uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
                 data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(_) = data.run_async(sample_logic_async).await {
+                if let Err(_) = data.run_async(logic!(sample_logic_async)).await {
                     panic!();
                 }
             }
@@ -390,19 +386,7 @@ mod tests_of_data_acc {
             async fn set_value_async(&mut self, v: &str) -> errs::Result<()>;
         }
 
-        fn sample_logic(
-            data: &mut impl SampleAsyncData,
-        ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + '_>> {
-            Box::pin(async {
-                let v = data.get_value_async().await?;
-                let _ = data.set_value_async(&v).await;
-                let v = data.get_value_async().await?;
-                let _ = data.set_value_async(&v).await;
-                Ok(())
-            })
-        }
-
-        async fn sample_logic_async(data: &mut impl SampleAsyncData) -> errs::Result<()> {
+        async fn sample_logic_async(data: &mut (impl SampleAsyncData + Send)) -> errs::Result<()> {
             let v = data.get_value_async().await?;
             let _ = data.set_value_async(&v).await;
             let v = data.get_value_async().await?;
@@ -436,109 +420,6 @@ mod tests_of_data_acc {
 
         #[tokio::test]
         async fn test_logic() {
-            let logger = Arc::new(Mutex::new(Vec::new()));
-
-            {
-                let mut data = DataHub::new();
-
-                data.uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
-                data.uses("bar", BarDataSrc::new(2, logger.clone()));
-
-                if let Err(_) = data.txn_async(sample_logic).await {
-                    panic!();
-                }
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "FooDataSrc::new 1",
-                    "BarDataSrc::new 2",
-                    "FooDataSrc::setup_async 1",
-                    "BarDataSrc::setup_async 2",
-                    "FooDataSrc::create_data_src_async 1",
-                    "FooDataConn::new 1",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataSrc::create_data_src_async 2",
-                    "BarDataConn::new 2",
-                    "BarDataConn::set_text_async 2",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataConn::set_text_async 2",
-                    "FooDataConn::pre_commit_async 1",
-                    "BarDataConn::pre_commit_async 2",
-                    "FooDataConn::commit_async 1",
-                    "BarDataConn::commit_async 2",
-                    "FooDataConn::post_commit_async 1",
-                    "BarDataConn::post_commit_async 2",
-                    "FooDataConn::close 1",
-                    "FooDataConn::drop 1",
-                    "BarDataConn.text = hello",
-                    "BarDataConn::close 2",
-                    "BarDataConn::drop 2",
-                    "BarDataSrc.text = hello", // because committed
-                    "BarDataSrc::close 2",
-                    "BarDataSrc::drop 2",
-                    "FooDataSrc::close 1",
-                    "FooDataSrc::drop 1",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn test_logic_async() {
-            let logger = Arc::new(Mutex::new(Vec::new()));
-
-            {
-                let mut data = DataHub::new();
-
-                data.uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
-                data.uses("bar", BarDataSrc::new(2, logger.clone()));
-
-                if let Err(_) = data
-                    .txn_async(|data| Box::pin(sample_logic_async(data)))
-                    .await
-                {
-                    panic!();
-                }
-            }
-
-            assert_eq!(
-                *logger.lock().unwrap(),
-                vec![
-                    "FooDataSrc::new 1",
-                    "BarDataSrc::new 2",
-                    "FooDataSrc::setup_async 1",
-                    "BarDataSrc::setup_async 2",
-                    "FooDataSrc::create_data_src_async 1",
-                    "FooDataConn::new 1",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataSrc::create_data_src_async 2",
-                    "BarDataConn::new 2",
-                    "BarDataConn::set_text_async 2",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataConn::set_text_async 2",
-                    "FooDataConn::pre_commit_async 1",
-                    "BarDataConn::pre_commit_async 2",
-                    "FooDataConn::commit_async 1",
-                    "BarDataConn::commit_async 2",
-                    "FooDataConn::post_commit_async 1",
-                    "BarDataConn::post_commit_async 2",
-                    "FooDataConn::close 1",
-                    "FooDataConn::drop 1",
-                    "BarDataConn.text = hello",
-                    "BarDataConn::close 2",
-                    "BarDataConn::drop 2",
-                    "BarDataSrc.text = hello", // because committed
-                    "BarDataSrc::close 2",
-                    "BarDataSrc::drop 2",
-                    "FooDataSrc::close 1",
-                    "FooDataSrc::drop 1",
-                ],
-            );
-        }
-
-        #[tokio::test]
-        async fn test_logic_macro() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {

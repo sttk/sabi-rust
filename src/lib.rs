@@ -53,6 +53,7 @@ pub mod tokio;
 /// Functions are added using the `add` method and are then run concurrently in separate threads.
 /// The `AsyncGroup` ensures that all tasks finish before proceeding,
 /// and can collect any errors that occur.
+/// This structure implements `Send` and `Sync`.
 pub struct AsyncGroup {
     handlers: Vec<(Arc<str>, thread::JoinHandle<errs::Result<()>>)>,
     pub(crate) _name: Arc<str>,
@@ -185,7 +186,7 @@ where
 }
 
 struct DataConnManager {
-    vec: Vec<Option<ptr::NonNull<DataConnContainer>>>,
+    vec: Vec<Option<SendSyncNonNull<DataConnContainer>>>,
     index_map: HashMap<Arc<str>, usize>,
 }
 
@@ -291,6 +292,8 @@ pub struct AutoShutdown {}
 ///
 /// The [`DataHub`] is capable of performing aggregated transactional operations
 /// on all [`DataConn`] objects created from its registered [`DataSrc`] instances.
+///
+/// This structure implements `Send`.
 pub struct DataHub {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,

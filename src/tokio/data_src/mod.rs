@@ -131,7 +131,7 @@ where
 #[allow(clippy::type_complexity)]
 fn create_data_conn_async<'a, S, C>(
     ptr: *const DataSrcContainer,
-) -> Pin<Box<dyn Future<Output = errs::Result<Box<DataConnContainer<C>>>> + 'a>>
+) -> Pin<Box<dyn Future<Output = errs::Result<Box<DataConnContainer<C>>>> + Send + 'a>>
 where
     S: DataSrc<C> + 'a,
     C: DataConn + 'static,
