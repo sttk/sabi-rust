@@ -9,7 +9,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 impl AsyncGroup {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         Self {
             tasks: Vec::new(),
             names: Vec::new(),
@@ -52,6 +53,13 @@ impl AsyncGroup {
 
     pub(crate) async fn join_and_ignore_errors_async(self) {
         let _ = future::join_all(self.tasks).await;
+    }
+
+    #[inline]
+    pub async fn join_async(self) -> Vec<(Arc<str>, errs::Err)> {
+        let mut vec = Vec::new();
+        self.join_and_collect_errors_async(&mut vec).await;
+        vec
     }
 }
 
