@@ -16,7 +16,8 @@ pub enum AsyncGroupError {
 }
 
 impl AsyncGroup {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         Self {
             handlers: Vec::new(),
             _name: "".into(),
@@ -43,7 +44,7 @@ impl AsyncGroup {
         self.handlers.push((self._name.clone(), thread::spawn(f)));
     }
 
-    pub(crate) fn join_and_collect_errors(&mut self, errors: &mut Vec<(Arc<str>, errs::Err)>) {
+    pub(crate) fn join_and_collect_errors(mut self, errors: &mut Vec<(Arc<str>, errs::Err)>) {
         if self.handlers.is_empty() {
             return;
         }
@@ -69,7 +70,7 @@ impl AsyncGroup {
         }
     }
 
-    pub(crate) fn join_and_ignore_errors(&mut self) {
+    pub(crate) fn join_and_ignore_errors(mut self) {
         if self.handlers.is_empty() {
             return;
         }
@@ -79,6 +80,13 @@ impl AsyncGroup {
         for h in vec.into_iter() {
             let _ = h.1.join();
         }
+    }
+
+    #[inline]
+    pub fn join(self) -> Vec<(Arc<str>, errs::Err)> {
+        let mut vec = Vec::new();
+        self.join_and_collect_errors(&mut vec);
+        vec
     }
 }
 
@@ -159,7 +167,7 @@ mod tests_of_async_group {
 
         #[test]
         fn zero() {
-            let mut ag = AsyncGroup::new();
+            let ag = AsyncGroup::new();
 
             let mut err_vec = Vec::new();
             ag.join_and_collect_errors(&mut err_vec);
@@ -422,7 +430,7 @@ mod tests_of_async_group {
 
         #[test]
         fn zero() {
-            let mut ag = AsyncGroup::new();
+            let ag = AsyncGroup::new();
 
             ag.join_and_ignore_errors();
         }
