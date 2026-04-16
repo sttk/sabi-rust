@@ -35,8 +35,6 @@ impl DataAcc for DataHub {
 mod tests_of_data_acc {
     use super::super::{logic, AsyncGroup, DataSrc};
     use super::*;
-    use std::future::Future;
-    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
 
     struct FooDataConn {
