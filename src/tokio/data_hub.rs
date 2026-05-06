@@ -241,22 +241,22 @@ impl DataHub {
     /// A `Result` which is `Ok` containing a mutable reference to the data connection
     /// if found or successfully created, or an `Err` if no suitable data source is found
     /// or connection creation fails.
-    pub async fn get_data_conn_async<C>(&mut self, name: impl AsRef<str>) -> errs::Result<&mut C>
+    pub async fn get_data_conn_async<C>(&mut self, name: &str) -> errs::Result<&mut C>
     where
         C: DataConn + 'static,
     {
-        if let Some(nnptr) = self.data_conn_manager.find_by_name(name.as_ref()) {
+        if let Some(nnptr) = self.data_conn_manager.find_by_name(name) {
             let typed_nnptr = DataConnManager::to_typed_ptr::<C>(&nnptr)?;
             return Ok(unsafe { &mut (*typed_nnptr).data_conn });
         }
 
-        if let Some((local, index)) = self.data_src_map.get(name.as_ref()) {
+        if let Some((local, index)) = self.data_src_map.get(name) {
             let boxed = if *local {
                 self.local_data_src_manager
-                    .create_data_conn_async::<C>(*index, name.as_ref())
+                    .create_data_conn_async::<C>(*index, name)
                     .await?
             } else {
-                create_data_conn_from_global_data_src_async::<C>(*index, name.as_ref()).await?
+                create_data_conn_from_global_data_src_async::<C>(*index, name).await?
             };
 
             let ptr = Box::into_raw(boxed);
@@ -272,7 +272,7 @@ impl DataHub {
         }
 
         Err(errs::Err::new(DataHubError::NoDataSrcToCreateDataConn {
-            name: name.as_ref().into(),
+            name: name.into(),
             data_conn_type: any::type_name::<C>(),
         }))
     }
