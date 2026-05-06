@@ -76,7 +76,7 @@ where
 fn commit_data_conn_async<C>(
     ptr: *const DataConnContainer,
     ag: &mut AsyncGroup,
-) -> Pin<Box<dyn Future<Output = errs::Result<()>> + '_>>
+) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + '_>>
 where
     C: DataConn + 'static,
 {
@@ -87,7 +87,7 @@ where
 fn pre_commit_data_conn_async<C>(
     ptr: *const DataConnContainer,
     ag: &mut AsyncGroup,
-) -> Pin<Box<dyn Future<Output = errs::Result<()>> + '_>>
+) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + '_>>
 where
     C: DataConn + 'static,
 {
@@ -98,7 +98,7 @@ where
 fn post_commit_data_conn_async<C>(
     ptr: *const DataConnContainer,
     ag: &mut AsyncGroup,
-) -> Pin<Box<dyn Future<Output = ()> + '_>>
+) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
 where
     C: DataConn + 'static,
 {
@@ -117,7 +117,7 @@ where
 fn rollback_data_conn_async<C>(
     ptr: *const DataConnContainer,
     ag: &mut AsyncGroup,
-) -> Pin<Box<dyn Future<Output = ()> + '_>>
+) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
 where
     C: DataConn + 'static,
 {
@@ -128,7 +128,7 @@ where
 fn force_back_data_conn_async<C>(
     ptr: *const DataConnContainer,
     ag: &mut AsyncGroup,
-) -> Pin<Box<dyn Future<Output = ()> + '_>>
+) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
 where
     C: DataConn + 'static,
 {

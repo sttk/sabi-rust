@@ -1190,4 +1190,14 @@ mod tests_of_data_hub {
 
         handle.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn txn_async_in_spawn() {
+        let handle = tokio::spawn(async {
+            let mut data = DataHub::new();
+            data.txn_async(_logic!(process_async)).await.unwrap();
+        });
+
+        handle.await.unwrap();
+    }
 }
