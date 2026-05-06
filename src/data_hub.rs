@@ -235,21 +235,21 @@ impl DataHub {
     /// * `errs::Result<&mut C>`: A mutable reference to the [`DataConn`] instance if successful,
     ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
     ///   [`DataConn`] cannot be cast to the specified type `C`.
-    pub fn get_data_conn<C>(&mut self, name: impl AsRef<str>) -> errs::Result<&mut C>
+    pub fn get_data_conn<C>(&mut self, name: &str) -> errs::Result<&mut C>
     where
         C: DataConn + 'static,
     {
-        if let Some(ssnnptr) = self.data_conn_manager.find_by_name(name.as_ref()) {
+        if let Some(ssnnptr) = self.data_conn_manager.find_by_name(name) {
             let typed_ssnnptr = DataConnManager::to_typed_ptr::<C>(&ssnnptr)?;
             return Ok(unsafe { &mut (*typed_ssnnptr).data_conn });
         }
 
-        if let Some((local, index)) = self.data_src_map.get(name.as_ref()) {
+        if let Some((local, index)) = self.data_src_map.get(name) {
             let boxed = if *local {
                 self.local_data_src_manager
-                    .create_data_conn::<C>(*index, name.as_ref())?
+                    .create_data_conn::<C>(*index, name)?
             } else {
-                create_data_conn_from_global_data_src::<C>(*index, name.as_ref())?
+                create_data_conn_from_global_data_src::<C>(*index, name)?
             };
 
             let ptr = Box::into_raw(boxed);
@@ -265,7 +265,7 @@ impl DataHub {
         }
 
         Err(errs::Err::new(DataHubError::NoDataSrcToCreateDataConn {
-            name: name.as_ref().into(),
+            name: name.into(),
             data_conn_type: any::type_name::<C>(),
         }))
     }

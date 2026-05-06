@@ -328,10 +328,7 @@ pub trait DataAcc {
     /// * `errs::Result<&mut C>`: A mutable reference to the [`DataConn`] instance if successful,
     ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
     ///   [`DataConn`] cannot be cast to the specified type `C`.
-    fn get_data_conn<C: DataConn + 'static>(
-        &mut self,
-        name: impl AsRef<str>,
-    ) -> errs::Result<&mut C>;
+    fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> errs::Result<&mut C>;
 }
 
 #[doc(hidden)]

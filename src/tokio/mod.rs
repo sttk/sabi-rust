@@ -96,7 +96,10 @@ pub trait DataConn {
     /// # Returns
     ///
     /// A `Result` indicating success or failure of the commit operation.
-    async fn commit_async(&mut self, ag: &mut AsyncGroup) -> errs::Result<()>;
+    fn commit_async(
+        &mut self,
+        ag: &mut AsyncGroup,
+    ) -> impl Future<Output = errs::Result<()>> + Send;
 
     /// Performs preparatory actions before the main commit process.
     ///
@@ -110,8 +113,11 @@ pub trait DataConn {
     /// # Returns
     ///
     /// A `Result` indicating success or failure of the pre-commit operation.
-    async fn pre_commit_async(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
-        Ok(())
+    fn pre_commit_async(
+        &mut self,
+        ag: &mut AsyncGroup,
+    ) -> impl Future<Output = errs::Result<()>> + Send {
+        async { Ok(()) }
     }
 
     /// Performs actions after the main commit process, only if it succeeds.
@@ -122,7 +128,9 @@ pub trait DataConn {
     /// # Arguments
     ///
     /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to post-commit can be added.
-    async fn post_commit_async(&mut self, ag: &mut AsyncGroup) {}
+    fn post_commit_async(&mut self, ag: &mut AsyncGroup) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 
     /// Indicates whether `force_back_async` should be called instead of `rollback_async`.
     ///
@@ -145,7 +153,7 @@ pub trait DataConn {
     /// # Arguments
     ///
     /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to rollback can be added.
-    async fn rollback_async(&mut self, ag: &mut AsyncGroup);
+    fn rollback_async(&mut self, ag: &mut AsyncGroup) -> impl Future<Output = ()> + Send;
 
     /// Forces the data connection to revert changes that have already been committed.
     ///
@@ -156,7 +164,9 @@ pub trait DataConn {
     /// # Arguments
     ///
     /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to force-back can be added.
-    async fn force_back_async(&mut self, ag: &mut AsyncGroup) {}
+    fn force_back_async(&mut self, ag: &mut AsyncGroup) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 
     /// Closes the data connection, releasing any associated resources.
     ///
@@ -186,29 +196,29 @@ where
     commit_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
-    ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + 'ag>>,
+    ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'ag>>,
 
     pre_commit_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
-    ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + 'ag>>,
+    ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'ag>>,
 
     post_commit_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
-    ) -> Pin<Box<dyn Future<Output = ()> + 'ag>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
 
     should_force_back_fn: fn(*const DataConnContainer) -> bool,
 
     rollback_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
-    ) -> Pin<Box<dyn Future<Output = ()> + 'ag>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
 
     force_back_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
-    ) -> Pin<Box<dyn Future<Output = ()> + 'ag>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
 
     close_fn: fn(*const DataConnContainer),
 
@@ -226,7 +236,6 @@ pub(crate) struct DataConnManager {
 /// Implementors of this trait define how to prepare a data source and how to instantiate
 /// data connections of a specific type `C`.
 #[trait_variant::make(Send)]
-#[allow(async_fn_in_trait)]
 #[allow(unused_variables)] // for rustdoc
 pub trait DataSrc<C>
 where
@@ -326,7 +335,6 @@ pub struct DataHub {
 ///
 /// This trait abstracts the mechanism for retrieving data connections, allowing
 /// different implementations (e.g., `DataHub`) to provide connections.
-#[allow(async_fn_in_trait)]
 pub trait DataAcc {
     /// Asynchronously retrieves a data connection of a specific type.
     ///
@@ -342,10 +350,11 @@ pub trait DataAcc {
     ///
     /// A `Result` which is `Ok` containing a mutable reference to the data connection
     /// if found, or an `Err` if the connection cannot be retrieved or cast.
-    async fn get_data_conn_async<C: DataConn + 'static>(
+    #[allow(async_fn_in_trait)]
+    fn get_data_conn_async<C: DataConn + 'static>(
         &mut self,
-        name: impl AsRef<str>,
-    ) -> errs::Result<&mut C>;
+        name: &str,
+    ) -> impl Future<Output = errs::Result<&mut C>> + Send;
 }
 
 #[doc(hidden)]

@@ -23,7 +23,7 @@ impl DataAcc for DataHub {
     /// A `Result` which is `Ok` containing a mutable reference to the data connection
     /// if found and castable to type `C`, or an `Err` if the connection is not found
     /// or cannot be cast.
-    async fn get_data_conn_async<C>(&mut self, name: impl AsRef<str>) -> errs::Result<&mut C>
+    async fn get_data_conn_async<C>(&mut self, name: &str) -> errs::Result<&mut C>
     where
         C: DataConn + 'static,
     {

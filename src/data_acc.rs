@@ -5,10 +5,7 @@
 use crate::{DataAcc, DataConn, DataHub};
 
 impl DataAcc for DataHub {
-    fn get_data_conn<C: DataConn + 'static>(
-        &mut self,
-        name: impl AsRef<str>,
-    ) -> errs::Result<&mut C> {
+    fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> errs::Result<&mut C> {
         DataHub::get_data_conn(self, name)
     }
 }
