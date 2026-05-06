@@ -1,40 +1,38 @@
 # [sabi][repo-url] [![crates.io][cratesio-img]][cratesio-url] [![doc.rs][docrs-img]][docrs-url] [![CI Status][ci-img]][ci-url] [![MIT License][mit-img]][mit-url]
 
-A small framework for Rust designed to separate logic from data access.
+"sabi" is a lightweight architectural framework for Rust.
 
-It achieves this by connecting the logic layer and the data access layer via traits, similar to traditional
-Dependency Injection (DI).
-This reduces the dependency between the two, allowing them to be implemented and tested independently.
+It is designed to rigorously and thoroughly apply the **Interface Segregation Principle (ISP)** and the **Dependency Inversion Principle (DIP)** of **SOLID** principles at the individual use-case (logic) level, ensuring that dependencies are always defined from the perspective of the business logic. Consequently, it naturally unlocks the modern code properties advocated by **CUPID**—specifically, **Composability**, the **Unix philosophy**, and **Domain-based design**.
 
-However, traditional DI often presented an inconvenience in how methods were grouped.
-Typically, methods were grouped by external data service like a database or by database table.
-This meant the logic layer had to depend on units defined by the data access layer's concerns.
-Furthermore, such traits often contained more methods than a specific piece of logic needed, making it
-difficult to tell which methods were actually used in the logic without tracing the code.
+### SOLID Principles
 
-This crate addresses that inconvenience.
-The data access trait used by a logic function is unique to that logic, passed as an argument
-to the logic function.
-This trait declares all the data access methods that specific logic will use.
+#### I: Interface Segregation Principle (ISP)
 
-On the data access layer side, implementations can be provided in the form of default methods
-on `DataAcc` derived traits.
-This allows for implementation in any arbitrary unit — whether by external data service, by table,
-or by functional concern.
+By defining the absolute minimal trait for each specific use-case, the business logic never depends on unnecessary methods. Interfaces are segregated into the smallest possible units, keeping dependencies strictly at a minimum.
 
-This is achieved through the following mechanism:
-* A `DataHub` struct aggregates all data access methods.
-  `DataAcc` derived traits are attached to `DataHub`, giving `DataHub` the implementations of
-  the data access methods.
-* Additionally, the data access traits that logic functions take as arguments are also attached
-  to `DataHub`. But that alone wouldn't work in Rust because methods aren't overridden across traits,
-  even if they have the same name and arguments, leaving the logic-facing data access trait methods
-  without implementations.
-* This is where the `override_macro` crate comes in: it adds the method implementations of the
-  logic-facing data access traits by calling the corresponding methods from the `DataAcc` derived traits.
-  (While it's possible to implement this by hand without `override_macro` crate, it becomes very
-  cumbersome for a large number of methods.)
+#### D: Dependency Inversion Principle (DIP)
 
+Dependent interfaces (traits) are defined directly on the logic side, and the implementation side adapts to satisfy them. This ensures that the direction of dependency always flows from the business logic toward the abstraction, keeping the design entirely independent of data access details.
+
+### CUPID Properties
+
+#### C: Composable
+
+Small traits segregated per use-case function as completely independent units of dependency. These are then combined via `DataHub` to form implementations that carry only the required capabilities. As a result, the framework delivers a structure where the coupling of logic and implementations can be flexibly modified and reused.
+
+#### U: Unix Philosophy
+
+Each piece of logic concentrates on a single purpose, interacting with the outside world exclusively through minimal interfaces. This naturally fosters a Unix-like design philosophy: "Build small pieces, and connect them."
+
+#### D: Domain-based
+
+Interfaces are defined based on the operations required by the use-case (domain logic) rather than the underlying data structures. This firmly anchors the core design within the domain, forcing data access and technical details to adapt accordingly. Ultimately, the intent of the business logic is mirrored directly within the structure of the codebase.
+
+### Contrast with Traditional Architecture
+
+In traditional frameworks and architectures, interfaces are typically designed around components, such as repositories or services. Consequently, interfaces shared across multiple use-cases tend to become bloated. This often forces business logic to depend on unnecessary methods, or causes the abstractions themselves to be heavily dragged down by underlying data structures.
+
+In contrast, sabi defines interfaces on a per-use-case (logic) basis rather than a per-component basis. This ensures that each piece of logic depends exclusively on the operations it actually requires, keeping dependencies explicit and tightly localized. Furthermore, the implementations of these highly segregated interfaces are seamlessly consolidated using `DataHub` and macros (`override_macro`). This allows developers to sustain a fine-grained, decoupled design without incurring prohibitive maintenance costs.
 
 ## Installation
 
