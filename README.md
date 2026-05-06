@@ -42,14 +42,14 @@ In Cargo.toml, write this crate as a dependency:
 
 ```toml
 [dependencies]
-sabi-rust = "0.7.2" # For synchronous APIs
+sabi-rust = "0.7.3" # For synchronous APIs
 ```
 
 For asynchronous APIs with `tokio` runtime, enable the `tokio` feature:
 
 ```toml
 [dependencies]
-sabi-rust = { version = "0.7.2", features = ["tokio"] }
+sabi-rust = { version = "0.7.3", features = ["tokio"] }
 tokio = { version = "1", features = ["full"] } # Required for tokio runtime
 ```
 
@@ -476,23 +476,23 @@ This crate supports Rust 1.87.0 or later.
 % ./build.sh msrv
   [Meta]   cargo-msrv 0.18.4
 
-Compatibility Check #1: Rust 1.75.0
+Compatibility Check #1: Rust 1.76.0
   [FAIL]   Is incompatible
 
-Compatibility Check #2: Rust 1.85.1
+Compatibility Check #2: Rust 1.86.0
   [FAIL]   Is incompatible
 
-Compatibility Check #3: Rust 1.90.0
+Compatibility Check #3: Rust 1.91.1
   [OK]     Is compatible
 
-Compatibility Check #4: Rust 1.87.0
+Compatibility Check #4: Rust 1.88.0
   [OK]     Is compatible
 
-Compatibility Check #5: Rust 1.86.0
-  [FAIL]   Is incompatible
+Compatibility Check #5: Rust 1.87.0
+  [OK]     Is compatible
 
 Result:
-   Considered (min … max):   Rust 1.56.1 … Rust 1.94.1
+   Considered (min … max):   Rust 1.56.1 … Rust 1.95.0
    Search method:            bisect
    MSRV:                     1.87.0
    Target:                   x86_64-apple-darwin
@@ -507,7 +507,7 @@ See the file LICENSE in this distribution for more details.
 
 
 [repo-url]: https://github.com/sttk/sabi-rust
-[cratesio-img]: https://img.shields.io/badge/crates.io-ver.0.7.2-fc8d62?logo=rust
+[cratesio-img]: https://img.shields.io/badge/crates.io-ver.0.7.3-fc8d62?logo=rust
 [cratesio-url]: https://crates.io/crates/sabi-rust
 [docrs-img]: https://img.shields.io/badge/doc.rs-sabi_rust-66c2a5?logo=docs.rs
 [docrs-url]: https://docs.rs/sabi-rust
