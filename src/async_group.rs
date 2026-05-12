@@ -5,7 +5,7 @@
 use crate::AsyncGroup;
 
 use std::sync::Arc;
-use std::{fmt, mem, thread};
+use std::{mem, thread};
 
 /// The enum type representing the reasons for errors that can occur within an [`AsyncGroup`].
 #[derive(Debug)]
@@ -59,9 +59,12 @@ impl AsyncGroup {
                     }
                 }
                 Err(e) => {
-                    let s = match e.downcast_ref::<Box<dyn fmt::Debug>>() {
-                        Some(d) => format!("{d:?}"),
-                        None => "".to_string(),
+                    let s = if let Some(s) = e.downcast_ref::<&'static str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic payload".to_string()
                     };
                     let e = errs::Err::new(AsyncGroupError::ThreadPanicked(s));
                     errors.push((h.0.clone(), e));
