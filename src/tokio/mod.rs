@@ -73,9 +73,9 @@ pub use crate::_uses_for_async as uses;
 /// and their results (or errors) collected.
 #[allow(clippy::type_complexity)]
 pub struct AsyncGroup {
-    names: Vec<Arc<str>>,
+    indexes: Vec<usize>,
     tasks: Vec<Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'static>>>,
-    pub(crate) _name: Arc<str>,
+    _index: usize,
 }
 
 /// A trait for data connection implementations, providing methods for transaction management.

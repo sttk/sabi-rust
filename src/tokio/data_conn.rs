@@ -195,6 +195,23 @@ impl DataConnManager {
         None
     }
 
+    fn index_errors_to_named_errors(
+        &self,
+        indexed_errors: Vec<(usize, errs::Err)>,
+    ) -> Vec<(Arc<str>, errs::Err)> {
+        let mut ret_vec = Vec::new();
+
+        for (i, err) in indexed_errors.into_iter() {
+            if let Some(ssnnptr) = &self.vec[i] {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let name = unsafe { (*ptr).name.clone() };
+                ret_vec.push((name, err));
+            }
+        }
+
+        ret_vec
+    }
+
     pub(crate) fn to_typed_ptr<C>(
         ssnnptr: &SendSyncNonNull<DataConnContainer>,
     ) -> errs::Result<*mut DataConnContainer<C>>
@@ -218,49 +235,49 @@ impl DataConnManager {
     }
 
     pub(crate) async fn commit_async(&self) -> errs::Result<()> {
-        let mut errors = Vec::new();
+        let mut indexed_errors = Vec::new();
 
         let mut ag = AsyncGroup::new();
-        for ssnnptr in self.vec.iter().flatten() {
+        for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let pre_commit_fn = unsafe { (*ptr).pre_commit_fn };
-            ag._name = unsafe { (*ptr).name.clone() };
+            ag._index = i;
             if let Err(err) = pre_commit_fn(ptr, &mut ag).await {
-                errors.push((ag._name.clone(), err));
+                indexed_errors.push((ag._index, err));
                 break;
             }
         }
-        ag.join_and_collect_errors_async(&mut errors).await;
+        ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
-        if !errors.is_empty() {
+        if !indexed_errors.is_empty() {
             return Err(errs::Err::new(DataConnError::FailToPreCommitDataConn {
-                errors,
+                errors: self.index_errors_to_named_errors(indexed_errors),
             }));
         }
 
         let mut ag = AsyncGroup::new();
-        for ssnnptr in self.vec.iter().flatten() {
+        for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let commit_fn = unsafe { (*ptr).commit_fn };
-            ag._name = unsafe { (*ptr).name.clone() };
+            ag._index = i;
             if let Err(err) = commit_fn(ptr, &mut ag).await {
-                errors.push((ag._name.clone(), err));
+                indexed_errors.push((ag._index, err));
                 break;
             }
         }
-        ag.join_and_collect_errors_async(&mut errors).await;
+        ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
-        if !errors.is_empty() {
+        if !indexed_errors.is_empty() {
             return Err(errs::Err::new(DataConnError::FailToCommitDataConn {
-                errors,
+                errors: self.index_errors_to_named_errors(indexed_errors),
             }));
         }
 
         let mut ag = AsyncGroup::new();
-        for ssnnptr in self.vec.iter().flatten() {
+        for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let post_commit_fn = unsafe { (*ptr).post_commit_fn };
-            ag._name = unsafe { (*ptr).name.clone() };
+            ag._index = i;
             post_commit_fn(ptr, &mut ag).await;
         }
         ag.join_and_ignore_errors_async().await;
@@ -270,12 +287,12 @@ impl DataConnManager {
 
     pub(crate) async fn rollback_async(&mut self) {
         let mut ag = AsyncGroup::new();
-        for ssnnptr in self.vec.iter().flatten() {
+        for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let should_force_back_fn = unsafe { (*ptr).should_force_back_fn };
             let force_back_fn = unsafe { (*ptr).force_back_fn };
             let rollback_fn = unsafe { (*ptr).rollback_fn };
-            ag._name = unsafe { (*ptr).name.clone() };
+            ag._index = i;
 
             if should_force_back_fn(ptr) {
                 force_back_fn(ptr, &mut ag).await;

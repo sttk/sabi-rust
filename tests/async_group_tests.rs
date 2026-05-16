@@ -28,7 +28,7 @@ mod test_on_std {
         let vec = ag.join();
 
         assert_eq!(vec.len(), 1);
-        assert_eq!(vec[0].0, "".into());
+        assert_eq!(vec[0].0, 0);
         assert_eq!(*vec[0].1.reason::<&str>().unwrap(), "bad");
     }
 }
@@ -66,7 +66,7 @@ mod test_on_tokio {
         let vec = ag.join_async().await;
 
         assert_eq!(vec.len(), 1);
-        assert_eq!(vec[0].0, "".into());
+        assert_eq!(vec[0].0, 0);
         assert_eq!(*vec[0].1.reason::<&str>().unwrap(), "bad");
     }
 }
