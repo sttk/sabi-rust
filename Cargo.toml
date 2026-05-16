@@ -16,7 +16,7 @@ categories = ["rust-patterns", "development-tools", "asynchronous"]
 name = "sabi"
 
 [dependencies]
-errs = "0.8"
+errs = "0.9"
 setup_read_cleanup = "0.8"
 inventory = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"], optional = true }
