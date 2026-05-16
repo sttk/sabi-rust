@@ -55,8 +55,8 @@ pub mod tokio;
 /// and can collect any errors that occur.
 /// This structure implements `Send` and `Sync`.
 pub struct AsyncGroup {
-    handlers: Vec<(Arc<str>, thread::JoinHandle<errs::Result<()>>)>,
-    pub(crate) _name: Arc<str>,
+    handlers: Vec<(usize, thread::JoinHandle<errs::Result<()>>)>,
+    _index: usize,
 }
 
 /// The trait that abstracts a connection per session to an external data service,

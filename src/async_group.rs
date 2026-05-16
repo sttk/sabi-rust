@@ -4,7 +4,6 @@
 
 use crate::AsyncGroup;
 
-use std::sync::Arc;
 use std::{mem, thread};
 
 /// The enum type representing the reasons for errors that can occur within an [`AsyncGroup`].
@@ -20,7 +19,7 @@ impl AsyncGroup {
     pub fn new() -> Self {
         Self {
             handlers: Vec::new(),
-            _name: "".into(),
+            _index: 0,
         }
     }
 
@@ -41,10 +40,10 @@ impl AsyncGroup {
     where
         F: FnOnce() -> errs::Result<()> + Send + 'static,
     {
-        self.handlers.push((self._name.clone(), thread::spawn(f)));
+        self.handlers.push((self._index, thread::spawn(f)));
     }
 
-    pub(crate) fn join_and_collect_errors(mut self, errors: &mut Vec<(Arc<str>, errs::Err)>) {
+    pub(crate) fn join_and_collect_errors(mut self, errors: &mut Vec<(usize, errs::Err)>) {
         if self.handlers.is_empty() {
             return;
         }
@@ -55,7 +54,7 @@ impl AsyncGroup {
             match h.1.join() {
                 Ok(r) => {
                     if let Err(e) = r {
-                        errors.push((h.0.clone(), e));
+                        errors.push((h.0, e));
                     }
                 }
                 Err(e) => {
@@ -67,7 +66,7 @@ impl AsyncGroup {
                         "Unknown panic payload".to_string()
                     };
                     let e = errs::Err::new(AsyncGroupError::ThreadPanicked(s));
-                    errors.push((h.0.clone(), e));
+                    errors.push((h.0, e));
                 }
             }
         }
@@ -86,7 +85,7 @@ impl AsyncGroup {
     }
 
     #[inline]
-    pub fn join(self) -> Vec<(Arc<str>, errs::Err)> {
+    pub fn join(self) -> Vec<(usize, errs::Err)> {
         let mut vec = Vec::new();
         self.join_and_collect_errors(&mut vec);
         vec
@@ -185,7 +184,7 @@ mod tests_of_async_group {
             let struct_a = MyStruct::new("a".to_string(), false);
             assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            ag._name = "foo".into();
+            ag._index = 12;
             struct_a.process(&mut ag);
 
             let mut errors = Vec::new();
@@ -202,7 +201,7 @@ mod tests_of_async_group {
             let struct_a = MyStruct::new("a".to_string(), true);
             assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            ag._name = "foo".into();
+            ag._index = 12;
             struct_a.process(&mut ag);
 
             let mut errors = Vec::new();
@@ -211,7 +210,7 @@ mod tests_of_async_group {
             assert_eq!(errors.len(), 1);
             assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            assert_eq!(errors[0].0, "foo".into());
+            assert_eq!(errors[0].0, 12);
             #[cfg(unix)]
             assert_eq!(
                 format!("{:?}", errors[0].1),
@@ -237,13 +236,13 @@ mod tests_of_async_group {
             let struct_c = MyStruct::new("c".to_string(), false);
             assert_eq!(*struct_c.string.lock().unwrap(), "c".to_string());
 
-            ag._name = "foo".into();
+            ag._index = 12;
             struct_a.process(&mut ag);
 
-            ag._name = "bar".into();
+            ag._index = 34;
             struct_b.process(&mut ag);
 
-            ag._name = "baz".into();
+            ag._index = 56;
             struct_c.process(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -269,20 +268,20 @@ mod tests_of_async_group {
             let struct_c = MyStruct::new("c".to_string(), false);
             assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag._name = "foo".into();
+            ag._index = 12;
             struct_a.process(&mut ag);
 
-            ag._name = "bar".into();
+            ag._index = 34;
             struct_b.process(&mut ag);
 
-            ag._name = "baz".into();
+            ag._index = 56;
             struct_c.process(&mut ag);
 
             let mut err_vec = Vec::new();
             ag.join_and_collect_errors(&mut err_vec);
 
             assert_eq!(err_vec.len(), 1);
-            assert_eq!(err_vec[0].0, "bar".into());
+            assert_eq!(err_vec[0].0, 34);
             #[cfg(unix)]
             assert_eq!(
                 format!("{:?}", err_vec[0].1),
@@ -312,13 +311,13 @@ mod tests_of_async_group {
             let struct_c = MyStruct::new("c".to_string(), true);
             assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag._name = "foo".into();
+            ag._index = 12;
             struct_a.process(&mut ag);
 
-            ag._name = "bar".into();
+            ag._index = 34;
             struct_b.process(&mut ag);
 
-            ag._name = "baz".into();
+            ag._index = 56;
             struct_c.process(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -326,9 +325,9 @@ mod tests_of_async_group {
 
             assert_eq!(err_vec.len(), 3);
 
-            assert_eq!(err_vec[0].0, "foo".into());
-            assert_eq!(err_vec[1].0, "bar".into());
-            assert_eq!(err_vec[2].0, "baz".into());
+            assert_eq!(err_vec[0].0, 12);
+            assert_eq!(err_vec[1].0, 34);
+            assert_eq!(err_vec[2].0, 56);
 
             #[cfg(unix)]
             assert_eq!(
@@ -373,7 +372,7 @@ mod tests_of_async_group {
             let struct_d = MyStruct::new("d".to_string(), false);
             assert_eq!(*struct_d.string.lock().unwrap(), "d");
 
-            ag._name = "foo".into();
+            ag._index = 123;
             struct_d.process(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -391,7 +390,7 @@ mod tests_of_async_group {
             let struct_d = MyStruct::new("d".to_string(), true);
             assert_eq!(*struct_d.string.lock().unwrap(), "d");
 
-            ag._name = "foo".into();
+            ag._index = 123;
             struct_d.process_multiple(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -399,8 +398,8 @@ mod tests_of_async_group {
 
             assert_eq!(err_vec.len(), 2);
 
-            assert_eq!(err_vec[0].0, "foo".into());
-            assert_eq!(err_vec[1].0, "foo".into());
+            assert_eq!(err_vec[0].0, 123);
+            assert_eq!(err_vec[1].0, 123);
 
             #[cfg(unix)]
             assert_eq!(
@@ -445,7 +444,7 @@ mod tests_of_async_group {
             let struct_a = MyStruct::new("a".to_string(), false);
             assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            ag._name = "foo".into();
+            ag._index = 123;
             struct_a.process(&mut ag);
 
             ag.join_and_ignore_errors();
@@ -459,7 +458,7 @@ mod tests_of_async_group {
             let struct_a = MyStruct::new("a".to_string(), true);
             assert_eq!(*struct_a.string.lock().unwrap(), "a");
 
-            ag._name = "foo".into();
+            ag._index = 123;
             struct_a.process(&mut ag);
 
             ag.join_and_ignore_errors();
@@ -479,13 +478,13 @@ mod tests_of_async_group {
             let struct_c = MyStruct::new("c".to_string(), false);
             assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag._name = "foo".into();
+            ag._index = 123;
             struct_a.process(&mut ag);
 
-            ag._name = "bar".into();
+            ag._index = 456;
             struct_b.process(&mut ag);
 
-            ag._name = "baz".into();
+            ag._index = 789;
             struct_c.process(&mut ag);
 
             ag.join_and_ignore_errors();
@@ -508,13 +507,13 @@ mod tests_of_async_group {
             let struct_c = MyStruct::new("c".to_string(), false);
             assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag._name = "foo".into();
+            ag._index = 123;
             struct_a.process(&mut ag);
 
-            ag._name = "bar".into();
+            ag._index = 456;
             struct_b.process(&mut ag);
 
-            ag._name = "baz".into();
+            ag._index = 789;
             struct_c.process(&mut ag);
 
             ag.join_and_ignore_errors();
@@ -537,13 +536,13 @@ mod tests_of_async_group {
             let struct_c = MyStruct::new("c".to_string(), true);
             assert_eq!(*struct_c.string.lock().unwrap(), "c");
 
-            ag._name = "foo".into();
+            ag._index = 123;
             struct_a.process(&mut ag);
 
-            ag._name = "bar".into();
+            ag._index = 456;
             struct_b.process(&mut ag);
 
-            ag._name = "baz".into();
+            ag._index = 789;
             struct_c.process(&mut ag);
 
             ag.join_and_ignore_errors();

@@ -223,23 +223,32 @@ impl DataSrcManager {
             return;
         }
 
+        let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
+
         let mut n_done = 0;
         let mut ag = AsyncGroup::new();
-        for ssnnptr in self.vec_unready.iter() {
+        for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
             n_done += 1;
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let setup_fn = unsafe { (*ptr).setup_fn };
-            ag._name = unsafe { (*ptr).name.clone() };
+            ag._index = i;
             if let Err(err) = setup_fn(ptr, &mut ag).await {
-                errors.push((ag._name.clone(), err));
+                indexed_errors.push((ag._index, err));
                 break;
             }
         }
-        ag.join_and_collect_errors_async(errors).await;
+        ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
-        if errors.is_empty() {
+        if indexed_errors.is_empty() {
             self.vec_ready.append(&mut self.vec_unready);
         } else {
+            for (i, err) in indexed_errors.into_iter() {
+                let ssnnptr = &self.vec_unready[i];
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let name = unsafe { (*ptr).name.clone() };
+                errors.push((name, err));
+            }
+
             for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let close_fn = unsafe { (*ptr).close_fn };
@@ -277,27 +286,37 @@ impl DataSrcManager {
             }
         }
 
+        let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
+
         let mut n_done = 0;
         let mut ag = AsyncGroup::new();
-        for ssnnptr_opt in ordered_vec.iter() {
+        for (i, ssnnptr_opt) in ordered_vec.iter().enumerate() {
             n_done += 1;
             if let Some(ssnnptr) = ssnnptr_opt {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let setup_fn = unsafe { (*ptr).setup_fn };
-                ag._name = unsafe { (*ptr).name.clone() };
+                ag._index = i;
                 if let Err(err) = setup_fn(ptr, &mut ag).await {
-                    errors.push((ag._name.clone(), err));
+                    indexed_errors.push((ag._index, err));
                     break;
                 }
             }
         }
-        ag.join_and_collect_errors_async(errors).await;
+        ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
-        if errors.is_empty() {
+        if indexed_errors.is_empty() {
             for ssnnptr in ordered_vec.into_iter().flatten() {
                 self.vec_ready.push(ssnnptr);
             }
         } else {
+            for (i, err) in indexed_errors.into_iter() {
+                if let Some(ssnnptr) = &ordered_vec[i] {
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let name = unsafe { (*ptr).name.clone() };
+                    errors.push((name, err));
+                }
+            }
+
             for ssnnptr in ordered_vec[0..n_done].iter().flatten().rev() {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let close_fn = unsafe { (*ptr).close_fn };
