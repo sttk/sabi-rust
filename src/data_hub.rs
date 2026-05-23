@@ -29,6 +29,7 @@ pub enum DataHubError {
     NoDataSrcToCreateDataConn {
         /// The name of the data source that could not be found.
         name: Arc<str>,
+
         /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
     },
@@ -77,7 +78,6 @@ impl DataHub {
         }
     }
 
-    #[allow(rustdoc::broken_intra_doc_links)]
     /// Registers a session-local data source with this [`DataHub`] instance.
     ///
     /// This method is similar to the global [`uses!`] macro but registers a data source
@@ -91,6 +91,7 @@ impl DataHub {
     ///
     /// * `name`: The unique name for the local data source.
     /// * `ds`: The [`DataSrc`] instance to register.
+    #[allow(rustdoc::broken_intra_doc_links)]
     pub fn uses<S, C>(&mut self, name: impl Into<Arc<str>>, ds: S)
     where
         S: DataSrc<C>,
@@ -137,16 +138,6 @@ impl DataHub {
     }
 
     #[inline]
-    fn commit(&mut self) -> errs::Result<()> {
-        self.data_conn_manager.commit()
-    }
-
-    #[inline]
-    fn rollback(&mut self) {
-        self.data_conn_manager.rollback()
-    }
-
-    #[inline]
     fn end(&mut self) {
         self.data_conn_manager.close();
         self.fixed = false;
@@ -179,14 +170,14 @@ impl DataHub {
         r
     }
 
-    /// Executes a given logic function within a transaction.
+    /// Executes a given logic function within a managed transaction.
     ///
-    /// This method first sets up local data sources, then runs the provided closure.
-    /// If the closure returns `Ok`, it attempts to commit all changes. If the commit fails,
-    /// or if the logic function itself returns an [`errs::Err`], a rollback operation
-    /// is performed. After succeeding `pre_commit` and `commit` methods of all [`DataConn`]s,
-    /// `post_commit` methods of all [`DataConn`]s are executed.
-    /// Finally, it cleans up the [`DataHub`]'s session resources.
+    /// This method starts by setting up local data sources, runs the provided closure,
+    /// and then attempts to commit all open data connections in the session.
+    ///
+    /// If any error occurs during the execution of the closure or during the commit phase,
+    /// it initiates a rollback on all data connections and reports the transaction failure details.
+    /// Finally, it cleans up session resources.
     ///
     /// # Parameters
     ///
@@ -195,8 +186,8 @@ impl DataHub {
     ///
     /// # Returns
     ///
-    /// * `errs::Result<()>`: The final result of the transaction (success or failure of
-    ///   logic/commit), or an error if executing `logic_fn` fails.
+    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
+    ///   or an [`errs::Err`] if any phase fails.
     pub fn txn<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
         F: FnMut(&mut DataHub) -> errs::Result<()>,
@@ -205,12 +196,16 @@ impl DataHub {
         if r.is_ok() {
             r = logic_fn(self);
         }
+
+        let mut reports = self.data_conn_manager.new_failure_reports();
+
         if r.is_ok() {
-            r = self.commit();
+            r = self.data_conn_manager.commit(&mut reports);
         }
         if r.is_err() {
-            self.rollback();
+            self.data_conn_manager.rollback(reports);
         }
+
         self.end();
         r
     }
@@ -274,7 +269,7 @@ impl DataHub {
 #[cfg(test)]
 mod tests_of_data_hub {
     use super::*;
-    use crate::AsyncGroup;
+    use crate::{AsyncGroup, TxnFailureReport};
     use std::sync::Mutex;
 
     #[derive(Clone, Copy, PartialEq)]
@@ -346,23 +341,28 @@ mod tests_of_data_hub {
                 Ok(())
             }
         }
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) {
+        fn is_committed(&self) -> bool {
+            false
+        }
+        fn post_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             self.logger
                 .lock()
                 .unwrap()
                 .push(format!("MyDataConn::post_commit {}", self.id));
+            Ok(())
         }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {
+        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             self.logger
                 .lock()
                 .unwrap()
                 .push(format!("MyDataConn::rollback {}", self.id));
+            Ok(())
         }
-        fn force_back(&mut self, _ag: &mut AsyncGroup) {
+        fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, _reports: &[TxnFailureReport]) {
             self.logger
                 .lock()
                 .unwrap()
-                .push(format!("MyDataConn::force_back {}", self.id));
+                .push(format!("MyDataConn::on_txn_failure {}", self.id));
         }
         fn close(&mut self) {
             self.logger
@@ -1004,6 +1004,8 @@ mod tests_of_data_hub {
                 "MyDataConn::new 2",
                 "MyDataConn::rollback 1",
                 "MyDataConn::rollback 2",
+                "MyDataConn::on_txn_failure 1",
+                "MyDataConn::on_txn_failure 2",
                 "MyDataConn::close 1",
                 "MyDataConn::drop 1",
                 "MyDataConn::close 2",

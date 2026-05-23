@@ -2,17 +2,25 @@
 mod uses_and_setup_in_func_tests {
     use std::sync::{Arc, Mutex};
 
-    struct MyDataConn {}
+    struct MyDataConn {
+        committed: bool,
+    }
     impl MyDataConn {
         fn new() -> Self {
-            Self {}
+            Self { committed: false }
         }
     }
     impl sabi::DataConn for MyDataConn {
         fn commit(&mut self, _ag: &mut sabi::AsyncGroup) -> errs::Result<()> {
+            self.committed = true;
             Ok(())
         }
-        fn rollback(&mut self, _ag: &mut sabi::AsyncGroup) {}
+        fn is_committed(&self) -> bool {
+            self.committed
+        }
+        fn rollback(&mut self, _ag: &mut sabi::AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
         fn close(&mut self) {}
     }
 

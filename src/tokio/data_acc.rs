@@ -10,7 +10,7 @@ impl DataAcc for DataHub {
     /// This asynchronous method attempts to get a data connection identified by `name`.
     /// The connection type `C` must implement the `DataConn` trait and have a `'static` lifetime.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `name` - An identifier for the data connection to retrieve.
     ///
@@ -35,6 +35,7 @@ impl DataAcc for DataHub {
 mod tests_of_data_acc {
     use super::super::{logic, AsyncGroup, DataSrc};
     use super::*;
+    use crate::TxnFailureReport;
     use std::sync::{Arc, Mutex};
 
     struct FooDataConn {
@@ -80,18 +81,24 @@ mod tests_of_data_acc {
             logger.push(format!("FooDataConn::pre_commit_async {}", self.id));
             Ok(())
         }
-        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("FooDataConn::post_commit_async {}", self.id));
+            Ok(())
         }
-        fn should_force_back(&self) -> bool {
+        fn is_committed(&self) -> bool {
             self.committed
         }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("FooDataConn::rollback_async {}", self.id));
+            Ok(())
         }
-        async fn force_back_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn on_txn_failure(
+            &mut self,
+            _ag: &mut AsyncGroup,
+            _reports: Arc<[TxnFailureReport]>,
+        ) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("FooDataConn::force_back_async {}", self.id));
         }
@@ -217,18 +224,24 @@ mod tests_of_data_acc {
             logger.push(format!("BarDataConn::pre_commit_async {}", self.id));
             Ok(())
         }
-        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("BarDataConn::post_commit_async {}", self.id));
+            Ok(())
         }
-        fn should_force_back(&self) -> bool {
+        fn is_committed(&self) -> bool {
             self.committed
         }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("BarDataConn::rollback_async {}", self.id));
+            Ok(())
         }
-        async fn force_back_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn on_txn_failure(
+            &mut self,
+            _ag: &mut AsyncGroup,
+            _reports: Arc<[TxnFailureReport]>,
+        ) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("BarDataConn::force_back_async {}", self.id));
         }

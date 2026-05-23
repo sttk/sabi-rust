@@ -26,6 +26,7 @@ pub enum DataHubError {
     NoDataSrcToCreateDataConn {
         /// The name of the data connection that could not be created.
         name: Arc<str>,
+
         /// The string representation of the data connection type that was requested.
         data_conn_type: &'static str,
     },
@@ -55,9 +56,10 @@ impl DataHub {
     /// not specified in `names` will be committed after the specified ones, in an undefined order.
     /// Global data sources are copied into the `data_src_map`.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
-    /// * `names` - An array of string slices specifying the desired commit order by data connection name.
+    /// * `names` - An array of string slices specifying the desired commit order by data connection
+    ///   name.
     pub fn with_commit_order(names: &[&str]) -> Self {
         let mut data_src_map = HashMap::new();
         copy_global_data_srcs_to_map(&mut data_src_map);
@@ -75,11 +77,11 @@ impl DataHub {
     /// This method allows adding a custom data source which can provide data connections.
     /// Data sources can only be added before `run_async` or `txn_async` are called.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `name` - The name to associate with this data source.
-    /// * `ds` - The data source instance, which must implement `DataSrc` and have a `'static` lifetime.
-    ///   If this `DataHub` is moved between threads, `ds` must also implement `Send`.
+    /// * `ds` - The data source instance, which must implement `DataSrc` and have a `'static`
+    ///   lifetime. If this `DataHub` is moved between threads, `ds` must also implement `Send`.
     ///
     /// # Type Parameters
     ///
@@ -101,7 +103,7 @@ impl DataHub {
     /// This removes a data source previously added with `uses`. Data sources can only be
     /// removed before `run_async` or `txn_async` are called.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `name` - The name of the data source to remove.
     pub fn disuses(&mut self, name: impl AsRef<str>) {
@@ -131,16 +133,6 @@ impl DataHub {
     }
 
     #[inline]
-    async fn commit_async(&mut self) -> errs::Result<()> {
-        self.data_conn_manager.commit_async().await
-    }
-
-    #[inline]
-    async fn rollback_async(&mut self) {
-        self.data_conn_manager.rollback_async().await
-    }
-
-    #[inline]
     fn end(&mut self) {
         self.data_conn_manager.close();
         self.fixed = false;
@@ -152,7 +144,7 @@ impl DataHub {
     /// cleans up all data connections and sources. It does *not* automatically commit
     /// or rollback any transactions.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `logic_fn` - An asynchronous function that takes a mutable reference to `DataHub`
     ///                and returns a `Result`. This function contains the application's logic.
@@ -180,19 +172,21 @@ impl DataHub {
         r
     }
 
-    /// Executes an asynchronous transactional logic function with the `DataHub`, managing
-    /// setup, commit, and rollback for data connections.
+    /// Executes a given asynchronous logic function within a managed transaction.
     ///
-    /// This method sets up local data sources, runs the provided `logic_fn`. If the logic
-    /// function succeeds, it attempts to commit all created data connections. If either
-    /// the logic function or the commit fails, it rolls back all data connections.
-    /// Finally, it cleans up all data connections and sources.
+    /// This method starts by asynchronously setting up local data sources, runs the provided closure,
+    /// and then attempts to asynchronously commit all open data connections in the session.
     ///
-    /// # Arguments
+    /// If any error occurs during the execution of the closure or during the commit phase,
+    /// it initiates an asynchronous rollback on all data connections and reports the transaction
+    /// failure details.
+    /// Finally, it cleans up session resources.
     ///
-    /// * `logic_fn` - An asynchronous function that takes a mutable reference to `DataHub`
-    ///                and returns a `Result`. This function contains the application's transactional logic.
-    ///                The returned `Future` must implement `Send`.
+    /// # Parameters
+    ///
+    /// * `logic_fn`: An asynchronous closure that encapsulates the business logic to be executed.
+    ///   It takes a mutable reference to [`DataHub`] as an argument and returns a pinned, boxed
+    ///   future.
     ///
     /// # Type Parameters
     ///
@@ -200,8 +194,8 @@ impl DataHub {
     ///
     /// # Returns
     ///
-    /// A `Result` indicating the success or failure of the `logic_fn` execution,
-    /// the setup of data sources, or the commit/rollback operations.
+    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
+    ///   or an [`errs::Err`] if any phase fails.
     #[allow(clippy::doc_overindented_list_items)]
     pub async fn txn_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
@@ -212,12 +206,16 @@ impl DataHub {
         if r.is_ok() {
             r = logic_fn(self).await;
         }
+
+        let mut reports = self.data_conn_manager.new_failure_reports();
+
         if r.is_ok() {
-            r = self.commit_async().await;
+            r = self.data_conn_manager.commit_async(&mut reports).await;
         }
         if r.is_err() {
-            self.rollback_async().await;
+            self.data_conn_manager.rollback_async(reports).await;
         }
+
         self.end();
         r
     }
@@ -228,13 +226,14 @@ impl DataHub {
     /// and type `C` already exists. If not, it attempts to find a suitable data source
     /// (local or global) to create a new data connection.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `name` - The name of the data connection to retrieve or create.
     ///
     /// # Type Parameters
     ///
-    /// * `C` - The expected type of the data connection, which must implement `DataConn` and have a `'static` lifetime.
+    /// * `C` - The expected type of the data connection, which must implement `DataConn` and have
+    ///   a `'static` lifetime.
     ///
     /// # Returns
     ///
@@ -294,6 +293,7 @@ macro_rules! _logic {
 mod tests_of_data_hub {
     use super::*;
     use crate::tokio::AsyncGroup;
+    use crate::TxnFailureReport;
     use std::sync::Mutex;
 
     #[derive(Clone, Copy, PartialEq)]
@@ -365,23 +365,32 @@ mod tests_of_data_hub {
                 Ok(())
             }
         }
-        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             self.logger
                 .lock()
                 .unwrap()
                 .push(format!("MyDataConn::post_commit {}", self.id));
+            Ok(())
         }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {
+        fn is_committed(&self) -> bool {
+            self.committed
+        }
+        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             self.logger
                 .lock()
                 .unwrap()
                 .push(format!("MyDataConn::rollback {}", self.id));
+            Ok(())
         }
-        async fn force_back_async(&mut self, _ag: &mut AsyncGroup) {
+        async fn on_txn_failure(
+            &mut self,
+            _ag: &mut AsyncGroup,
+            _reports: Arc<[TxnFailureReport]>,
+        ) {
             self.logger
                 .lock()
                 .unwrap()
-                .push(format!("MyDataConn::force_back {}", self.id));
+                .push(format!("MyDataConn::on_txn_failure {}", self.id));
         }
         fn close(&mut self) {
             self.logger
@@ -1047,6 +1056,8 @@ mod tests_of_data_hub {
                 "MyDataConn::new 2",
                 "MyDataConn::rollback 1",
                 "MyDataConn::rollback 2",
+                "MyDataConn::on_txn_failure 1",
+                "MyDataConn::on_txn_failure 2",
                 "MyDataConn::close 1",
                 "MyDataConn::drop 1",
                 "MyDataConn::close 2",

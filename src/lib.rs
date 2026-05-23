@@ -33,6 +33,7 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 mod non_null;
+mod txn_failure;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,7 +54,6 @@ pub mod tokio;
 /// Functions are added using the `add` method and are then run concurrently in separate threads.
 /// The `AsyncGroup` ensures that all tasks finish before proceeding,
 /// and can collect any errors that occur.
-/// This structure implements `Send` and `Sync`.
 pub struct AsyncGroup {
     handlers: Vec<(usize, thread::JoinHandle<errs::Result<()>>)>,
     _index: usize,
@@ -94,6 +94,15 @@ pub trait DataConn {
     /// supported by transactions beforehand.
     /// This allows other update operations to be rolled back if the operations in this method
     /// fail.
+    ///
+    /// # Parameters
+    ///
+    /// * `ag`: A mutable reference to an [`AsyncGroup`]. This can be used to run the pre-commit
+    ///   asynchronously in a separate thread.
+    ///
+    /// # Returns
+    ///
+    /// * `errs::Result<()>`: `Ok(())` if pre-commit is successful, or an [`errs::Err`] if it fails.
     fn pre_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
     }
@@ -109,21 +118,17 @@ pub trait DataConn {
     ///
     /// * `ag`: A mutable reference to an [`AsyncGroup`] for potentially offloading
     ///   concurrent post-commit operations.
-    fn post_commit(&mut self, ag: &mut AsyncGroup) {}
-
-    /// Determines whether a "force back" operation is required for this data connection.
-    ///
-    /// A force back is typically executed if one external data service successfully commits
-    /// its changes, but a subsequent external data service within the same transaction fails
-    /// its commit. This method indicates if the committed changes of *this* data service
-    /// need to be undone (forced back).
     ///
     /// # Returns
     ///
-    /// * `bool`: `true` if a force back is needed for this connection, `false` otherwise.
-    fn should_force_back(&self) -> bool {
-        false
+    /// * `errs::Result<()>`: `Ok(())` if post-commit tasks succeed, or an [`errs::Err`] if they
+    ///   fail.
+    fn post_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
+        Ok(())
     }
+
+    /// Returns whether the transaction on this connection has been successfully committed.
+    fn is_committed(&self) -> bool;
 
     /// Rolls back any changes made within this data connection's transaction.
     ///
@@ -132,22 +137,25 @@ pub trait DataConn {
     ///
     /// # Parameters
     ///
-    /// * `ag`: A mutable reference to an [`AsyncGroup`] for potentially offloading
-    ///   time-consuming rollback operations to a separate thread.
-    fn rollback(&mut self, ag: &mut AsyncGroup);
-
-    /// Executes an operation to revert committed changes.
+    /// * `ag`: A mutable reference to an [`AsyncGroup`]. This can be used to run the rollback
+    ///   asynchronously in a separate thread.
     ///
-    /// This method provides an opportunity to undo changes that were successfully committed
-    /// to this external data service, typically when a commit fails for *another* data service
-    /// within the same distributed transaction, necessitating a rollback of already committed
-    /// changes.
+    /// # Returns
+    ///
+    /// * `errs::Result<()>`: `Ok(())` if the rollback is successful, or an [`errs::Err`] if it
+    ///   fails.
+    fn rollback(&mut self, ag: &mut AsyncGroup) -> errs::Result<()>;
+
+    /// A lifecycle callback invoked when a transaction fails and a rollback is executed.
+    ///
+    /// This allows the data connection to handle post-failure tasks or custom logic
+    /// based on the provided transaction failure reports.
     ///
     /// # Parameters
     ///
-    /// * `ag`: A mutable reference to an [`AsyncGroup`] for potentially offloading
-    ///   concurrent force back operations.
-    fn force_back(&mut self, ag: &mut AsyncGroup) {}
+    /// * `ag`: A mutable reference to an [`AsyncGroup`] for asynchronous task execution.
+    /// * `reports`: A slice of [`TxnFailureReport`] containing failure details for all connections.
+    fn on_txn_failure(&mut self, ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {}
 
     /// Closes the connection to the external data service.
     ///
@@ -162,7 +170,12 @@ impl DataConn for NoopDataConn {
     fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
     }
-    fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+    fn is_committed(&self) -> bool {
+        false
+    }
+    fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+        Ok(())
+    }
     fn close(&mut self) {}
 }
 
@@ -173,12 +186,13 @@ where
 {
     drop_fn: fn(*const DataConnContainer),
     is_fn: fn(any::TypeId) -> bool,
+    type_fn: fn() -> &'static str,
     commit_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> errs::Result<()>,
     pre_commit_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> errs::Result<()>,
-    post_commit_fn: fn(*const DataConnContainer, &mut AsyncGroup),
-    should_force_back_fn: fn(*const DataConnContainer) -> bool,
-    rollback_fn: fn(*const DataConnContainer, &mut AsyncGroup),
-    force_back_fn: fn(*const DataConnContainer, &mut AsyncGroup),
+    post_commit_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> errs::Result<()>,
+    is_committed_fn: fn(*const DataConnContainer) -> bool,
+    rollback_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> errs::Result<()>,
+    on_txn_failure_fn: fn(*const DataConnContainer, &mut AsyncGroup, &[TxnFailureReport]),
     close_fn: fn(*const DataConnContainer),
 
     name: Arc<str>,
@@ -292,8 +306,6 @@ pub struct AutoShutdown {}
 ///
 /// The [`DataHub`] is capable of performing aggregated transactional operations
 /// on all [`DataConn`] objects created from its registered [`DataSrc`] instances.
-///
-/// This structure implements `Send`.
 pub struct DataHub {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
@@ -344,4 +356,68 @@ pub struct StaticDataSrcRegistration {
 struct SendSyncNonNull<T: Send + Sync> {
     non_null_ptr: ptr::NonNull<T>,
     _phantom: marker::PhantomData<cell::Cell<T>>,
+}
+
+/// Represents the cause of a transaction failure for a specific data connection.
+#[derive(Debug)]
+pub enum TxnFailureCause {
+    /// No failure occurred, and the transaction was successfully committed.
+    NoneByCommitted,
+    /// No failure occurred, but the transaction was not committed (e.g., because
+    /// another connection in the transaction failed before this one could commit).
+    NoneByUncommitted,
+    /// The execution or pre-commit phase of the data connection failed.
+    RunFailure(errs::Err),
+    /// The commit phase of the data connection failed.
+    CommitFailure(errs::Err),
+    /// The post-commit phase of the data connection failed.
+    PostCommitFailure(errs::Err),
+}
+
+/// Represents the rollback status of a data connection in a failed transaction.
+#[derive(Debug)]
+pub enum TxnFailureRollback {
+    /// Rollback was not executed or not applicable (e.g., because the connection
+    /// was already committed).
+    None,
+    /// The rollback was executed and succeeded.
+    Success,
+    /// The rollback was executed but failed.
+    Failure(errs::Err),
+}
+
+/// Represents the suggested recovery action for a data connection after a transaction failure.
+#[derive(Debug, PartialEq)]
+pub enum TxnFailureRecovery {
+    /// No recovery action is required.
+    NoActionRequired,
+    /// The transaction was committed, but the post-commit phase failed.
+    /// The post-commit operations should be retried.
+    RetryPostCommit,
+    /// The transaction was successfully rolled back.
+    /// The transaction can be rerun and committed again.
+    RerunAndCommit,
+    /// The transaction failed to commit and rollback was not run or failed.
+    /// Investigation is required before rerunning.
+    InvestigateAndRerunAndCommit,
+    /// The rollback failed or has an inconsistent state.
+    /// Investigation is required to resolve the rollback.
+    InvestigateAndRollback,
+    /// The connection was committed but other connections failed and rolled back.
+    /// Compensating operations must be performed.
+    CompensateRollback,
+}
+
+/// A report detailing the transaction failure cause and rollback status
+/// for a specific data connection.
+#[derive(Debug)]
+pub struct TxnFailureReport {
+    /// The name of the data connection.
+    pub data_conn_name: Arc<str>,
+    /// The type name of the data connection.
+    pub data_conn_type: &'static str,
+    /// The cause of the transaction failure.
+    pub cause: TxnFailureCause,
+    /// The rollback status of the data connection.
+    pub rollback: TxnFailureRollback,
 }

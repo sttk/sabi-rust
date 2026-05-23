@@ -33,11 +33,14 @@ impl Drop for AutoShutdown {
 
 /// Registers a global data source, making it available throughout the application.
 ///
-/// Global data sources are managed by a singleton and can be set up once for the application's lifetime.
-/// If `setup_async` or `setup_with_order_async` has already been called, this function will return an `errs::Err`.
-/// If another Tokio task holds the lock of the global data source manager, this function will wait until the lock is released.
+/// Global data sources are managed by a singleton and can be set up once for the application's
+/// lifetime.
+/// If `setup_async` or `setup_with_order_async` has already been called, this function will return
+/// an `errs::Err`.
+/// If another Tokio task holds the lock of the global data source manager, this function will wait
+/// until the lock is released.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `name` - The name to associate with this data source.
 /// * `ds` - The data source instance, which must implement `DataSrc` and have a `'static` lifetime.
@@ -71,11 +74,14 @@ where
 /// Registers a global data source, making it available throughout the application.
 ///
 /// This is the synchronous version of `uses_async`.
-/// Global data sources are managed by a singleton and can be set up once for the application's lifetime.
-/// If `setup_async` or `setup_with_order_async` has already been called, this function will return an `errs::Err`.
-/// If another Tokio task holds the lock of the global data source manager, this function will return an error immediately without waiting.
+/// Global data sources are managed by a singleton and can be set up once for the application's
+/// lifetime.
+/// If `setup_async` or `setup_with_order_async` has already been called, this function will return
+/// an `errs::Err`.
+/// If another Tokio task holds the lock of the global data source manager, this function will return
+/// an error immediately without waiting.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `name` - The name to associate with this data source.
 /// * `ds` - The data source instance, which must implement `DataSrc` and have a `'static` lifetime.
@@ -171,7 +177,7 @@ pub async fn setup_async() -> errs::Result<AutoShutdown> {
 /// are set up. Data sources not specified in `names` will be set up after the
 /// specified ones, in an undefined order.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `names` - An array of string slices specifying the desired setup order by data source name.
 ///
