@@ -94,7 +94,7 @@ mod tests_of_data_acc {
             logger.push(format!("FooDataConn::rollback_async {}", self.id));
             Ok(())
         }
-        async fn on_txn_failure(
+        async fn on_txn_failure_async(
             &mut self,
             _ag: &mut AsyncGroup,
             _reports: Arc<[TxnFailureReport]>,
@@ -237,7 +237,7 @@ mod tests_of_data_acc {
             logger.push(format!("BarDataConn::rollback_async {}", self.id));
             Ok(())
         }
-        async fn on_txn_failure(
+        async fn on_txn_failure_async(
             &mut self,
             _ag: &mut AsyncGroup,
             _reports: Arc<[TxnFailureReport]>,

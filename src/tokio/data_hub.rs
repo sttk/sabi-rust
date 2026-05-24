@@ -382,7 +382,7 @@ mod tests_of_data_hub {
                 .push(format!("MyDataConn::rollback {}", self.id));
             Ok(())
         }
-        async fn on_txn_failure(
+        async fn on_txn_failure_async(
             &mut self,
             _ag: &mut AsyncGroup,
             _reports: Arc<[TxnFailureReport]>,

@@ -173,7 +173,7 @@ pub trait DataConn {
     /// * `ag`: A mutable reference to an [`AsyncGroup`] for asynchronous task execution.
     /// * `reports`: An [`Arc`] slice of [`TxnFailureReport`] containing failure details for all
     ///   connections.
-    fn on_txn_failure(
+    fn on_txn_failure_async(
         &mut self,
         ag: &mut AsyncGroup,
         reports: Arc<[TxnFailureReport]>,
