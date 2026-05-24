@@ -45,6 +45,7 @@ pub enum DataSrcError {
     FailToCastDataConn {
         /// The name of the data connection that failed to cast.
         name: Arc<str>,
+
         /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
     },
@@ -53,6 +54,7 @@ pub enum DataSrcError {
     FailToCreateDataConn {
         /// The name of the data source that failed to be created.
         name: Arc<str>,
+
         /// The type name of the [`DataConn`] that failed to be created.
         data_conn_type: &'static str,
     },
@@ -62,6 +64,7 @@ pub enum DataSrcError {
     NotFoundDataSrcToCreateDataConn {
         /// The name of the data source that could not be found.
         name: Arc<str>,
+
         /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
     },
@@ -385,7 +388,12 @@ mod tests_of_data_src {
         fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             Ok(())
         }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+        fn is_committed(&self) -> bool {
+            false
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
         fn close(&mut self) {}
     }
 
@@ -399,7 +407,12 @@ mod tests_of_data_src {
         fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             Ok(())
         }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+        fn is_committed(&self) -> bool {
+            false
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
         fn close(&mut self) {}
     }
 

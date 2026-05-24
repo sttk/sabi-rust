@@ -16,7 +16,7 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 
-use crate::SendSyncNonNull;
+use crate::{SendSyncNonNull, TxnFailureReport};
 
 use std::any;
 use std::collections::HashMap;
@@ -56,7 +56,7 @@ pub use crate::_logic as logic;
 
 /// Macro for registering a global data source at the top-level.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `$name` - The name of the data source (must be a string literal).
 /// * `$data_src` - The data source instance.
@@ -69,8 +69,12 @@ pub use crate::_logic as logic;
 #[doc(inline)]
 pub use crate::_uses_for_async as uses;
 
-/// Manages a collection of asynchronous tasks, allowing them to be executed concurrently
-/// and their results (or errors) collected.
+/// The structure that allows for the concurrent execution of multiple asynchronous tasks
+/// using green-thread and waits for all of them to complete.
+///
+/// Functions are added using the `add` method and are then run concurrently in separate green-threads.
+/// The `AsyncGroup` ensures that all tasks finish before proceeding,
+/// and can collect any errors that occur.
 #[allow(clippy::type_complexity)]
 pub struct AsyncGroup {
     indexes: Vec<usize>,
@@ -78,18 +82,19 @@ pub struct AsyncGroup {
     _index: usize,
 }
 
-/// A trait for data connection implementations, providing methods for transaction management.
+/// The asynchronous trait for data connection implementations, providing methods for transaction
+/// management.
 ///
 /// Implementors of this trait represent a connection to a data source and define
 /// how to commit, rollback, and handle the lifecycle of transactions.
 #[allow(async_fn_in_trait)]
 #[allow(unused_variables)] // rustdoc
 pub trait DataConn {
-    /// Attempts to commit the changes made within this data connection.
+    /// Attempts to asynchronously commit the changes made within this data connection.
     ///
     /// This is typically the main commit process, executed after `pre_commit_async`.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to the commit can be added.
     ///
@@ -106,7 +111,7 @@ pub trait DataConn {
     /// This method is called before `commit_async` and can be used for tasks like
     /// validation or preparing data.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to pre-commit can be added.
     ///
@@ -122,49 +127,57 @@ pub trait DataConn {
 
     /// Performs actions after the main commit process, only if it succeeds.
     ///
-    /// This can be used for cleanup or post-transaction logging. Errors returned from
-    /// tasks added to `ag` in this method are ignored.
+    /// This can be used for cleanup or post-transaction logging.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to post-commit can be added.
-    fn post_commit_async(&mut self, ag: &mut AsyncGroup) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-
-    /// Indicates whether `force_back_async` should be called instead of `rollback_async`.
-    ///
-    /// This is typically `true` if `commit_async` has already succeeded for this connection,
-    /// implying that changes need to be undone rather than simply discarded.
     ///
     /// # Returns
     ///
-    /// `true` if `force_back_async` should be called, `false` otherwise.
-    fn should_force_back(&self) -> bool {
-        false
+    /// A `Result` indicating success or failure of the post-commit operation.
+    fn post_commit_async(
+        &mut self,
+        ag: &mut AsyncGroup,
+    ) -> impl Future<Output = errs::Result<()>> + Send {
+        async { Ok(()) }
     }
 
-    /// Rolls back any changes made within this data connection.
+    /// Returns whether the transaction on this connection has been successfully committed.
+    fn is_committed(&self) -> bool;
+
+    /// Rolls back any changes made within this data connection's transaction.
     ///
-    /// This method is called if a transaction fails before `commit_async` completes,
-    /// or if `should_force_back` returns `false`. Errors returned from tasks added to `ag`
-    /// in this method are ignored.
+    /// This method undoes all operations performed since the beginning of the transaction,
+    /// restoring the data service to its state before the transaction began.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to rollback can be added.
-    fn rollback_async(&mut self, ag: &mut AsyncGroup) -> impl Future<Output = ()> + Send;
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure of the rollback operation.
+    fn rollback_async(
+        &mut self,
+        ag: &mut AsyncGroup,
+    ) -> impl Future<Output = errs::Result<()>> + Send;
 
-    /// Forces the data connection to revert changes that have already been committed.
+    /// An asynchronous lifecycle callback invoked when a transaction fails and a rollback is executed.
     ///
-    /// This method is called if a transaction fails after `commit_async` has completed
-    /// for this connection, and `should_force_back` returns `true`. Errors returned from
-    /// tasks added to `ag` in this method are ignored.
+    /// This allows the data connection to handle post-failure tasks or custom logic
+    /// based on the provided transaction failure reports.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
-    /// * `ag` - An `AsyncGroup` to which asynchronous tasks related to force-back can be added.
-    fn force_back_async(&mut self, ag: &mut AsyncGroup) -> impl Future<Output = ()> + Send {
+    /// * `ag`: A mutable reference to an [`AsyncGroup`] for asynchronous task execution.
+    /// * `reports`: An [`Arc`] slice of [`TxnFailureReport`] containing failure details for all
+    ///   connections.
+    fn on_txn_failure_async(
+        &mut self,
+        ag: &mut AsyncGroup,
+        reports: Arc<[TxnFailureReport]>,
+    ) -> impl Future<Output = ()> + Send {
         async {}
     }
 
@@ -180,7 +193,12 @@ impl DataConn for NoopDataConn {
     async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
     }
-    async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {}
+    fn is_committed(&self) -> bool {
+        false
+    }
+    async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+        Ok(())
+    }
     fn close(&mut self) {}
 }
 
@@ -192,6 +210,7 @@ where
 {
     drop_fn: fn(*const DataConnContainer),
     is_fn: fn(any::TypeId) -> bool,
+    type_fn: fn() -> &'static str,
 
     commit_fn: for<'ag> fn(
         *const DataConnContainer,
@@ -206,18 +225,20 @@ where
     post_commit_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
+    )
+        -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'ag>>,
 
-    should_force_back_fn: fn(*const DataConnContainer) -> bool,
+    is_committed_fn: fn(*const DataConnContainer) -> bool,
 
     rollback_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
+    ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'ag>>,
 
-    force_back_fn: for<'ag> fn(
+    on_txn_failure_fn: for<'ag> fn(
         *const DataConnContainer,
         &'ag mut AsyncGroup,
+        Arc<[TxnFailureReport]>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
 
     close_fn: fn(*const DataConnContainer),
@@ -231,41 +252,50 @@ pub(crate) struct DataConnManager {
     index_map: HashMap<Arc<str>, usize>,
 }
 
-/// A trait for data source implementations, responsible for setting up and creating data connections.
+/// The trait that abstracts a data source responsible for managing connections
+/// to external data services, such as databases, file systems, or messaging services.
 ///
-/// Implementors of this trait define how to prepare a data source and how to instantiate
-/// data connections of a specific type `C`.
+/// It receives configuration for connecting to an external data service and then
+/// creates and supplies [`DataConn`] instance, representing a single session connection.
 #[trait_variant::make(Send)]
 #[allow(unused_variables)] // for rustdoc
 pub trait DataSrc<C>
 where
     C: DataConn + 'static,
 {
-    /// Performs asynchronous setup operations for the data source.
+    /// Performs the asynchronous setup process for the data source.
     ///
-    /// This method is called to initialize the data source before any data connections
-    /// are created from it.
+    /// This method is responsible for establishing global connections, configuring
+    /// connection pools, or performing any necessary initializations required
+    /// before [`DataConn`] instances can be created.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
-    /// * `ag` - An `AsyncGroup` to which asynchronous setup tasks can be added.
+    /// * `ag`: A mutable reference to an [`AsyncGroup`]. This is used if the setup
+    ///   process is potentially time-consuming and can benefit from concurrent
+    ///   execution in a separate thread.
     ///
     /// # Returns
     ///
-    /// A `Result` indicating success or failure of the setup operation.
+    /// * `errs::Result<()>`: `Ok(())` if the setup is successful, or an [`errs::Err`]
+    ///   if any part of the setup fails.
     async fn setup_async(&mut self, ag: &mut AsyncGroup) -> errs::Result<()>;
 
-    /// Closes the data source, releasing any associated resources.
+    /// Closes the data source and releases any globally held resources.
     ///
-    /// This method is always called at the end of the `DataHub`'s lifecycle for this source.
+    /// This method should perform cleanup operations, such as closing global connections
+    /// or shutting down connection pools, that were established during the setup process.
     fn close(&mut self);
 
-    /// Asynchronously creates a new data connection from this data source.
+    /// Asynchronously creates a new [`DataConn`] instance which is a connection per session.
+    ///
+    /// Each call to this method should yield a distinct [`DataConn`] object tailored
+    /// for a single session's operations.
     ///
     /// # Returns
     ///
-    /// A `Result` which is `Ok` containing a `Box`ed instance of the data connection `C`,
-    /// or an `Err` if the connection creation fails.
+    /// * `errs::Result<Box<C>>`: `Ok(Box<C>)` containing the newly created [`DataConn`]
+    ///   if successful, or an [`errs::Err`] if the connection could not be created.
     async fn create_data_conn_async(&mut self) -> errs::Result<Box<C>>;
 }
 
@@ -314,16 +344,27 @@ pub(crate) struct DataSrcManager {
     local: bool,
 }
 
-/// A marker struct that can be used to trigger automatic shutdown behavior
-/// for resources managed by the `DataHub` when it goes out of scope.
+/// A utility struct that ensures to close and drop global data sources when it goes out of scope.
+///
+/// This struct implements the `Drop` trait, and its `drop` method handles the closing and
+/// dropping of registered global data sources.
+/// Therefore, this ensures that these operations are automatically executed at the end of
+/// the scope.
+///
+/// **NOTE:** Do not receive an instance of this struct into an anonymous variable
+/// (`let _ = ...`), because an anonymous variable is dropped immediately at that point.
 pub struct AutoShutdown {}
 
-/// The central hub for managing data sources and their connections within an application.
+/// The struct that acts as a central hub for data input/output operations, integrating
+/// multiple *Data* traits (which are passed to business logic functions as their arguments) with
+/// [`DataAcc`] traits (which implement default data I/O methods for external services).
 ///
-/// `DataHub` provides mechanisms to register data sources, acquire data connections,
-/// and execute transactional or non-transactional asynchronous logic.
+/// It facilitates data access by providing [`DataConn`] objects, created from
+/// both global data sources (registered via the global [`uses!`] macro) and
+/// session-local data sources (registered via [`DataHub::uses`] method).
 ///
-/// This structure implements `Send`.
+/// The [`DataHub`] is capable of performing aggregated transactional operations
+/// on all [`DataConn`] objects created from its registered [`DataSrc`] instances.
 pub struct DataHub {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
@@ -331,25 +372,33 @@ pub struct DataHub {
     fixed: bool,
 }
 
-/// A trait defining the ability to access data connections.
+/// This trait provides a mechanism to retrieve a mutable reference to a [`DataConn`] object
+/// by name, creating it if necessary.
 ///
-/// This trait abstracts the mechanism for retrieving data connections, allowing
-/// different implementations (e.g., `DataHub`) to provide connections.
+/// It is typically implemented as a derived trait with default methods (using
+/// the `override_macro` crate) on [`DataHub`], allowing application logic to
+/// interact with data services through an abstract interface.
 pub trait DataAcc {
-    /// Asynchronously retrieves a data connection of a specific type.
+    /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
+    ///
+    /// This is the core method used by [`DataAcc`] implementations to obtain connections
+    /// to external data services. It first checks if a [`DataConn`] with the given name
+    /// already exists in the current session. If not, it attempts to find a
+    /// corresponding [`DataSrc`] and create a new [`DataConn`] from it.
     ///
     /// # Type Parameters
     ///
-    /// * `C` - The expected type of the data connection, which must implement `DataConn` and have a `'static` lifetime.
+    /// * `C`: The concrete type of [`DataConn`] expected.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
-    /// * `name` - The name of the data connection to retrieve.
+    /// * `name`: The name of the data source/connection to retrieve.
     ///
     /// # Returns
     ///
-    /// A `Result` which is `Ok` containing a mutable reference to the data connection
-    /// if found, or an `Err` if the connection cannot be retrieved or cast.
+    /// * `errs::Result<&mut C>`: A mutable reference to the [`DataConn`] instance if successful,
+    ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
+    ///   [`DataConn`] cannot be cast to the specified type `C`.
     #[allow(async_fn_in_trait)]
     fn get_data_conn_async<C: DataConn + 'static>(
         &mut self,

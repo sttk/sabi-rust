@@ -29,6 +29,7 @@ mod run_tests {
         pub struct FooDataConn {
             text: Arc<String>,
             temp: String,
+            committed: bool,
         }
 
         impl FooDataConn {
@@ -36,6 +37,7 @@ mod run_tests {
                 Self {
                     text: text.clone(),
                     temp: text.to_string(),
+                    committed: false,
                 }
             }
 
@@ -52,10 +54,15 @@ mod run_tests {
             fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 *Arc::get_mut(&mut self.text).unwrap() = self.temp.clone();
                 println!("commit text: {}", self.text.clone());
+                self.committed = true;
                 Ok(())
             }
-            fn rollback(&mut self, _ag: &mut AsyncGroup) {
+            fn is_committed(&self) -> bool {
+                self.committed
+            }
+            fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 self.temp = self.text.to_string();
+                Ok(())
             }
             fn close(&mut self) {}
         }
@@ -83,6 +90,7 @@ mod run_tests {
         pub struct BarDataConn {
             num: Arc<u32>,
             tmp: u32,
+            committed: bool,
         }
 
         impl BarDataConn {
@@ -90,6 +98,7 @@ mod run_tests {
                 Self {
                     num: num.clone(),
                     tmp: *num,
+                    committed: false,
                 }
             }
 
@@ -106,10 +115,15 @@ mod run_tests {
             fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 *Arc::get_mut(&mut self.num).unwrap() = self.tmp.clone();
                 println!("commit num: {}", self.num.clone());
+                self.committed = true;
                 Ok(())
             }
-            fn rollback(&mut self, _ag: &mut AsyncGroup) {
+            fn is_committed(&self) -> bool {
+                self.committed
+            }
+            fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 self.tmp = *self.num;
+                Ok(())
             }
             fn close(&mut self) {}
         }

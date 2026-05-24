@@ -43,7 +43,7 @@ impl Drop for AutoShutdown {
 ///
 /// Global data sources added via this function can be set up via [`setup`] or [`setup_with_order`].
 ///
-/// If `setup` or `setup_with_order` has already been called, this function will return an `errs::Err`.  
+/// If `setup` or `setup_with_order` has already been called, this function will return an `errs::Err`.
 ///
 /// # Parameters
 ///
@@ -192,8 +192,6 @@ pub fn setup_with_order(names: &[&str]) -> errs::Result<AutoShutdown> {
 }
 
 #[doc(hidden)]
-/// Helper function to create a [`StaticDataSrcContainer`] for static registration.
-/// This function is used by the [`uses!`] macro.
 pub fn create_static_data_src_container<S, C>(
     name: &'static str,
     data_src: S,
@@ -248,7 +246,8 @@ inventory::collect!(StaticDataSrcRegistration);
 /// struct MyDataConn;
 /// impl DataConn for MyDataConn {
 ///     fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
-///     fn rollback(&mut self, _ag: &mut AsyncGroup) {}
+///     fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
+///     fn is_committed(&self) -> bool { false }
 ///     fn close(&mut self) {}
 /// }
 ///

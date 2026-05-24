@@ -30,6 +30,7 @@ mod txn_async_tests {
         pub struct FooDataConn {
             text: Arc<String>,
             temp: String,
+            committed: bool,
         }
 
         impl FooDataConn {
@@ -37,6 +38,7 @@ mod txn_async_tests {
                 Self {
                     text: text.clone(),
                     temp: text.to_string(),
+                    committed: false,
                 }
             }
 
@@ -53,10 +55,15 @@ mod txn_async_tests {
             async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 *Arc::make_mut(&mut self.text) = self.temp.clone();
                 println!("commit text: {}", self.text.clone());
+                self.committed = true;
                 Ok(())
             }
-            async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {
+            fn is_committed(&self) -> bool {
+                self.committed
+            }
+            async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 self.temp = self.text.to_string();
+                Ok(())
             }
             fn close(&mut self) {}
         }
@@ -84,6 +91,7 @@ mod txn_async_tests {
         pub struct BarDataConn {
             num: Arc<u32>,
             tmp: u32,
+            committed: bool,
         }
 
         impl BarDataConn {
@@ -91,6 +99,7 @@ mod txn_async_tests {
                 Self {
                     num: num.clone(),
                     tmp: *num,
+                    committed: false,
                 }
             }
 
@@ -107,10 +116,15 @@ mod txn_async_tests {
             async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 *Arc::make_mut(&mut self.num) = self.tmp.clone();
                 println!("commit num: {}", self.num.clone());
+                self.committed = true;
                 Ok(())
             }
-            async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {
+            fn is_committed(&self) -> bool {
+                self.committed
+            }
+            async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
                 self.tmp = *self.num;
+                Ok(())
             }
             fn close(&mut self) {}
         }

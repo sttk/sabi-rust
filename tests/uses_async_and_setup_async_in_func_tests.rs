@@ -4,17 +4,25 @@ mod uses_async_and_setup_async_in_func_tests {
     use sabi::tokio::{AsyncGroup, DataConn, DataSrc};
     use std::sync::{Arc, Mutex};
 
-    struct MyDataConn {}
+    struct MyDataConn {
+        committed: bool,
+    }
     impl MyDataConn {
         fn new() -> Self {
-            Self {}
+            Self { committed: false }
         }
     }
     impl DataConn for MyDataConn {
         async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            self.committed = true;
             Ok(())
         }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) {}
+        fn is_committed(&self) -> bool {
+            self.committed
+        }
+        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
         fn close(&mut self) {}
     }
 

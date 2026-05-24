@@ -13,7 +13,7 @@ impl DataAcc for DataHub {
 #[cfg(test)]
 mod tests_of_data_acc {
     use super::*;
-    use crate::{AsyncGroup, DataSrc};
+    use crate::{AsyncGroup, DataSrc, TxnFailureReport};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
@@ -62,18 +62,20 @@ mod tests_of_data_acc {
             logger.push(format!("FooDataConn::pre_commit {}", self.id));
             Ok(())
         }
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) {
+        fn post_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("FooDataConn::post_commit {}", self.id));
+            Ok(())
         }
-        fn should_force_back(&self) -> bool {
+        fn is_committed(&self) -> bool {
             self.committed
         }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {
+        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("FooDataConn::rollback {}", self.id));
+            Ok(())
         }
-        fn force_back(&mut self, _ag: &mut AsyncGroup) {
+        fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, _reports: &[TxnFailureReport]) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("FooDataConn::force_back {}", self.id));
         }
@@ -193,18 +195,20 @@ mod tests_of_data_acc {
             logger.push(format!("BarDataConn::pre_commit {}", self.id));
             Ok(())
         }
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) {
+        fn post_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("BarDataConn::post_commit {}", self.id));
+            Ok(())
         }
-        fn should_force_back(&self) -> bool {
+        fn is_committed(&self) -> bool {
             self.committed
         }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) {
+        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("BarDataConn::rollback {}", self.id));
+            Ok(())
         }
-        fn force_back(&mut self, _ag: &mut AsyncGroup) {
+        fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, _reports: &[TxnFailureReport]) {
             let mut logger = self.logger.lock().unwrap();
             logger.push(format!("BarDataConn::force_back {}", self.id));
         }

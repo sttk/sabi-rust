@@ -21,7 +21,7 @@ impl AsyncGroup {
     ///
     /// The provided future will be polled along with others in this group.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `future` - The future to add. It must implement `Future<Output = errs::Result<()>>`,
     ///              `Send`, and have a `'static` lifetime.
