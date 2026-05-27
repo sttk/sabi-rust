@@ -377,13 +377,13 @@ pub enum TxnFailureCause {
 /// Represents the rollback status of a data connection in a failed transaction.
 #[derive(Debug)]
 pub enum TxnFailureRollback {
+    /// The rollback was executed and succeeded.
+    NoneByRolledBack,
     /// Rollback was not executed or not applicable (e.g., because the connection
     /// was already committed).
-    None,
-    /// The rollback was executed and succeeded.
-    Success,
+    NoneByNotRolledBack,
     /// The rollback was executed but failed.
-    Failure(errs::Err),
+    RollbackFailure(errs::Err),
 }
 
 /// Represents the suggested recovery action for a data connection after a transaction failure.
