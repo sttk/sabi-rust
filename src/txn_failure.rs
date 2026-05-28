@@ -26,23 +26,59 @@ impl TxnFailureReport {
 
     /// Determines the suggested recovery action for this connection to achieve a successful commit.
     pub fn recovery_for_commit(&self) -> TxnFailureRecovery {
+        use TxnFailureCause::*;
+        use TxnFailureRecovery::*;
+        use TxnFailureRollback::*;
+
         match (&self.cause, &self.rollback) {
-            (TxnFailureCause::NoneByCommitted, _) => TxnFailureRecovery::NoActionRequired,
-            (TxnFailureCause::PostCommitFailure(_), _) => TxnFailureRecovery::RetryPostCommit,
-            (_, TxnFailureRollback::NoneByRolledBack) => TxnFailureRecovery::RerunAndCommit,
-            _ => TxnFailureRecovery::InvestigateAndRerunAndCommit,
+            (NoneByUncommitted, NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (NoneByUncommitted, NoneByRolledBack) => RerunLogicAndCommit,
+            (NoneByUncommitted, RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (NoneByCommitted, NoneByNotRolledBack) => NoActionRequired,
+            (NoneByCommitted, NoneByRolledBack) => InvestigateBecauseImpossible,
+            (NoneByCommitted, RollbackFailure(_)) => InvestigateBecauseImpossible,
+
+            (LogicFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (LogicFailure(_), NoneByRolledBack) => ResolveCauseThenRerunLogicAndCommit,
+            (LogicFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (CommitFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (CommitFailure(_), NoneByRolledBack) => ResolveCauseThenRerunLogicAndCommit,
+            (CommitFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (PostCommitFailure(_), NoneByNotRolledBack) => ResolveCauseThenRerunPostCommit,
+            (PostCommitFailure(_), NoneByRolledBack) => InvestigateBecauseImpossible,
+            (PostCommitFailure(_), RollbackFailure(_)) => InvestigateBecauseImpossible,
         }
     }
 
     /// Determines the suggested recovery action to achieve a rolled-back state for this connection.
     pub fn recovery_for_rollback(&self) -> TxnFailureRecovery {
-        match self.rollback {
-            TxnFailureRollback::NoneByRolledBack => TxnFailureRecovery::NoActionRequired,
-            TxnFailureRollback::NoneByNotRolledBack => match self.cause {
-                TxnFailureCause::NoneByCommitted => TxnFailureRecovery::CompensateRollback,
-                _ => TxnFailureRecovery::InvestigateAndRollback,
-            },
-            _ => TxnFailureRecovery::InvestigateAndRollback,
+        use TxnFailureCause::*;
+        use TxnFailureRecovery::*;
+        use TxnFailureRollback::*;
+
+        match (&self.cause, &self.rollback) {
+            (NoneByUncommitted, NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (NoneByUncommitted, NoneByRolledBack) => NoActionRequired,
+            (NoneByUncommitted, RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (NoneByCommitted, NoneByNotRolledBack) => ManualRollbackRequired,
+            (NoneByCommitted, NoneByRolledBack) => InvestigateBecauseImpossible,
+            (NoneByCommitted, RollbackFailure(_)) => InvestigateBecauseImpossible,
+
+            (LogicFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (LogicFailure(_), NoneByRolledBack) => NoActionRequired,
+            (LogicFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (CommitFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (CommitFailure(_), NoneByRolledBack) => NoActionRequired,
+            (CommitFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (PostCommitFailure(_), NoneByNotRolledBack) => ManualRollbackRequired,
+            (PostCommitFailure(_), NoneByRolledBack) => InvestigateBecauseImpossible,
+            (PostCommitFailure(_), RollbackFailure(_)) => InvestigateBecauseImpossible,
         }
     }
 }
@@ -50,25 +86,65 @@ impl TxnFailureReport {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use TxnFailureCause::*;
+    use TxnFailureRecovery::*;
+    use TxnFailureRollback::*;
+
+    // impossible case
+    #[test]
+    fn test_cause_is_none_by_uncommitted_and_rollback_is_none_by_not_rolled_back() {
+        let report = TxnFailureReport {
+            data_conn_name: "foo".into(),
+            data_conn_type: "A::B::C",
+            cause: NoneByUncommitted,
+            rollback: NoneByNotRolledBack,
+        };
+
+        assert!(!report.is_cause_of_failure());
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
+    }
+
+    #[test]
+    fn test_cause_is_none_by_uncommitted_and_rollback_is_none_by_rolled_back() {
+        let report = TxnFailureReport {
+            data_conn_name: "foo".into(),
+            data_conn_type: "A::B::C",
+            cause: NoneByUncommitted,
+            rollback: NoneByRolledBack,
+        };
+
+        assert!(!report.is_cause_of_failure());
+        assert_eq!(report.recovery_for_commit(), RerunLogicAndCommit);
+        assert_eq!(report.recovery_for_rollback(), NoActionRequired);
+    }
+
+    #[test]
+    fn test_cause_is_none_by_uncommitted_and_rollback_is_rollback_failure() {
+        let report = TxnFailureReport {
+            data_conn_name: "foo".into(),
+            data_conn_type: "A::B::C",
+            cause: NoneByUncommitted,
+            rollback: RollbackFailure(errs::Err::new("fail")),
+        };
+
+        assert!(!report.is_cause_of_failure());
+        assert_eq!(report.recovery_for_commit(), ResolveCauseAndInconsistency);
+        assert_eq!(report.recovery_for_rollback(), ResolveCauseAndInconsistency);
+    }
 
     #[test]
     fn test_cause_is_none_by_committed_and_rollback_is_none_by_not_rolled_back() {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::NoneByCommitted,
-            rollback: TxnFailureRollback::NoneByNotRolledBack,
+            cause: NoneByCommitted,
+            rollback: NoneByNotRolledBack,
         };
 
         assert!(!report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::NoActionRequired
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::CompensateRollback
-        );
+        assert_eq!(report.recovery_for_commit(), NoActionRequired);
+        assert_eq!(report.recovery_for_rollback(), ManualRollbackRequired);
     }
 
     // impossible case
@@ -82,14 +158,8 @@ mod unit_tests {
         };
 
         assert!(!report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::NoActionRequired
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::NoActionRequired
-        );
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
     }
 
     // impossible case
@@ -103,95 +173,22 @@ mod unit_tests {
         };
 
         assert!(!report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::NoActionRequired
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
-    }
-
-    // impossible case
-    #[test]
-    fn test_cause_is_none_by_uncommitted_and_rollback_is_none_by_not_rolled_back() {
-        let report = TxnFailureReport {
-            data_conn_name: "foo".into(),
-            data_conn_type: "A::B::C",
-            cause: TxnFailureCause::NoneByUncommitted,
-            rollback: TxnFailureRollback::NoneByNotRolledBack,
-        };
-
-        assert!(!report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::InvestigateAndRerunAndCommit
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
     }
 
     #[test]
-    fn test_cause_is_none_by_uncommitted_and_rollback_is_none_by_rolled_back() {
+    fn test_cause_is_logic_failure_and_rollback_is_none_by_not_rolled_back() {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::NoneByUncommitted,
-            rollback: TxnFailureRollback::NoneByRolledBack,
-        };
-
-        assert!(!report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::RerunAndCommit,
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::NoActionRequired,
-        );
-    }
-
-    #[test]
-    fn test_cause_is_none_by_uncommitted_and_rollback_is_rollback_failure() {
-        let report = TxnFailureReport {
-            data_conn_name: "foo".into(),
-            data_conn_type: "A::B::C",
-            cause: TxnFailureCause::NoneByUncommitted,
-            rollback: TxnFailureRollback::RollbackFailure(errs::Err::new("fail")),
-        };
-
-        assert!(!report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::InvestigateAndRerunAndCommit
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
-    }
-
-    #[test]
-    fn test_cause_is_run_failure_and_rollback_is_none_by_not_rolled_back() {
-        let report = TxnFailureReport {
-            data_conn_name: "foo".into(),
-            data_conn_type: "A::B::C",
-            cause: TxnFailureCause::RunFailure(errs::Err::new("fail")),
-            rollback: TxnFailureRollback::NoneByNotRolledBack,
+            cause: LogicFailure(errs::Err::new("fail")),
+            rollback: NoneByNotRolledBack,
         };
 
         assert!(report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::InvestigateAndRerunAndCommit
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
     }
 
     #[test]
@@ -199,19 +196,16 @@ mod unit_tests {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::RunFailure(errs::Err::new("fail")),
-            rollback: TxnFailureRollback::NoneByRolledBack,
+            cause: LogicFailure(errs::Err::new("fail")),
+            rollback: NoneByRolledBack,
         };
 
         assert!(report.is_cause_of_failure());
         assert_eq!(
             report.recovery_for_commit(),
-            TxnFailureRecovery::RerunAndCommit,
+            ResolveCauseThenRerunLogicAndCommit
         );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::NoActionRequired,
-        );
+        assert_eq!(report.recovery_for_rollback(), NoActionRequired);
     }
 
     #[test]
@@ -219,19 +213,13 @@ mod unit_tests {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::RunFailure(errs::Err::new("fail")),
-            rollback: TxnFailureRollback::RollbackFailure(errs::Err::new("fail")),
+            cause: LogicFailure(errs::Err::new("fail")),
+            rollback: RollbackFailure(errs::Err::new("fail")),
         };
 
         assert!(report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::InvestigateAndRerunAndCommit
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
+        assert_eq!(report.recovery_for_commit(), ResolveCauseAndInconsistency);
+        assert_eq!(report.recovery_for_rollback(), ResolveCauseAndInconsistency);
     }
 
     #[test]
@@ -239,19 +227,13 @@ mod unit_tests {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::CommitFailure(errs::Err::new("fail")),
-            rollback: TxnFailureRollback::NoneByNotRolledBack,
+            cause: CommitFailure(errs::Err::new("fail")),
+            rollback: NoneByNotRolledBack,
         };
 
         assert!(report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::InvestigateAndRerunAndCommit
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
     }
 
     #[test]
@@ -259,19 +241,16 @@ mod unit_tests {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::CommitFailure(errs::Err::new("fail")),
-            rollback: TxnFailureRollback::NoneByRolledBack,
+            cause: CommitFailure(errs::Err::new("fail")),
+            rollback: NoneByRolledBack,
         };
 
         assert!(report.is_cause_of_failure());
         assert_eq!(
             report.recovery_for_commit(),
-            TxnFailureRecovery::RerunAndCommit,
+            ResolveCauseThenRerunLogicAndCommit
         );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::NoActionRequired,
-        );
+        assert_eq!(report.recovery_for_rollback(), NoActionRequired);
     }
 
     #[test]
@@ -284,14 +263,8 @@ mod unit_tests {
         };
 
         assert!(report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::InvestigateAndRerunAndCommit
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
+        assert_eq!(report.recovery_for_commit(), ResolveCauseAndInconsistency);
+        assert_eq!(report.recovery_for_rollback(), ResolveCauseAndInconsistency);
     }
 
     #[test]
@@ -299,19 +272,16 @@ mod unit_tests {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::PostCommitFailure(errs::Err::new("fail")),
-            rollback: TxnFailureRollback::NoneByNotRolledBack,
+            cause: PostCommitFailure(errs::Err::new("fail")),
+            rollback: NoneByNotRolledBack,
         };
 
         assert!(report.is_cause_of_failure());
         assert_eq!(
             report.recovery_for_commit(),
-            TxnFailureRecovery::RetryPostCommit,
+            ResolveCauseThenRerunPostCommit
         );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback
-        );
+        assert_eq!(report.recovery_for_rollback(), ManualRollbackRequired);
     }
 
     #[test]
@@ -319,19 +289,13 @@ mod unit_tests {
         let report = TxnFailureReport {
             data_conn_name: "foo".into(),
             data_conn_type: "A::B::C",
-            cause: TxnFailureCause::PostCommitFailure(errs::Err::new("fail")),
-            rollback: TxnFailureRollback::NoneByRolledBack,
+            cause: PostCommitFailure(errs::Err::new("fail")),
+            rollback: NoneByRolledBack,
         };
 
         assert!(report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::RetryPostCommit,
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::NoActionRequired,
-        );
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
     }
 
     #[test]
@@ -344,13 +308,7 @@ mod unit_tests {
         };
 
         assert!(report.is_cause_of_failure());
-        assert_eq!(
-            report.recovery_for_commit(),
-            TxnFailureRecovery::RetryPostCommit,
-        );
-        assert_eq!(
-            report.recovery_for_rollback(),
-            TxnFailureRecovery::InvestigateAndRollback,
-        );
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
     }
 }

@@ -265,7 +265,7 @@ impl DataConnManager {
             let mut errors = Vec::new();
             for (i, err) in indexed_errors.into_iter() {
                 let report = &mut reports[i];
-                report.cause = TxnFailureCause::RunFailure(err.clone());
+                report.cause = TxnFailureCause::LogicFailure(err.clone());
                 errors.push((report.data_conn_name.clone(), err));
             }
             return Err(errs::Err::new(DataConnError::FailToPreCommitDataConn {
@@ -1094,9 +1094,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
@@ -1113,9 +1113,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
@@ -1167,9 +1167,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
@@ -1183,9 +1183,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 71),
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
@@ -1238,9 +1238,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 2",
                     "AsyncDataConn::rollback 1",
                     "SyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 199),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 199),
                     "AsyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: RunFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 199),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 199),
                     "AsyncDataConn::close 1",
                     "AsyncDataConn::drop 1",
                     "SyncDataConn::close 2",

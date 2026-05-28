@@ -366,8 +366,8 @@ pub enum TxnFailureCause {
     /// No failure occurred, but the transaction was not committed (e.g., because
     /// another connection in the transaction failed before this one could commit).
     NoneByUncommitted,
-    /// The execution or pre-commit phase of the data connection failed.
-    RunFailure(errs::Err),
+    /// The logic execution or pre-commit phase of the data connection failed.
+    LogicFailure(errs::Err),
     /// The commit phase of the data connection failed.
     CommitFailure(errs::Err),
     /// The post-commit phase of the data connection failed.
@@ -391,21 +391,24 @@ pub enum TxnFailureRollback {
 pub enum TxnFailureRecovery {
     /// No recovery action is required.
     NoActionRequired,
-    /// The transaction was committed, but the post-commit phase failed.
-    /// The post-commit operations should be retried.
-    RetryPostCommit,
     /// The transaction was successfully rolled back.
-    /// The transaction can be rerun and committed again.
-    RerunAndCommit,
-    /// The transaction failed to commit and rollback was not run or failed.
-    /// Investigation is required before rerunning.
-    InvestigateAndRerunAndCommit,
-    /// The rollback failed or has an inconsistent state.
-    /// Investigation is required to resolve the rollback.
-    InvestigateAndRollback,
-    /// The connection was committed but other connections failed and rolled back.
-    /// Compensating operations must be performed.
-    CompensateRollback,
+    /// The transaction can be rerun a logic and committed again.
+    RerunLogicAndCommit,
+    /// The transaction failed to run a logic or pre commit.
+    /// After resolving the cause, the transaction can be rerun a logic and commit again.
+    ResolveCauseThenRerunLogicAndCommit,
+    /// The transaction failed to run post commit.
+    /// After resolving the cause, the transaction can be rerun post commit again.
+    ResolveCauseThenRerunPostCommit,
+    /// The rollback failed and it may be in an inconsistent state.
+    /// Resolve the cause and inconsistent state.
+    ResolveCauseAndInconsistency,
+    /// It is in impossile case under normal conditions.
+    /// Investigation of the cause is required.
+    InvestigateBecauseImpossible,
+    /// The transaction was successfully committed.
+    /// It is required to rollback manually.
+    ManualRollbackRequired,
 }
 
 /// A report detailing the transaction failure cause and rollback status
