@@ -169,7 +169,7 @@ impl DataConnManager {
 
     pub(crate) fn with_commit_order(names: &[&str]) -> Self {
         let mut index_map = HashMap::with_capacity(names.len());
-        // To overwrite later indexed elements with eariler ones when names overlap
+        // Using rev because eariler ones take precedence when names overlap
         for (i, nm) in names.iter().rev().enumerate() {
             index_map.insert((*nm).into(), names.len() - 1 - i);
         }
@@ -183,7 +183,10 @@ impl DataConnManager {
     pub(crate) fn add(&mut self, ssnnptr: SendSyncNonNull<DataConnContainer>) {
         let name = unsafe { (*ssnnptr.non_null_ptr.as_ptr()).name.clone() };
         if let Some(index) = self.index_map.get(&name) {
-            self.vec[*index] = Some(ssnnptr);
+            // Because eariler ones take precedence when names overlap
+            if self.vec[*index].is_none() {
+                self.vec[*index] = Some(ssnnptr);
+            }
         } else {
             let index = self.vec.len();
             self.vec.push(Some(ssnnptr));
@@ -708,6 +711,35 @@ mod tests_of_data_conn {
         }
 
         #[test]
+        fn test_new_and_add_when_overlapping_name() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            let mut manager = DataConnManager::new();
+            assert!(manager.vec.is_empty());
+            assert!(manager.index_map.is_empty());
+
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
+            let nnptr0 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
+            let ssnnptr = SendSyncNonNull::new(nnptr0);
+            manager.add(ssnnptr);
+            assert_eq!(manager.vec.len(), 1);
+            assert_eq!(manager.index_map.len(), 1);
+            assert_eq!(*manager.index_map.get("foo").unwrap(), 0);
+            assert_eq!(manager.vec[0].clone().unwrap().non_null_ptr, nnptr0);
+
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
+            let nnptr1 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
+            let ssnnptr = SendSyncNonNull::new(nnptr1);
+            manager.add(ssnnptr);
+            assert_eq!(manager.vec.len(), 1);
+            assert_eq!(manager.index_map.len(), 1);
+            assert_eq!(*manager.index_map.get("foo").unwrap(), 0);
+            assert_eq!(manager.vec[0].clone().unwrap().non_null_ptr, nnptr0);
+        }
+
+        #[test]
         fn test_with_commit_order_and_add() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
@@ -750,6 +782,38 @@ mod tests_of_data_conn {
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
             assert_eq!(*manager.index_map.get("bar").unwrap(), 0);
             assert_eq!(*manager.index_map.get("qux").unwrap(), 3);
+        }
+
+        #[test]
+        fn test_with_order_and_add_when_overlapping_name() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            let mut manager = DataConnManager::with_commit_order(&["bar", "baz", "foo"]);
+            assert_eq!(manager.vec.len(), 3);
+            assert!(manager.vec[0].is_none());
+            assert!(manager.vec[1].is_none());
+            assert!(manager.vec[2].is_none());
+            assert_eq!(manager.index_map.len(), 3);
+
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
+            let nnptr0 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
+            let ssnnptr = SendSyncNonNull::new(nnptr0);
+            manager.add(ssnnptr);
+            assert_eq!(manager.vec.len(), 3);
+            assert_eq!(manager.index_map.len(), 3);
+            assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
+            assert_eq!(manager.vec[2].clone().unwrap().non_null_ptr, nnptr0);
+
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
+            let nnptr1 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
+            let ssnnptr = SendSyncNonNull::new(nnptr1);
+            manager.add(ssnnptr);
+            assert_eq!(manager.vec.len(), 3);
+            assert_eq!(manager.index_map.len(), 3);
+            assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
+            assert_eq!(manager.vec[2].clone().unwrap().non_null_ptr, nnptr0);
         }
 
         #[test]
