@@ -270,7 +270,7 @@ impl DataSrcManager {
         }
 
         let mut index_map: HashMap<&str, usize> = HashMap::with_capacity(names.len());
-        // To overwrite later indexed elements with eariler ones when names overlap
+        // Using rev because earlier ones take precedence when names overlap
         for (i, nm) in names.iter().rev().enumerate() {
             index_map.insert(*nm, names.len() - 1 - i);
         }
