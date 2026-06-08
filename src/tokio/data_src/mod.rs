@@ -228,10 +228,8 @@ impl DataSrcManager {
 
         let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
 
-        let mut n_done = 0;
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
-            n_done += 1;
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let setup_fn = unsafe { (*ptr).setup_fn };
             ag._index = i;
@@ -240,6 +238,7 @@ impl DataSrcManager {
                 break;
             }
         }
+        let n_done = ag._index + 1;
         ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
         if indexed_errors.is_empty() {
@@ -291,10 +290,8 @@ impl DataSrcManager {
 
         let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
 
-        let mut n_done = 0;
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr_opt) in ordered_vec.iter().enumerate() {
-            n_done += 1;
             if let Some(ssnnptr) = ssnnptr_opt {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let setup_fn = unsafe { (*ptr).setup_fn };
@@ -305,6 +302,7 @@ impl DataSrcManager {
                 }
             }
         }
+        let n_done = ag._index + 1;
         ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
         if indexed_errors.is_empty() {
