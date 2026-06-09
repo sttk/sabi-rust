@@ -787,7 +787,6 @@ mod tests_of_data_hub {
                 "MyDataSrc::new 3",
                 "MyDataSrc::setup 1",
                 "MyDataSrc::setup 2 failed",
-                "MyDataSrc::close 2",
                 "MyDataSrc::close 1",
                 "MyDataSrc::drop 3",
                 "MyDataSrc::drop 2",

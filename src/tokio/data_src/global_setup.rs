@@ -117,10 +117,11 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
         .into_iter()
         .collect();
 
-    let mut static_vec: Vec<SendSyncNonNull<DataSrcContainer>> = Vec::with_capacity(regs.len());
+    let mut static_vec: Vec<Option<SendSyncNonNull<DataSrcContainer>>> =
+        Vec::with_capacity(regs.len());
     for reg in regs {
         let any_container = (reg.factory)();
-        static_vec.push(any_container.ssnnptr);
+        static_vec.push(Some(any_container.ssnnptr));
     }
 
     dsm.prepend(static_vec);
