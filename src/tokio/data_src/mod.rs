@@ -160,7 +160,7 @@ impl DataSrcManager {
         }
     }
 
-    pub(crate) fn prepend(&mut self, vec: Vec<SendSyncNonNull<DataSrcContainer>>) {
+    pub(crate) fn prepend(&mut self, vec: Vec<Option<SendSyncNonNull<DataSrcContainer>>>) {
         self.vec_unready.splice(0..0, vec);
     }
 
@@ -171,7 +171,7 @@ impl DataSrcManager {
     {
         let boxed = Box::new(DataSrcContainer::<S, C>::new(name, ds, self.local));
         let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-        self.vec_unready.push(SendSyncNonNull::new(ptr));
+        self.vec_unready.push(Some(SendSyncNonNull::new(ptr)));
     }
 
     pub(crate) fn remove(&mut self, name: impl AsRef<str>) {
@@ -192,12 +192,16 @@ impl DataSrcManager {
 
         let extracted_vec: Vec<_> = self
             .vec_unready
-            .extract_if(.., |ssnnptr| {
-                unsafe { &(*ssnnptr.non_null_ptr.as_ptr()).name }.as_ref() == name.as_ref()
+            .extract_if(.., |ssnnptr_opt| {
+                if let Some(ssnnptr) = ssnnptr_opt {
+                    unsafe { &(*ssnnptr.non_null_ptr.as_ptr()).name }.as_ref() == name.as_ref()
+                } else {
+                    false
+                }
             })
             .collect();
 
-        for ssnnptr in extracted_vec.iter().rev() {
+        for ssnnptr in extracted_vec.iter().rev().flatten() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let drop_fn = unsafe { (*ptr).drop_fn };
             drop_fn(ptr);
@@ -214,7 +218,7 @@ impl DataSrcManager {
             drop_fn(ptr);
         }
         let vec = mem::take(&mut self.vec_unready);
-        for ssnnptr in vec.into_iter().rev() {
+        for ssnnptr in vec.into_iter().rev().flatten() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let drop_fn = unsafe { (*ptr).drop_fn };
             drop_fn(ptr);
@@ -229,29 +233,35 @@ impl DataSrcManager {
         let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
 
         let mut ag = AsyncGroup::new();
-        for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let setup_fn = unsafe { (*ptr).setup_fn };
-            ag._index = i;
-            if let Err(err) = setup_fn(ptr, &mut ag).await {
-                indexed_errors.push((ag._index, err));
-                break;
+        for (i, ssnnptr_opt) in self.vec_unready.iter().enumerate() {
+            if let Some(ssnnptr) = ssnnptr_opt {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let setup_fn = unsafe { (*ptr).setup_fn };
+                ag._index = i;
+                if let Err(err) = setup_fn(ptr, &mut ag).await {
+                    indexed_errors.push((ag._index, err));
+                    break;
+                }
             }
         }
-        let n_done = ag._index + 1;
+        let n_done = ag._index;
         ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
         if indexed_errors.is_empty() {
-            self.vec_ready.append(&mut self.vec_unready);
+            let vec_unready = mem::take(&mut self.vec_unready);
+            for ssnnptr in vec_unready.into_iter().flatten() {
+                self.vec_ready.push(ssnnptr);
+            }
         } else {
             for (i, err) in indexed_errors.into_iter() {
-                let ssnnptr = &self.vec_unready[i];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let name = unsafe { (*ptr).name.clone() };
-                errors.push((name, err));
+                if let Some(ssnnptr) = &self.vec_unready[i] {
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let name = unsafe { (*ptr).name.clone() };
+                    errors.push((name, err));
+                }
             }
 
-            for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
+            for ssnnptr in self.vec_unready[0..n_done].iter().rev().flatten() {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let close_fn = unsafe { (*ptr).close_fn };
                 close_fn(ptr);
@@ -274,57 +284,59 @@ impl DataSrcManager {
             index_map.insert(*nm, names.len() - 1 - i);
         }
 
-        let vec_unready = mem::take(&mut self.vec_unready);
+        let mut ordered_indexes = Vec::<Option<usize>>::with_capacity(self.vec_unready.len());
+        ordered_indexes.resize(names.len(), None);
 
-        let mut ordered_vec: Vec<Option<SendSyncNonNull<DataSrcContainer>>> =
-            vec![None; index_map.len()];
-        for ssnnptr in vec_unready.into_iter() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let name = unsafe { (*ptr).name.clone() };
-            if let Some(index) = index_map.remove(name.as_ref()) {
-                ordered_vec[index] = Some(ssnnptr);
-            } else {
-                ordered_vec.push(Some(ssnnptr));
+        for vec_index in 0..self.vec_unready.len() {
+            if let Some(ssnnptr) = &self.vec_unready[vec_index] {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let name = unsafe { (*ptr).name.clone() };
+                if let Some(order_index) = index_map.remove(name.as_ref()) {
+                    ordered_indexes[order_index] = Some(vec_index);
+                } else {
+                    ordered_indexes.push(Some(vec_index));
+                }
             }
         }
 
         let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
 
         let mut ag = AsyncGroup::new();
-        for (i, ssnnptr_opt) in ordered_vec.iter().enumerate() {
-            if let Some(ssnnptr) = ssnnptr_opt {
+        for vec_index in ordered_indexes.iter().flatten() {
+            if let Some(ssnnptr) = &self.vec_unready[*vec_index] {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let setup_fn = unsafe { (*ptr).setup_fn };
-                ag._index = i;
+                ag._index = *vec_index;
                 if let Err(err) = setup_fn(ptr, &mut ag).await {
                     indexed_errors.push((ag._index, err));
                     break;
                 }
             }
         }
-        let n_done = ag._index + 1;
+        let n_done = ag._index;
         ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
         if indexed_errors.is_empty() {
-            for ssnnptr in ordered_vec.into_iter().flatten() {
-                self.vec_ready.push(ssnnptr);
+            let mut vec_unready = mem::take(&mut self.vec_unready);
+            for vec_index in ordered_indexes.iter().flatten() {
+                if let Some(ssnnptr) = mem::take(&mut vec_unready[*vec_index]) {
+                    self.vec_ready.push(ssnnptr);
+                }
             }
         } else {
-            for (i, err) in indexed_errors.into_iter() {
-                if let Some(ssnnptr) = &ordered_vec[i] {
+            for vec_index in ordered_indexes.iter().take(n_done + 1).flatten() {
+                if let Some(ssnnptr) = &self.vec_unready[*vec_index] {
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let close_fn = unsafe { (*ptr).close_fn };
+                    close_fn(ptr);
+                }
+            }
+            for (vec_index, err) in indexed_errors.into_iter() {
+                if let Some(ssnnptr) = &self.vec_unready[vec_index] {
                     let ptr = ssnnptr.non_null_ptr.as_ptr();
                     let name = unsafe { (*ptr).name.clone() };
                     errors.push((name, err));
                 }
-            }
-
-            for ssnnptr in ordered_vec[0..n_done].iter().flatten().rev() {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
-            }
-            for ssnnptr in ordered_vec.into_iter().flatten() {
-                self.vec_unready.push(ssnnptr);
             }
         }
     }
@@ -612,17 +624,17 @@ mod tests_of_data_src {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
         {
-            let mut vec = Vec::<SendSyncNonNull<DataSrcContainer>>::new();
+            let mut vec = Vec::<Option<SendSyncNonNull<DataSrcContainer>>>::new();
 
             let ds = SyncDataSrc::new(1, logger.clone(), false);
             let boxed = Box::new(DataSrcContainer::new("foo", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            vec.push(SendSyncNonNull::new(ptr));
+            vec.push(Some(SendSyncNonNull::new(ptr)));
 
             let ds = AsyncDataSrc::new(2, logger.clone(), false, 0);
             let boxed = Box::new(DataSrcContainer::new("bar", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            vec.push(SendSyncNonNull::new(ptr));
+            vec.push(Some(SendSyncNonNull::new(ptr)));
 
             let mut manager = DataSrcManager::new(true);
             manager.prepend(vec);
@@ -632,25 +644,41 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(
-                unsafe { manager.vec_unready[0].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[0]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "foo".into()
             );
             assert_eq!(
-                unsafe { manager.vec_unready[1].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[1]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "bar".into()
             );
 
-            let mut vec = Vec::<SendSyncNonNull<DataSrcContainer>>::new();
+            let mut vec = Vec::<Option<SendSyncNonNull<DataSrcContainer>>>::new();
 
             let ds = SyncDataSrc::new(3, logger.clone(), false);
             let boxed = Box::new(DataSrcContainer::new("baz", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            vec.push(SendSyncNonNull::new(ptr));
+            vec.push(Some(SendSyncNonNull::new(ptr)));
 
             let ds = AsyncDataSrc::new(4, logger.clone(), false, 0);
             let boxed = Box::new(DataSrcContainer::new("qux", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            vec.push(SendSyncNonNull::new(ptr));
+            vec.push(Some(SendSyncNonNull::new(ptr)));
 
             manager.prepend(vec);
 
@@ -659,19 +687,51 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(
-                unsafe { manager.vec_unready[0].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[0]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "baz".into()
             );
             assert_eq!(
-                unsafe { manager.vec_unready[1].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[1]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "qux".into()
             );
             assert_eq!(
-                unsafe { manager.vec_unready[2].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[2]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "foo".into()
             );
             assert_eq!(
-                unsafe { manager.vec_unready[3].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[3]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "bar".into()
             );
         }
@@ -705,7 +765,15 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(
-                unsafe { manager.vec_unready[0].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[0]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "foo".into()
             );
 
@@ -717,11 +785,27 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(
-                unsafe { manager.vec_unready[0].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[0]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "foo".into()
             );
             assert_eq!(
-                unsafe { manager.vec_unready[1].non_null_ptr.as_ref().name.clone() },
+                unsafe {
+                    manager.vec_unready[1]
+                        .as_ref()
+                        .unwrap()
+                        .non_null_ptr
+                        .as_ref()
+                        .name
+                        .clone()
+                },
                 "bar".into()
             );
         }
@@ -745,12 +829,12 @@ mod tests_of_data_src {
             let ds1 = SyncDataSrc::new(1, logger.clone(), false);
             let boxed = Box::new(DataSrcContainer::new("foo", ds1, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            manager.vec_unready.push(SendSyncNonNull::new(ptr));
+            manager.vec_unready.push(Some(SendSyncNonNull::new(ptr)));
 
             let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
             let boxed = Box::new(DataSrcContainer::new("bar", ds2, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            manager.vec_unready.push(SendSyncNonNull::new(ptr));
+            manager.vec_unready.push(Some(SendSyncNonNull::new(ptr)));
 
             let ds3 = SyncDataSrc::new(3, logger.clone(), false);
             let boxed = Box::new(DataSrcContainer::new("baz", ds3, true));
@@ -797,12 +881,12 @@ mod tests_of_data_src {
             let ds1 = SyncDataSrc::new(1, logger.clone(), false);
             let boxed = Box::new(DataSrcContainer::new("foo", ds1, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            manager.vec_unready.push(SendSyncNonNull::new(ptr));
+            manager.vec_unready.push(Some(SendSyncNonNull::new(ptr)));
 
             let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
             let boxed = Box::new(DataSrcContainer::new("bar", ds2, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
-            manager.vec_unready.push(SendSyncNonNull::new(ptr));
+            manager.vec_unready.push(Some(SendSyncNonNull::new(ptr)));
 
             let ds3 = SyncDataSrc::new(3, logger.clone(), false);
             let boxed = Box::new(DataSrcContainer::new("baz", ds3, true));
@@ -910,7 +994,6 @@ mod tests_of_data_src {
         assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
         assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::setup 2 failed".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
@@ -1002,7 +1085,6 @@ mod tests_of_data_src {
         assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
         assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
         assert!(locked.contains(&"SyncDataSrc::setup 1 failed".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
@@ -1031,7 +1113,7 @@ mod tests_of_data_src {
 
             let mut vec = Vec::new();
             manager
-                .setup_with_order_async(&["baz", "foo", "baz"], &mut vec)
+                .setup_with_order_async(&["baz", "baz", "foo"], &mut vec)
                 .await;
 
             assert!(manager.local);
@@ -1050,6 +1132,60 @@ mod tests_of_data_src {
         assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_of_setup_with_order_containing_duplicated_name_and_ok_2() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut manager = DataSrcManager::new(true);
+
+            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            manager.add("foo", ds1);
+
+            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            manager.add("bar", ds2);
+
+            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            manager.add("baz", ds3);
+
+            let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+            manager.add("qux", ds4);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 4);
+            assert_eq!(manager.vec_ready.len(), 0);
+
+            let mut vec = Vec::new();
+            manager
+                .setup_with_order_async(&["baz", "foo", "baz", "qux"], &mut vec)
+                .await;
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 4);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let locked = logger.lock().await;
+        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::new 4".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 4".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
