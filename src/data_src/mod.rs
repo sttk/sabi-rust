@@ -943,12 +943,16 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
 
-            let mut vec = Vec::new();
-            manager.setup(&mut vec);
+            let mut errors = Vec::new();
+            manager.setup(&mut errors);
 
             assert!(manager.local);
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].0, "bar".into());
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 472 }");
         }
 
         assert_eq!(
@@ -987,12 +991,14 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
 
-            let mut vec = Vec::new();
-            manager.setup_with_order(&["baz", "foo"], &mut vec);
+            let mut errors = Vec::new();
+            manager.setup_with_order(&["baz", "foo"], &mut errors);
 
             assert!(manager.local);
             assert_eq!(manager.vec_unready.len(), 0);
             assert_eq!(manager.vec_ready.len(), 3);
+
+            assert_eq!(errors.len(), 0);
         }
 
         assert_eq!(
@@ -1034,12 +1040,16 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
 
-            let mut vec = Vec::new();
-            manager.setup_with_order(&["baz", "foo"], &mut vec);
+            let mut errors = Vec::new();
+            manager.setup_with_order(&["baz", "foo"], &mut errors);
 
             assert!(manager.local);
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].0, "foo".into());
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 472 }");
         }
 
         assert_eq!(
@@ -1151,6 +1161,53 @@ mod tests_of_data_src {
                 "SyncDataSrc::drop 2",
                 "SyncDataSrc::close 4",
                 "SyncDataSrc::drop 4",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
+                "SyncDataSrc::close 3",
+                "SyncDataSrc::drop 3",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_of_setup_with_order_buf_one_of_names_is_not_used() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut manager = DataSrcManager::new(true);
+
+            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            manager.add("foo", ds1);
+
+            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            manager.add("bar", ds2);
+
+            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            manager.add("baz", ds3);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 3);
+            assert_eq!(manager.vec_ready.len(), 0);
+
+            let mut vec = Vec::new();
+            manager.setup_with_order(&["baz", "foo", "xxx"], &mut vec);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 3);
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            vec![
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::new 3",
+                "SyncDataSrc::setup 3",
+                "SyncDataSrc::setup 1",
+                "SyncDataSrc::setup 2",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
                 "SyncDataSrc::close 1",
                 "SyncDataSrc::drop 1",
                 "SyncDataSrc::close 3",

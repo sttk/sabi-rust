@@ -1020,14 +1020,16 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
 
-            let mut vec = Vec::new();
+            let mut errors = Vec::new();
             manager
-                .setup_with_order_async(&["baz", "foo"], &mut vec)
+                .setup_with_order_async(&["baz", "foo"], &mut errors)
                 .await;
 
             assert!(manager.local);
             assert_eq!(manager.vec_unready.len(), 0);
             assert_eq!(manager.vec_ready.len(), 3);
+
+            assert_eq!(errors.len(), 0);
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1067,14 +1069,18 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
 
-            let mut vec = Vec::new();
+            let mut errors = Vec::new();
             manager
-                .setup_with_order_async(&["baz", "foo"], &mut vec)
+                .setup_with_order_async(&["baz", "foo"], &mut errors)
                 .await;
 
             assert!(manager.local);
             assert_eq!(manager.vec_unready.len(), 3);
             assert_eq!(manager.vec_ready.len(), 0);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].0, "foo".into());
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 497 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1186,6 +1192,53 @@ mod tests_of_data_src {
         assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_of_setup_with_order_buf_one_of_names_is_not_used() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut manager = DataSrcManager::new(true);
+
+            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            manager.add("foo", ds1);
+
+            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            manager.add("bar", ds2);
+
+            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            manager.add("baz", ds3);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 3);
+            assert_eq!(manager.vec_ready.len(), 0);
+
+            let mut vec = Vec::new();
+            manager
+                .setup_with_order_async(&["baz", "foo", "xxx"], &mut vec)
+                .await;
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 3);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let locked = logger.lock().await;
+        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
