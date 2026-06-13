@@ -302,18 +302,21 @@ impl DataSrcManager {
         let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
 
         let mut ag = AsyncGroup::new();
-        for vec_index in ordered_indexes.iter().flatten() {
-            if let Some(ssnnptr) = &self.vec_unready[*vec_index] {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let setup_fn = unsafe { (*ptr).setup_fn };
-                ag._index = *vec_index;
-                if let Err(err) = setup_fn(ptr, &mut ag).await {
-                    indexed_errors.push((ag._index, err));
-                    break;
+        let mut n_done = 0;
+        for vec_index_opt in ordered_indexes.iter() {
+            if let Some(vec_index) = vec_index_opt {
+                if let Some(ssnnptr) = &self.vec_unready[*vec_index] {
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let setup_fn = unsafe { (*ptr).setup_fn };
+                    ag._index = *vec_index;
+                    if let Err(err) = setup_fn(ptr, &mut ag).await {
+                        indexed_errors.push((ag._index, err));
+                        break;
+                    }
                 }
             }
+            n_done += 1;
         }
-        let n_done = ag._index;
         ag.join_and_collect_errors_async(&mut indexed_errors).await;
 
         if indexed_errors.is_empty() {
@@ -324,7 +327,7 @@ impl DataSrcManager {
                 }
             }
         } else {
-            for vec_index in ordered_indexes.iter().take(n_done + 1).flatten() {
+            for vec_index in ordered_indexes.iter().take(n_done).flatten() {
                 if let Some(ssnnptr) = &self.vec_unready[*vec_index] {
                     let ptr = ssnnptr.non_null_ptr.as_ptr();
                     let close_fn = unsafe { (*ptr).close_fn };
@@ -1081,9 +1084,9 @@ mod tests_of_data_src {
             assert_eq!(errors.len(), 1);
             assert_eq!(errors[0].0, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 497 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 500 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 497 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 500 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
