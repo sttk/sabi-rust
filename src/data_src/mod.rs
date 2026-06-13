@@ -952,7 +952,10 @@ mod tests_of_data_src {
 
             assert_eq!(errors.len(), 1);
             assert_eq!(errors[0].0, "bar".into());
+            #[cfg(unix)]
             assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 472 }");
+            #[cfg(windows)]
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 472 }");
         }
 
         assert_eq!(
@@ -1049,7 +1052,10 @@ mod tests_of_data_src {
 
             assert_eq!(errors.len(), 1);
             assert_eq!(errors[0].0, "foo".into());
+            #[cfg(unix)]
             assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 472 }");
+            #[cfg(windows)]
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 472 }");
         }
 
         assert_eq!(
