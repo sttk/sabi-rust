@@ -240,18 +240,17 @@ impl DataSrcManager {
                 self.vec_ready.push(ssnnptr);
             }
         } else {
+            for ssnnptr in self.vec_unready[0..n_done].iter().rev().flatten() {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let close_fn = unsafe { (*ptr).close_fn };
+                close_fn(ptr);
+            }
             for (i, err) in indexed_errors.into_iter() {
                 if let Some(ssnnptr) = &self.vec_unready[i] {
                     let ptr = ssnnptr.non_null_ptr.as_ptr();
                     let name = unsafe { (*ptr).name.clone() };
                     errors.push((name, err));
                 }
-            }
-
-            for ssnnptr in self.vec_unready[0..n_done].iter().rev().flatten() {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
             }
         }
     }
@@ -314,7 +313,7 @@ impl DataSrcManager {
                 }
             }
         } else {
-            for vec_index in ordered_indexes.iter().take(n_done).flatten() {
+            for vec_index in ordered_indexes.iter().take(n_done).flatten().rev() {
                 if let Some(ssnnptr) = &self.vec_unready[*vec_index] {
                     let ptr = ssnnptr.non_null_ptr.as_ptr();
                     let close_fn = unsafe { (*ptr).close_fn };
@@ -956,9 +955,9 @@ mod tests_of_data_src {
             assert_eq!(errors.len(), 1);
             assert_eq!(errors[0].0, "bar".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 475 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 474 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 475 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 474 }");
         }
 
         assert_eq!(
@@ -1042,23 +1041,26 @@ mod tests_of_data_src {
             let ds3 = SyncDataSrc::new(3, logger.clone(), false);
             manager.add("baz", ds3);
 
+            let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+            manager.add("qux", ds4);
+
             assert!(manager.local);
-            assert_eq!(manager.vec_unready.len(), 3);
+            assert_eq!(manager.vec_unready.len(), 4);
             assert_eq!(manager.vec_ready.len(), 0);
 
             let mut errors = Vec::new();
-            manager.setup_with_order(&["baz", "foo"], &mut errors);
+            manager.setup_with_order(&["qux", "baz", "foo"], &mut errors);
 
             assert!(manager.local);
-            assert_eq!(manager.vec_unready.len(), 3);
+            assert_eq!(manager.vec_unready.len(), 4);
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(errors.len(), 1);
             assert_eq!(errors[0].0, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 475 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 474 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 475 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 474 }");
         }
 
         assert_eq!(
@@ -1067,9 +1069,13 @@ mod tests_of_data_src {
                 "SyncDataSrc::new 1",
                 "SyncDataSrc::new 2",
                 "SyncDataSrc::new 3",
+                "SyncDataSrc::new 4",
+                "SyncDataSrc::setup 4",
                 "SyncDataSrc::setup 3",
                 "SyncDataSrc::setup 1 failed",
                 "SyncDataSrc::close 3",
+                "SyncDataSrc::close 4",
+                "SyncDataSrc::drop 4",
                 "SyncDataSrc::drop 3",
                 "SyncDataSrc::drop 2",
                 "SyncDataSrc::drop 1",

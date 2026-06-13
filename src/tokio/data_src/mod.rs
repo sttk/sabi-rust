@@ -253,18 +253,17 @@ impl DataSrcManager {
                 self.vec_ready.push(ssnnptr);
             }
         } else {
+            for ssnnptr in self.vec_unready[0..n_done].iter().rev().flatten() {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let close_fn = unsafe { (*ptr).close_fn };
+                close_fn(ptr);
+            }
             for (i, err) in indexed_errors.into_iter() {
                 if let Some(ssnnptr) = &self.vec_unready[i] {
                     let ptr = ssnnptr.non_null_ptr.as_ptr();
                     let name = unsafe { (*ptr).name.clone() };
                     errors.push((name, err));
                 }
-            }
-
-            for ssnnptr in self.vec_unready[0..n_done].iter().rev().flatten() {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
             }
         }
     }
@@ -1068,25 +1067,28 @@ mod tests_of_data_src {
             let ds3 = SyncDataSrc::new(3, logger.clone(), false);
             manager.add("baz", ds3);
 
+            let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+            manager.add("qux", ds4);
+
             assert!(manager.local);
-            assert_eq!(manager.vec_unready.len(), 3);
+            assert_eq!(manager.vec_unready.len(), 4);
             assert_eq!(manager.vec_ready.len(), 0);
 
             let mut errors = Vec::new();
             manager
-                .setup_with_order_async(&["baz", "foo"], &mut errors)
+                .setup_with_order_async(&["qux", "baz", "foo"], &mut errors)
                 .await;
 
             assert!(manager.local);
-            assert_eq!(manager.vec_unready.len(), 3);
+            assert_eq!(manager.vec_unready.len(), 4);
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(errors.len(), 1);
             assert_eq!(errors[0].0, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 500 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 499 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 500 }");
+            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 499 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1095,12 +1097,16 @@ mod tests_of_data_src {
         assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::new 4".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::setup 4".to_string()));
         assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
         assert!(locked.contains(&"SyncDataSrc::setup 1 failed".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
         assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
         assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
     }
 
     #[tokio::test]
