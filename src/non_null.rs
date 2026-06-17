@@ -18,9 +18,15 @@ impl<T: Send + Sync> SendSyncNonNull<T> {
 unsafe impl<T: Send + Sync> Send for SendSyncNonNull<T> {}
 unsafe impl<T: Send + Sync> Sync for SendSyncNonNull<T> {}
 
+// Clone and Copy are implemented manually to avoid introducing
+// unnecessary trait bounds such as `T: Clone` or `T: Copy`.
+// This type is merely a wrapper around a non-owning pointer, so
+// cloning or copying it only duplicates the pointer value.
+impl<T: Send + Sync> Copy for SendSyncNonNull<T> {}
+
 impl<T: Send + Sync> Clone for SendSyncNonNull<T> {
     #[inline(always)]
     fn clone(&self) -> Self {
-        SendSyncNonNull::new(self.non_null_ptr)
+        *self
     }
 }

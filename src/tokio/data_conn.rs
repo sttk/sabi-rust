@@ -206,7 +206,7 @@ impl DataConnManager {
                     let ptr = ssnnptr.non_null_ptr.as_ptr();
                     let cont_name = unsafe { &(*ptr).name };
                     if cont_name.as_ref() == name.as_ref() {
-                        return Some(ssnnptr.clone());
+                        return Some(*ssnnptr);
                     }
                 }
             }
