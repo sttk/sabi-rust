@@ -339,7 +339,7 @@ where
 }
 
 pub(crate) struct DataSrcManager {
-    vec_unready: Vec<Option<SendSyncNonNull<DataSrcContainer>>>,
+    vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
     vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
     local: bool,
 }
