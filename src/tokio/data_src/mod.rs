@@ -308,12 +308,12 @@ impl DataSrcManager {
 
         if indexed_errors.is_empty() {
             let old_unready = mem::take(&mut self.vec_unready);
-            let mut ordered_unready: Vec<SendSyncNonNull<DataSrcContainer>> = ordered_indexes
-                .iter()
-                .flatten()
-                .map(|&idx| old_unready[idx])
-                .collect();
-            self.vec_ready.append(&mut ordered_unready);
+            // Maximizing performance by pre-allocating the required capacity.
+            self.vec_ready
+                .reserve(ordered_indexes.iter().flatten().count());
+            for vec_index in ordered_indexes.iter().flatten() {
+                self.vec_ready.push(old_unready[*vec_index]);
+            }
         } else {
             for vec_index in ordered_indexes.iter().take(n_done).flatten() {
                 let ssnnptr = &self.vec_unready[*vec_index];
