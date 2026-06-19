@@ -13,148 +13,20 @@
 
 ## Overview
 
-### Core Design Philosophy: Complete Separation of Logic and Data Access
+**sabi** was developed with the goal of achieving a thorough separation between business logic and data access. However, it sets itself apart from conventional Dependency Injection (DI) frameworks that merely invert dependencies by sandwiching an interface between the two layers.
 
-`sabi` is a small-scale application framework rooted in the foundational philosophy of completely separating business logic from data access. However, its objective extends beyond the typical goals of conventional Dependency Injection (DI) frameworks—which merely insert an interface between logic and data access to allow implementation swapping and reduce direct coupling.
+In particular, two key techniques elevate **sabi** into a highly advanced framework: the introduction of data access traits optimized for each specific piece of logic, and an approach that routes inputs and outputs from the controller layer directly into the data access layer via `DataSrc`, bypassing the logic layer entirely.
 
-Instead, `sabi` requires the logic side to define its own dedicated interfaces and matches them against those provided by the data access side. Through this mechanism, it ensures that **"the logic side holds the ultimate initiative, achieving true independence from data access concerns."**
+The former approach fully materializes the **Interface Segregation Principle (ISP)**, which has frequently become a mere formality within the SOLID principles. Furthermore, because adding methods to `DataAcc` or incorporating additional services via `DataSrc` does not affect existing logic that does not utilize them, capabilities can be extended without modifying existing code—thereby conceptually satisfying the **Open-Closed Principle (OCP)**.
 
-In traditional DI patterns, methods are frequently grouped based on the structure or convenience of the data access layer, such as database tables or external services (e.g., a `UserRepository` corresponding tightly to a `User` table). Consequently, the logic layer is dragged into and becomes dependent on these structural boundaries, often forcing interfaces to include redundant methods not required by a specific use case. This structure inherently tends to violate the Interface Segregation Principle (ISP).
+Additionally, even if a `DataAcc` implementation providing a specific capability is replaced with an alternative implementation, or if responsibilities are rearranged among different `DataAcc` traits within the data access layer, the behavior of the logic layer remains unchanged as long as the underlying contract is maintained. Thus, the **Liskov Substitution Principle (LSP)** is realized at the contractual level.
 
-`sabi` addresses this flaw by adopting a localized approach: **"defining data access interfaces (traits) precisely in units of individual logic components (use cases) that require them."** Because a logic function accepts only a trait declaring the bare minimum operations it actually needs, the logic side remains entirely agnostic of the underlying data access architecture.
+Moreover, because both high-level logic and low-level data access depend on the `DataAcc` contract defined as an individual capability, the **Dependency Inversion Principle (DIP)** is also achieved at the architectural level. In this manner, rather than adhering strictly to the classical OOP context that presupposes inheritance, **sabi** realizes the core intent of each principle—"separation of concerns," "localization of change impact," "substitutability based on contracts," and "dependence on abstractions"—at the architectural level. It possesses a structure that conceptually aligns with all SOLID principles, an achievement that is exceptionally rare in the history of software design.
 
-Concurrently, the data access implementation can be provided with flexible granularity—whether table-centric or feature-centric—defined as default methods of traits derived from `DataAcc`.
+The latter approach eliminates the residual hierarchical dependency that typically persists between logic and data access, elevating them into an equal relationship based on the contract defined by the trait's method signatures. This can be viewed as an evolutionary extension of the principle, pushing beyond conventional DIP—which merely inverts the direction of dependency—to reduce and localize the dependency itself into contractual boundaries.
 
-Bridge-building between these distinct trait groups—the logic-driven minimum interfaces and the data-access-driven implementations, which are fundamentally difficult to connect directly in Rust—is orchestrated by `sabi` through a centralized `DataHub` struct and a method overriding (mapping) mechanism via `override_macro`.
+This structure delivers the "restricted dependencies" and "localization of explicitly bounded contexts" required for AI-driven automated programming, making **sabi** a cutting-edge, AI-friendly, Capability-oriented framework for today's AI era.
 
-Through this architecture, `sabi` thoroughly enforces the separation of concerns, powerfully driving the construction of clean, highly testable application architectures.
-
-### Philosophical Background and Significance in Programming History
-
-`sabi`’s approach of mapping logic-specific interfaces to data access implementations via the `DataHub` is rooted in an epistemological and relativistic premise: *“The appearance of an object changes depending on the context of the observing or utilizing subject.”*
-
-The world does not exist as a single, fixed objective reality; rather, it manifests its meaning and form in response to the questions and purposes held by the subject. Mirroring this concept, interfaces visible to the logic should not be dictated by data-side constraints. Instead, they must be defined according to the inherent needs and context of the logic itself—a philosophy that `sabi` materializes into software design.
-
-In many traditional architectures, database structures or external service models are established first, and the logic is subsequently tailored to conform to them. In `sabi`, however, the logic dictates only the operations it requires, and the data access layer responds by fulfilling them. In short, the system’s center of perspective shifts from "data" to "logic."
-
-This philosophy of "complete separation of logic and data access" can be viewed, in a sense, as a return to the dawn of programming in the 1950s and 60s, when programs were composed of the barest essentials: "procedures" and "data." Yet, its realization is far from mere nostalgia. It integrates **Separation of Concerns** (Edsger W. Dijkstra, 1974) and **Dependency Control**, long pursued by modern software engineering, at an exceptionally high standard.
-
-#### Separation of Concerns (Edsger W. Dijkstra, 1974)
-
-Viewed through the lens of Dijkstra’s "Separation of Concerns," `sabi`’s structural isolation is uncompromisingly thorough.
-
-* **Concerns of Business Logic**: Pure computation and domain knowledge—*what* data to process and evaluate under *which* rules.
-* **Concerns of Data Access**: Environment-dependent persistence control—*where* to fetch data from and *where* to store it.
-
-`sabi` strictly isolates these two concerns both spatially and logically via trait-bound boundaries, logic-specific traits, and the mapping mechanism powered by `DataHub` and `override_macro`.
-
-Furthermore, responsibilities within the data access layer itself are granularly decomposed into:
-
-* **`DataSrc`**: Configuration and connectivity to external services.
-* **`DataConn`**: Connection lifecycle management and transaction control.
-* **`DataAcc`**: The actual data operations.
-
-This prevents multiple responsibilities from collapsing into a single component, ensuring highly localized reasons for change and superior maintainability.
-
-#### Relationship with SOLID Principles
-
-The design of `sabi` aligns seamlessly with the SOLID principles.
-
-First, by entirely severing logic from data access, the **Single Responsibility Principle (SRP)** is satisfied with high precision. The logic layer changes strictly due to modifications in domain rules, while the data access layer changes solely due to infrastructure adjustments.
-
-Second, because the logic depends exclusively on its own dedicated abstractions (traits), the **Open/Closed Principle (OCP)** and the **Liskov Substitution Principle (LSP)** are naturally preserved. Introducing new data sources or swapping in mocks for testing requires adding or modifying implementations of `DataSrc` or `DataConn` without impacting existing logic.
-
-Third, defining dedicated traits per use case realizes the **Interface Segregation Principle (ISP)** in its purest form. Logic components never depend on massive, monolithic data access APIs; they depend strictly on the minimal set of operations they truly necessitate.
-
-Most distinctively, `sabi` offers an extended interpretation of the **Dependency Inversion Principle (DIP)**.
-Standard DIP dictates that *“high-level modules should not depend on low-level modules; both should depend on abstractions,”* which typically results in the low-level module conforming to abstractions defined by the high-level module (the inversion of dependency direction).
-
-In `sabi`, however, the logic side and the data access side coexist with independent, parallel abstraction systems:
-
-* **The Logic Side** depends on a "dedicated trait" born of its own context.
-* **The Data Access Side** is implemented as a "provider trait" shaped by its own structure.
-* **The `DataHub`** mediates and maps the two symmetrically as equal peers.
-
-Consequently, there is no unidirectional hierarchy where one layer dominates the abstraction of the other. Both sides remain completely blind to each other's internal structures, preserving their context-specific abstractions while being symmetrically wired together by the `DataHub`. This structure represents a **"decentralization of dependency relationships,"** transcending simple dependency inversion to form a cornerstone of `sabi`’s identity.
-
-#### Hexagonal Architecture (Alistair Cockburn, 2005)
-
-Hexagonal Architecture positions the application core at the center, abstracting connections to the outside world via "Ports and Adapters." `sabi` inherits this philosophy but pushes it a step further.
-
-In conventional Hexagonal Architecture, ports (interfaces) often end up designed as wide, system-wide contracts shared across the entire application. As a result, despite being application-centric, the granularity and shape of these interfaces frequently pull in structural baggage from the infrastructure (the adapter's constraints).
-
-`sabi` disrupts this by redefining ports at the use-case level. Interfaces do not exist as "global contracts of the application core"; instead, they are formed locally according to "what this specific logic demands." This effectively evolves a core-centric Ports and Adapters model into a **use-case-centric architecture**.
-
-Additionally, while the `DataHub` assumes a role akin to an Adapter Registry or a Composition Root in Hexagonal Architecture, it is more than a mere wiring mechanism. It dynamically reconstructs the relationship between logic traits and data access implementations. As a result, the primary architectural question shifts from *"Which external service are we consuming?"* to *"What does this logic inherently need?"*
-
-In essence, `sabi` elevates Ports and Adapters from a model of "Boundary Design" to one of **"Perspective-Oriented Design."** Rather than locking external connections into static contracts, it alters how the world is viewed based on the logic's context, expanding Hexagonal Architecture into a higher dimension of abstraction.
-
-#### Capability-Based Architecture (2010s–)
-
-The essence of a Capability-Based Architecture lies in governing a system based on "what a subject is permitted to do," rather than "what identity a subject possesses."
-
-The logic-specific traits in `sabi` function precisely as **Capabilities**. A logic block is never granted blanket, omnibus access to a massive Repository or ORM. Instead, it is explicitly handed only the bare minimum capabilities required to execute its specific use case.
-
-This is not mere abstraction; it enforces a strict, type-level boundary over:
-
-1. What can be accessed.
-2. What can be known.
-3. What can be executed.
-
-In other words, a logic-specific trait in `sabi` is both an interface and a **Security Boundary**.
-
-This design structurally insulates logic from unintended data access and side effects, naturally elevating security, testability, local reasoning, and concurrent safety.
-
-From a Capability Security perspective, `sabi` "encapsulates data access privileges directly into the type system." The capabilities a logic block can wield are statically determined by the trait it receives, making any exceeding operations compile-time impossibilities. By embedding "privilege" into types rather than managing it as a runtime concern, `sabi` exhibits profound synergy with Rust’s ownership and borrowing semantics. It successfully distills a capability-oriented architecture into a practical, Rust-idiomatic framework.
-
-#### CUPID Characteristics (Dan North, 2021)
-
-Proposed as a modern complement or alternative to SOLID, Dan North’s CUPID characterization emphasizes software that exhibits the following traits:
-
-* **Composable**
-* **Unix Philosophy** (Small and simple)
-* **Predictable**
-* **Idiomatic** (Feels natural to the language)
-* **Domain-based**
-
-`sabi`’s architecture resonates profoundly with these criteria.
-
-Because its logic-specific traits are micro-interfaces capturing only the bare essentials of a use case, each logic component remains small and highly decoupled. This aligns with being **Composable** and mirrors the **Unix Philosophy** of assembling overall behavior out of small, focused pieces.
-
-Moreover, because data access pathways and transaction boundaries are unified under the `DataHub`, system behavior becomes highly traceable. Since what a logic component can see and execute is strictly constrained at the type level, the ripple effects of side effects and dependencies are easily contained, granting the system high **Predictability**.
-
-Furthermore, `sabi` is naturally tailored to Rust’s core paradigms:
-
-* Abstraction via traits.
-* Boundaries of responsibility dictated by ownership and borrowing.
-* Explicit dependency mapping using lifetimes.
-* Execution efficiency preserved through zero-cost abstractions.
-
-By leveraging these native concepts without fighting the language model, `sabi` stands as a thoroughly **Idiomatic** Rust architecture.
-
-Additionally, because the initiative of interface design belongs to the use case rather than the data layer, the center of gravity always remains within the domain logic. The design originates from "what the logic requires" rather than infrastructure or persistence mechanisms, cementing its **Domain-based** nature.
-
-Crucially, `sabi` does not aspire to be a "monolithic, all-encompassing abstraction framework." It eschews magical, multi-functional machinery in favor of a minimal framework designed to partition responsibilities cleanly. Each element is simple, constrained, and free of extraneous knowledge—a design philosophy closely aligned with the Unix maxim, *"Do One Thing Well."* Rather than masking complexity under heavy abstractions, `sabi` maintains systemic comprehensibility by decomposing and localizing responsibility.
-
-#### AI Agent-Friendly Architecture (2024–)
-
-In an era where Large Language Models (LLMs) and autonomous AI agents are deeply involved in generating, analyzing, and refactoring code, software architecture faces a new paradigm of requirements:
-
-* Localized dependencies.
-* Explicit side-effect boundaries.
-* Small reasoning contexts.
-* Explicit interface contracts.
-* Context-contained code comprehension.
-
-The structure of `sabi` is uniquely optimized for these modern demands.
-
-Because logic components interact solely with dedicated traits, an AI agent does not need to parse the entire footprint of a massive Repository or ORM. It needs only to inspect the localized data capabilities presented to that specific logic block, making code completion, static analysis, automated test generation, and specification inference vastly more efficient.
-
-Moreover, because the `DataHub` centralizes the side-effect boundaries, AI agents can effortlessly track exactly where the application interfaces with the external world. This structural predictability is vital for safe, autonomous code modifications and self-directed refactoring.
-
-Historically, frameworks evolved to optimize for "how concisely a human could write code," frequently mistaking surface-level brevity for simplicity. However, this approach often fostered heavy reliance on implicit conventions and implicit framework internals, yielding codebases that are difficult to reason about from a localized snippet alone.
-
-In the age of AI, relying on such vast, shared "implicit knowledge" becomes an architectural bottleneck. What matters now is **High Locality—the ability to reason about code entirely within its local context**. `sabi` structurally and philosophically anticipates this next wave of software design, delivering an architecture natively optimized for both humans and AI agents alike.
 
 ## Install
 
