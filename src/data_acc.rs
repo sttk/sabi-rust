@@ -77,7 +77,7 @@ mod tests_of_data_acc {
         }
         fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, _reports: &[TxnFailureReport]) {
             let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::force_back {}", self.id));
+            logger.push(format!("FooDataConn::on_txn_failure {}", self.id));
         }
         fn close(&mut self) {
             let mut logger = self.logger.lock().unwrap();
@@ -210,7 +210,7 @@ mod tests_of_data_acc {
         }
         fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, _reports: &[TxnFailureReport]) {
             let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::force_back {}", self.id));
+            logger.push(format!("BarDataConn::on_txn_failure {}", self.id));
         }
         fn close(&mut self) {
             let mut logger = self.logger.lock().unwrap();
