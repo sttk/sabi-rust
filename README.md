@@ -74,7 +74,7 @@ pub fn my_logic(data: &mut impl MyData) -> errs::Result<()> {
 ### 2. Implementing DataAcc derived traits
 
 The `DataAcc` trait provides a simple mechanism to retrieve `DataConn` objects.
-However, it's the derived traits (like `GettingDataAcc`, `RedisSettingDataAcc`, and `StdioPrintingDataAcc` in this example) that define the application-specific methods for accessing data.
+However, it's the derived traits (like `GettingDataAcc` and `SettingDataAcc` in this example) that define the application-specific methods for accessing data.
 These methods then use `DataAcc::get_data_conn` to obtain the appropriate `DataConn` and perform the actual data operations.
 The `#[overridable]` macro is also used here to allow these methods to be integrated with `DataHub`.
 
@@ -92,7 +92,7 @@ pub trait GettingDataAcc: DataAcc {
 }
 
 #[overridable]
-pub trait RedisSettingDataAcc: DataAcc {
+pub trait SettingDataAcc: DataAcc {
     fn set_text(&mut self, text: String) -> errs::Result<()> {
         let redis_data_conn = self.get_data_conn::<RedisDataConn>("redis")?;
         let redis_conn = data_conn.get_connection();
@@ -231,7 +231,7 @@ pub trait GettingDataAccAsync: DataAcc {
 }
 
 #[overridable]
-pub trait RedisSettingDataAccAsync: DataAcc {
+pub trait SettingDataAccAsync: DataAcc {
     async fn set_text_async(&mut self, text: String) -> errs::Result<()> {
         let redis_data_conn = self.get_data_conn_async::<RedisDataConnAsync>("redis").await?;
         let redis_conn = data_conn.get_connection();
