@@ -100,7 +100,7 @@ mod tests_of_data_acc {
             _reports: Arc<[TxnFailureReport]>,
         ) {
             let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::force_back_async {}", self.id));
+            logger.push(format!("FooDataConn::on_txn_failure_async {}", self.id));
         }
         fn close(&mut self) {
             let mut logger = self.logger.lock().unwrap();
@@ -243,7 +243,7 @@ mod tests_of_data_acc {
             _reports: Arc<[TxnFailureReport]>,
         ) {
             let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::force_back_async {}", self.id));
+            logger.push(format!("BarDataConn::on_txn_failure_async {}", self.id));
         }
         fn close(&mut self) {
             let mut logger = self.logger.lock().unwrap();
