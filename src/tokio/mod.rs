@@ -250,6 +250,7 @@ where
 pub(crate) struct DataConnManager {
     vec: Vec<Option<SendSyncNonNull<DataConnContainer>>>,
     index_map: HashMap<Arc<str>, usize>,
+    committed: bool,
 }
 
 /// The trait that abstracts a data source responsible for managing connections
