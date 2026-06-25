@@ -382,7 +382,7 @@ impl DataConnManager {
         self.index_map.clear();
 
         let vec: Vec<Option<SendSyncNonNull<DataConnContainer>>> = mem::take(&mut self.vec);
-        for ssnnptr in vec.iter().flatten() {
+        for ssnnptr in vec.iter().flatten().rev() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let close_fn = unsafe { (*ptr).close_fn };
             let drop_fn = unsafe { (*ptr).drop_fn };
@@ -1027,10 +1027,10 @@ mod tests_of_data_conn {
                     "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                     "AsyncDataConn::on_txn_failure 2",
                     "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1086,12 +1086,12 @@ mod tests_of_data_conn {
                     "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                     "AsyncDataConn::on_txn_failure 2",
                     "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
-                    "AsyncDataConn::close 2",
-                    "AsyncDataConn::drop 2",
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "SyncDataConn::close 3",
                     "SyncDataConn::drop 3",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "AsyncDataConn::close 2",
+                    "AsyncDataConn::drop 2",
                 ]
             );
         }
@@ -1146,10 +1146,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
             #[cfg(windows)]
@@ -1165,10 +1165,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1226,10 +1226,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
-                    "AsyncDataConn::close 2",
-                    "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
+                    "AsyncDataConn::close 2",
+                    "AsyncDataConn::drop 2",
                 ]
             );
             #[cfg(windows)]
@@ -1246,10 +1246,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
-                    "AsyncDataConn::close 2",
-                    "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
+                    "AsyncDataConn::close 2",
+                    "AsyncDataConn::drop 2",
                 ]
             );
         }
@@ -1305,10 +1305,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
             #[cfg(windows)]
@@ -1325,10 +1325,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1385,10 +1385,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
             #[cfg(windows)]
@@ -1406,10 +1406,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1466,10 +1466,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
                     "AsyncDataConn::on_txn_failure 1",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
-                    "AsyncDataConn::close 1",
-                    "AsyncDataConn::drop 1",
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
+                    "AsyncDataConn::close 1",
+                    "AsyncDataConn::drop 1",
                 ]
             );
             #[cfg(windows)]
@@ -1487,10 +1487,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
                     "AsyncDataConn::on_txn_failure 1",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
-                    "AsyncDataConn::close 1",
-                    "AsyncDataConn::drop 1",
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
+                    "AsyncDataConn::close 1",
+                    "AsyncDataConn::drop 1",
                 ]
             );
         }
@@ -1547,10 +1547,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
             #[cfg(windows)]
@@ -1568,10 +1568,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1631,10 +1631,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
             #[cfg(windows)]
@@ -1653,10 +1653,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1716,10 +1716,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
-                    "AsyncDataConn::close 2",
-                    "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
+                    "AsyncDataConn::close 2",
+                    "AsyncDataConn::drop 2",
                 ]
             );
             #[cfg(windows)]
@@ -1738,10 +1738,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
-                    "AsyncDataConn::close 2",
-                    "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
+                    "AsyncDataConn::close 2",
+                    "AsyncDataConn::drop 2",
                 ]
             );
         }
@@ -1799,10 +1799,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
             #[cfg(windows)]
@@ -1821,10 +1821,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1863,10 +1863,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
                     "AsyncDataConn::on_txn_failure 2",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
-                    "SyncDataConn::close 1",
-                    "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
                 ]
             );
         }
@@ -1905,10 +1905,10 @@ mod tests_of_data_conn {
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
                     "AsyncDataConn::on_txn_failure 1",
                     &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
                     "AsyncDataConn::close 1",
                     "AsyncDataConn::drop 1",
-                    "SyncDataConn::close 2",
-                    "SyncDataConn::drop 2"
                 ]
             );
         }
@@ -1946,10 +1946,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
             #[cfg(windows)]
             assert_eq!(*logger.lock().unwrap(), &[
@@ -1961,10 +1961,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
         }
 
@@ -2001,10 +2001,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
             #[cfg(windows)]
             assert_eq!(*logger.lock().unwrap(), &[
@@ -2016,10 +2016,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
         }
 
@@ -2071,10 +2071,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
             #[cfg(windows)]
             assert_eq!(*logger.lock().unwrap(), &[
@@ -2089,10 +2089,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
         }
 
@@ -2144,10 +2144,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
             #[cfg(windows)]
             assert_eq!(*logger.lock().unwrap(), &[
@@ -2162,10 +2162,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
         }
 
@@ -2204,10 +2204,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]"),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]"),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
         }
 
@@ -2258,10 +2258,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
             #[cfg(windows)]
             assert_eq!(*logger.lock().unwrap(), &[
@@ -2275,10 +2275,10 @@ mod tests_of_data_conn {
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
                 "AsyncDataConn::on_txn_failure 2",
                 &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
             ]);
         }
     }
