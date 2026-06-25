@@ -166,6 +166,7 @@ impl DataConnManager {
         Self {
             vec: Vec::new(),
             index_map: HashMap::new(),
+            committed: false,
         }
     }
 
@@ -179,6 +180,7 @@ impl DataConnManager {
         Self {
             vec: vec![None; names.len()],
             index_map,
+            committed: false,
         }
     }
 
@@ -249,7 +251,10 @@ impl DataConnManager {
         reports
     }
 
-    pub(crate) async fn commit_async(&self, reports: &mut [TxnFailureReport]) -> errs::Result<()> {
+    pub(crate) async fn commit_async(
+        &mut self,
+        reports: &mut [TxnFailureReport],
+    ) -> errs::Result<()> {
         let mut indexed_errors = Vec::new();
 
         let mut ag = AsyncGroup::new();
@@ -306,6 +311,8 @@ impl DataConnManager {
             }));
         }
 
+        self.committed = true;
+
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
@@ -345,6 +352,9 @@ impl DataConnManager {
                 if let TxnFailureCause::NoneByUncommitted = report.cause {
                     report.cause = TxnFailureCause::NoneByCommitted;
                 }
+                continue;
+            }
+            if self.committed {
                 continue;
             }
             let rollback_fn = unsafe { (*ptr).rollback_fn };
