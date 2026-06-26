@@ -269,7 +269,7 @@ impl DataHub {
 #[cfg(test)]
 mod tests_of_data_hub {
     use super::*;
-    use crate::{AsyncGroup, TxnFailureReport};
+    use crate::{AsyncGroup, DataConnError, DataSrcError, TxnFailureReport};
     use std::sync::Mutex;
 
     #[derive(Clone, Copy, PartialEq)]
@@ -277,6 +277,8 @@ mod tests_of_data_hub {
         None,
         FailToPreCommit,
         FailToCommit,
+        FailToPostCommit,
+        FailToRollback,
         FailToSetup,
         FailToCreateDataConn,
     }
@@ -345,18 +347,34 @@ mod tests_of_data_hub {
             false
         }
         fn post_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataConn::post_commit {}", self.id));
-            Ok(())
+            if self.failure == Failure::FailToPostCommit {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataConn::post_commit {} failed", self.id));
+                Err(errs::Err::new("post commit error"))
+            } else {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataConn::post_commit {}", self.id));
+                Ok(())
+            }
         }
         fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataConn::rollback {}", self.id));
-            Ok(())
+            if self.failure == Failure::FailToRollback {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataConn::rollback {} failed", self.id));
+                Err(errs::Err::new("rollback error"))
+            } else {
+                self.logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("MyDataConn::rollback {}", self.id));
+                Ok(())
+            }
         }
         fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, _reports: &[TxnFailureReport]) {
             self.logger
@@ -437,6 +455,27 @@ mod tests_of_data_hub {
             let conn = MyDataConn::new(self.id, self.logger.clone(), self.failure);
             Ok(Box::new(conn))
         }
+    }
+
+    struct AnotherDataConn {}
+    impl DataConn for AnotherDataConn {
+        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
+        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
+        fn is_committed(&self) -> bool {
+            false
+        }
+        fn post_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
+        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+            Ok(())
+        }
+        fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, _reports: &[TxnFailureReport]) {}
+        fn close(&mut self) {}
     }
 
     #[test]
@@ -833,7 +872,7 @@ mod tests_of_data_hub {
     }
 
     #[test]
-    fn test_run_but_failed() {
+    fn test_run_but_failed_to_run_logic() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
             let mut hub = DataHub::new();
@@ -964,7 +1003,7 @@ mod tests_of_data_hub {
     }
 
     #[test]
-    fn test_txn_but_failed() {
+    fn test_txn_but_failed_to_run_logic() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
             let mut hub = DataHub::new();
@@ -1018,27 +1057,569 @@ mod tests_of_data_hub {
     }
 
     #[test]
+    fn test_txn_but_failed_to_pre_commit() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses(
+                "foo",
+                MyDataSrc::new(1, logger.clone(), Failure::FailToPreCommit),
+            );
+            hub.uses(
+                "bar",
+                MyDataSrc::new(2, logger.clone(), Failure::FailToPreCommit),
+            );
+
+            let logger_clone = logger.clone();
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
+                Ok(())
+            }) {
+                match e.reason::<DataConnError>() {
+                    Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].0, "foo".into());
+                        assert_eq!(errors[0].1.reason::<&str>().unwrap(), &"pre commit error");
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataSrc::create_data_conn 2",
+                "MyDataConn::new 2",
+                "MyDataConn::pre_commit 1 failed",
+                "MyDataConn::rollback 1",
+                "MyDataConn::rollback 2",
+                "MyDataConn::on_txn_failure 1",
+                "MyDataConn::on_txn_failure 2",
+                "MyDataConn::close 2",
+                "MyDataConn::drop 2",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_txn_but_failed_to_commit() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses(
+                "foo",
+                MyDataSrc::new(1, logger.clone(), Failure::FailToCommit),
+            );
+            hub.uses(
+                "bar",
+                MyDataSrc::new(2, logger.clone(), Failure::FailToCommit),
+            );
+
+            let logger_clone = logger.clone();
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
+                Ok(())
+            }) {
+                match e.reason::<DataConnError>() {
+                    Ok(DataConnError::FailToCommitDataConn { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].0, "foo".into());
+                        assert_eq!(errors[0].1.reason::<&str>().unwrap(), &"commit error");
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataSrc::create_data_conn 2",
+                "MyDataConn::new 2",
+                "MyDataConn::pre_commit 1",
+                "MyDataConn::pre_commit 2",
+                "MyDataConn::commit 1 failed",
+                "MyDataConn::rollback 1",
+                "MyDataConn::rollback 2",
+                "MyDataConn::on_txn_failure 1",
+                "MyDataConn::on_txn_failure 2",
+                "MyDataConn::close 2",
+                "MyDataConn::drop 2",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_txn_but_failed_to_post_commit() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses(
+                "foo",
+                MyDataSrc::new(1, logger.clone(), Failure::FailToPostCommit),
+            );
+            hub.uses(
+                "bar",
+                MyDataSrc::new(2, logger.clone(), Failure::FailToPostCommit),
+            );
+
+            let logger_clone = logger.clone();
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
+                Ok(())
+            }) {
+                match e.reason::<DataConnError>() {
+                    Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
+                        assert_eq!(errors.len(), 2);
+                        assert_eq!(errors[0].0, "foo".into());
+                        assert_eq!(errors[0].1.reason::<&str>().unwrap(), &"post commit error");
+                        assert_eq!(errors[1].0, "bar".into());
+                        assert_eq!(errors[1].1.reason::<&str>().unwrap(), &"post commit error");
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataSrc::create_data_conn 2",
+                "MyDataConn::new 2",
+                "MyDataConn::pre_commit 1",
+                "MyDataConn::pre_commit 2",
+                "MyDataConn::commit 1",
+                "MyDataConn::commit 2",
+                "MyDataConn::post_commit 1 failed",
+                "MyDataConn::post_commit 2 failed",
+                "MyDataConn::on_txn_failure 1",
+                "MyDataConn::on_txn_failure 2",
+                "MyDataConn::close 2",
+                "MyDataConn::drop 2",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_txn_but_failed_to_rollback() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses(
+                "foo",
+                MyDataSrc::new(1, logger.clone(), Failure::FailToRollback),
+            );
+            hub.uses(
+                "bar",
+                MyDataSrc::new(2, logger.clone(), Failure::FailToRollback),
+            );
+
+            let logger_clone = logger.clone();
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
+                Err(errs::Err::new("logic error"))
+            }) {
+                match e.reason::<&str>() {
+                    Ok(s) => assert_eq!(s, &"logic error"),
+                    _ => panic!(),
+                }
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataSrc::create_data_conn 2",
+                "MyDataConn::new 2",
+                "MyDataConn::rollback 1 failed",
+                "MyDataConn::rollback 2 failed",
+                "MyDataConn::on_txn_failure 1",
+                "MyDataConn::on_txn_failure 2",
+                "MyDataConn::close 2",
+                "MyDataConn::drop 2",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
     fn test_txn_with_commit_order() {
-        let _logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
-            let mut _hub = DataHub::new();
+            let mut hub = DataHub::with_commit_order(&["bar", "foo"]);
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone = logger.clone();
+
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
+                Ok(())
+            }) {
+                match e.reason::<&str>() {
+                    Ok(s) => assert_eq!(s, &"logic error"),
+                    _ => panic!(),
+                }
+            }
         }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataSrc::create_data_conn 2",
+                "MyDataConn::new 2",
+                "MyDataConn::pre_commit 2",
+                "MyDataConn::pre_commit 1",
+                "MyDataConn::commit 2",
+                "MyDataConn::commit 1",
+                "MyDataConn::post_commit 2",
+                "MyDataConn::post_commit 1",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataConn::close 2",
+                "MyDataConn::drop 2",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
     }
 
     #[test]
-    fn test_get_data_conn_and_ok() {
-        let _logger = Arc::new(Mutex::new(Vec::<String>::new()));
+    fn test_txn_but_fail_to_setup() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
-            let mut _hub = DataHub::new();
+            let mut hub = DataHub::new();
+
+            hub.uses(
+                "foo",
+                MyDataSrc::new(1, logger.clone(), Failure::FailToSetup),
+            );
+
+            let logger_clone = logger.clone();
+
+            if let Err(e) = hub.txn(move |_data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                Ok(())
+            }) {
+                match e.reason::<DataHubError>() {
+                    Ok(DataHubError::FailToSetupLocalDataSrcs { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].0, "foo".into());
+                        assert_eq!(errors[0].1.reason::<String>().unwrap(), "setup error");
+                    }
+                    _ => panic!(),
+                }
+            }
         }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::setup 1 failed",
+                "MyDataSrc::drop 1",
+            ]
+        );
     }
 
     #[test]
-    fn test_get_data_conn_and_failed() {
-        let _logger = Arc::new(Mutex::new(Vec::<String>::new()));
+    fn test_get_data_conn_cached() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
-            let mut _hub = DataHub::new();
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+
+            let logger_clone = logger.clone();
+
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                Ok(())
+            }) {
+                panic!("{:?}", e);
+            }
         }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::setup 1",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataConn::pre_commit 1",
+                "MyDataConn::commit 1",
+                "MyDataConn::post_commit 1",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_get_data_conn_and_no_data_src_to_create_data_conn() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            let logger_clone = logger.clone();
+
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                Ok(())
+            }) {
+                match e.reason::<DataHubError>() {
+                    Ok(DataHubError::NoDataSrcToCreateDataConn {
+                        name,
+                        data_conn_type,
+                    }) => {
+                        assert_eq!(name.as_ref(), "foo");
+                        assert_eq!(
+                            data_conn_type,
+                            &"sabi::data_hub::tests_of_data_hub::MyDataConn"
+                        );
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+
+        assert_eq!(*logger.lock().unwrap(), &["execute logic",]);
+    }
+
+    #[test]
+    fn test_get_data_conn_and_failed_to_creata_data_conn() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses(
+                "foo",
+                MyDataSrc::new(1, logger.clone(), Failure::FailToCreateDataConn),
+            );
+
+            let logger_clone = logger.clone();
+
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+                Ok(())
+            }) {
+                match e.reason::<DataSrcError>() {
+                    Ok(DataSrcError::FailToCreateDataConn {
+                        name,
+                        data_conn_type,
+                    }) => {
+                        assert_eq!(name.as_ref(), "foo");
+                        assert_eq!(
+                            data_conn_type,
+                            &"sabi::data_hub::tests_of_data_hub::MyDataConn"
+                        );
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::setup 1",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1 failed",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_get_data_conn_and_failed_to_cast_data_conn() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+
+            let logger_clone = logger.clone();
+
+            if let Err(e) = hub.txn(move |data| {
+                logger_clone
+                    .lock()
+                    .unwrap()
+                    .push("execute logic".to_string());
+                if let Err(e) = data.get_data_conn::<AnotherDataConn>("foo") {
+                    match e.reason::<DataSrcError>() {
+                        Ok(DataSrcError::FailToCastDataConn { name, target_type }) => {
+                            assert_eq!(name.as_ref(), "foo");
+                            assert_eq!(
+                                target_type,
+                                &"sabi::data_hub::tests_of_data_hub::AnotherDataConn"
+                            );
+                        }
+                        _ => panic!("{e:?}"),
+                    }
+                } else {
+                    panic!();
+                }
+
+                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
+
+                if let Err(e) = data.get_data_conn::<AnotherDataConn>("foo") {
+                    match e.reason::<DataConnError>() {
+                        Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
+                            assert_eq!(name.as_ref(), "foo");
+                            assert_eq!(
+                                target_type,
+                                &"sabi::data_hub::tests_of_data_hub::AnotherDataConn"
+                            );
+                            Err(e)
+                        }
+                        _ => panic!("{e:?}"),
+                    }
+                } else {
+                    panic!();
+                }
+            }) {
+                match e.reason::<DataConnError>() {
+                    Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
+                        assert_eq!(name.as_ref(), "foo");
+                        assert_eq!(
+                            target_type,
+                            &"sabi::data_hub::tests_of_data_hub::AnotherDataConn"
+                        );
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::setup 1",
+                "execute logic",
+                "MyDataSrc::create_data_conn 1",
+                "MyDataConn::new 1",
+                "MyDataConn::rollback 1",
+                "MyDataConn::on_txn_failure 1",
+                "MyDataConn::close 1",
+                "MyDataConn::drop 1",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
     }
 
     #[test]
