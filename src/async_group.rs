@@ -15,8 +15,7 @@ pub enum AsyncGroupError {
 }
 
 impl AsyncGroup {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             handlers: Vec::new(),
             _index: 0,
@@ -82,13 +81,6 @@ impl AsyncGroup {
         for h in vec.into_iter() {
             let _ = h.1.join();
         }
-    }
-
-    #[inline]
-    pub fn join(self) -> Vec<(usize, errs::Err)> {
-        let mut vec = Vec::new();
-        self.join_and_collect_errors(&mut vec);
-        vec
     }
 }
 
