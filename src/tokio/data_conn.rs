@@ -2,7 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::{AsyncGroup, DataConn, DataConnContainer, DataConnManager, SendSyncNonNull};
+use super::{AsyncGroup, DataConn, DataConnContainer, DataConnManager, ErrEntry, SendSyncNonNull};
 use crate::{TxnFailureCause, TxnFailureReport, TxnFailureRollback};
 
 use std::collections::HashMap;
@@ -18,19 +18,19 @@ pub enum DataConnError {
     /// An error indicating that one or more data connections failed during the pre-commit process.
     FailToPreCommitDataConn {
         /// A vector of errors, each containing the name of the data connection and the error itself.
-        errors: Vec<(Arc<str>, errs::Err)>,
+        errors: Vec<ErrEntry>,
     },
 
     /// An error indicating that one or more data connections failed during the commit process.
     FailToCommitDataConn {
         /// A vector of errors, each containing the name of the data connection and the error itself.
-        errors: Vec<(Arc<str>, errs::Err)>,
+        errors: Vec<ErrEntry>,
     },
 
     /// An error indicating that one or more data connections failed during the post-commit process.
     FailToPostCommitDataConn {
         /// A vector of errors, each containing the name of the data connection and the error itself.
-        errors: Vec<(Arc<str>, errs::Err)>,
+        errors: Vec<ErrEntry>,
     },
 
     /// An error indicating that a data connection could not be cast to the target type.
@@ -255,26 +255,30 @@ impl DataConnManager {
         &mut self,
         reports: &mut [TxnFailureReport],
     ) -> errs::Result<()> {
-        let mut indexed_errors = Vec::new();
+        let mut errors = Vec::new();
 
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let pre_commit_fn = unsafe { (*ptr).pre_commit_fn };
+            let name = unsafe { &(*ptr).name };
             ag._index = i;
+            ag._name = name.clone();
             if let Err(err) = pre_commit_fn(ptr, &mut ag).await {
-                indexed_errors.push((ag._index, err));
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err,
+                });
                 break;
             }
         }
-        ag.join_and_collect_errors_async(&mut indexed_errors).await;
+        ag.join_and_collect_errors_async(&mut errors).await;
 
-        if !indexed_errors.is_empty() {
-            let mut errors = Vec::new();
-            for (i, err) in indexed_errors.into_iter() {
-                let report = &mut reports[i];
-                report.cause = TxnFailureCause::LogicFailure(err.clone());
-                errors.push((report.data_conn_name.clone(), err));
+        if !errors.is_empty() {
+            for ee in errors.iter() {
+                let report = &mut reports[ee.index];
+                report.cause = TxnFailureCause::LogicFailure(ee.err.clone());
             }
             return Err(errs::Err::new(DataConnError::FailToPreCommitDataConn {
                 errors,
@@ -291,20 +295,24 @@ impl DataConnManager {
                 continue;
             }
             let commit_fn = unsafe { (*ptr).commit_fn };
+            let name = unsafe { &(*ptr).name };
             ag._index = i;
+            ag._name = name.clone();
             if let Err(err) = commit_fn(ptr, &mut ag).await {
-                indexed_errors.push((ag._index, err));
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err,
+                });
                 break;
             }
         }
-        ag.join_and_collect_errors_async(&mut indexed_errors).await;
+        ag.join_and_collect_errors_async(&mut errors).await;
 
-        if !indexed_errors.is_empty() {
-            let mut errors = Vec::new();
-            for (i, err) in indexed_errors.into_iter() {
-                let report = &mut reports[i];
-                report.cause = TxnFailureCause::CommitFailure(err.clone());
-                errors.push((report.data_conn_name.clone(), err));
+        if !errors.is_empty() {
+            for ee in errors.iter() {
+                let report = &mut reports[ee.index];
+                report.cause = TxnFailureCause::CommitFailure(ee.err.clone());
             }
             return Err(errs::Err::new(DataConnError::FailToCommitDataConn {
                 errors,
@@ -317,20 +325,24 @@ impl DataConnManager {
         for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let post_commit_fn = unsafe { (*ptr).post_commit_fn };
+            let name = unsafe { &(*ptr).name };
             ag._index = i;
+            ag._name = name.clone();
             if let Err(err) = post_commit_fn(ptr, &mut ag).await {
-                indexed_errors.push((ag._index, err));
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err,
+                });
                 // don't break;
             }
         }
-        ag.join_and_collect_errors_async(&mut indexed_errors).await;
+        ag.join_and_collect_errors_async(&mut errors).await;
 
-        if !indexed_errors.is_empty() {
-            let mut errors = Vec::new();
-            for (i, err) in indexed_errors.into_iter() {
-                let report = &mut reports[i];
-                report.cause = TxnFailureCause::PostCommitFailure(err.clone());
-                errors.push((report.data_conn_name.clone(), err));
+        if !errors.is_empty() {
+            for ee in errors.iter() {
+                let report = &mut reports[ee.index];
+                report.cause = TxnFailureCause::PostCommitFailure(ee.err.clone());
             }
             return Err(errs::Err::new(DataConnError::FailToPostCommitDataConn {
                 errors,
@@ -341,7 +353,7 @@ impl DataConnManager {
     }
 
     pub(crate) async fn rollback_async(&mut self, mut reports: Vec<TxnFailureReport>) {
-        let mut indexed_errors = Vec::new();
+        let mut errors = Vec::new();
 
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
@@ -358,19 +370,25 @@ impl DataConnManager {
                 continue;
             }
             let rollback_fn = unsafe { (*ptr).rollback_fn };
+            let name = unsafe { &(*ptr).name };
             ag._index = i;
+            ag._name = name.clone();
             if let Err(err) = rollback_fn(ptr, &mut ag).await {
-                indexed_errors.push((ag._index, err));
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err,
+                });
             } else {
                 report.rollback = TxnFailureRollback::NoneByRolledBack;
             }
         }
-        ag.join_and_collect_errors_async(&mut indexed_errors).await;
+        ag.join_and_collect_errors_async(&mut errors).await;
 
-        if !indexed_errors.is_empty() {
-            for (i, err) in indexed_errors.into_iter() {
-                let report = &mut reports[i];
-                report.rollback = TxnFailureRollback::RollbackFailure(err);
+        if !errors.is_empty() {
+            for ee in errors.into_iter() {
+                let report = &mut reports[ee.index];
+                report.rollback = TxnFailureRollback::RollbackFailure(ee.err);
             }
         }
 
@@ -1147,8 +1165,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "zzz");
+                            assert_eq!(errors[0].index, 0);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "zzz");
                         }
                         _ => panic!(),
                     }
@@ -1222,8 +1241,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "zzz");
+                            assert_eq!(errors[0].index, 0);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "zzz");
                         }
                         _ => panic!(),
                     }
@@ -1291,8 +1311,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "yyy");
+                            assert_eq!(errors[0].index, 0);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "yyy");
                         }
                         _ => panic!(),
                     }
@@ -1347,8 +1368,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "ZZZ");
+                            assert_eq!(errors[0].index, 0);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "ZZZ");
                         }
                         _ => panic!(),
                     }
@@ -1426,8 +1448,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "YYY");
+                            assert_eq!(errors[0].index, 0);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "YYY");
                         }
                         _ => panic!(),
                     }
@@ -1505,8 +1528,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "bar".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "YYY");
+                            assert_eq!(errors[0].index, 1);
+                            assert_eq!(errors[0].name, "bar".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "YYY");
                         }
                         _ => panic!(),
                     }
@@ -1584,10 +1608,12 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 2);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "!!!");
-                            assert_eq!(errors[1].0, "bar".into());
-                            assert_eq!(errors[1].1.reason::<String>().unwrap(), "!!!");
+                            assert_eq!(errors[0].index, 0);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "!!!");
+                            assert_eq!(errors[1].index, 1);
+                            assert_eq!(errors[1].name, "bar".into());
+                            assert_eq!(errors[1].err.reason::<String>().unwrap(), "!!!");
                         }
                         _ => panic!(),
                     }
@@ -1667,10 +1693,12 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 2);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "!!!");
-                            assert_eq!(errors[1].0, "bar".into());
-                            assert_eq!(errors[1].1.reason::<String>().unwrap(), "!!!");
+                            assert_eq!(errors[0].index, 1);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "!!!");
+                            assert_eq!(errors[1].index, 0);
+                            assert_eq!(errors[1].name, "bar".into());
+                            assert_eq!(errors[1].err.reason::<String>().unwrap(), "!!!");
                         }
                         _ => panic!(),
                     }
@@ -1744,8 +1772,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "foo".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "!!!");
+                            assert_eq!(errors[0].index, 1);
+                            assert_eq!(errors[0].name, "foo".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "!!!");
                         }
                         _ => panic!(),
                     }
@@ -2008,8 +2037,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "bar".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "ZZZ");
+                            assert_eq!(errors[0].index, 0);
+                            assert_eq!(errors[0].name, "bar".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "ZZZ");
                         }
                         _ => panic!(),
                     }
@@ -2083,8 +2113,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "bar".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "YYY");
+                            assert_eq!(errors[0].index, 1);
+                            assert_eq!(errors[0].name, "bar".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "YYY");
                         }
                         _ => panic!(),
                     }
@@ -2202,8 +2233,9 @@ mod tests_of_data_conn {
                     match e.reason::<DataConnError>() {
                         Ok(DataConnError::FailToCommitDataConn { errors }) => {
                             assert_eq!(errors.len(), 1);
-                            assert_eq!(errors[0].0, "bar".into());
-                            assert_eq!(errors[0].1.reason::<String>().unwrap(), "YYY");
+                            assert_eq!(errors[0].index, 1);
+                            assert_eq!(errors[0].name, "bar".into());
+                            assert_eq!(errors[0].err.reason::<String>().unwrap(), "YYY");
                         }
                         _ => panic!(),
                     }

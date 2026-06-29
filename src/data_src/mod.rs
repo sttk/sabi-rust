@@ -10,7 +10,7 @@ pub(crate) use global_setup::{
 pub use global_setup::{create_static_data_src_container, setup, setup_with_order, uses};
 
 use crate::{
-    AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcManager,
+    AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcManager, ErrEntry,
     SendSyncNonNull,
 };
 
@@ -32,7 +32,7 @@ pub enum DataSrcError {
     /// Contains a vector of data source names and their corresponding errors.
     FailToSetupGlobalDataSrcs {
         /// The vector contains errors that occurred in each [`DataSrc`] object.
-        errors: Vec<(Arc<str>, errs::Err)>,
+        errors: Vec<ErrEntry>,
     },
 
     /// Indicates that a setup process for global data sources is currently ongoing.
@@ -208,27 +208,31 @@ impl DataSrcManager {
         }
     }
 
-    pub(crate) fn setup(&mut self, errors: &mut Vec<(Arc<str>, errs::Err)>) {
+    pub(crate) fn setup(&mut self, errors: &mut Vec<ErrEntry>) {
         if self.vec_unready.is_empty() {
             return;
         }
-
-        let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
 
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let setup_fn = unsafe { (*ptr).setup_fn };
+            let name = unsafe { &(*ptr).name };
             ag._index = i;
+            ag._name = name.clone();
             if let Err(err) = setup_fn(ptr, &mut ag) {
-                indexed_errors.push((ag._index, err));
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err,
+                });
                 break;
             }
         }
         let n_done = ag._index;
-        ag.join_and_collect_errors(&mut indexed_errors);
+        ag.join_and_collect_errors(errors);
 
-        if indexed_errors.is_empty() {
+        if errors.is_empty() {
             self.vec_ready.append(&mut self.vec_unready);
         } else {
             for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
@@ -236,20 +240,10 @@ impl DataSrcManager {
                 let close_fn = unsafe { (*ptr).close_fn };
                 close_fn(ptr);
             }
-            for (i, err) in indexed_errors.into_iter() {
-                let ssnnptr = &self.vec_unready[i];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let name = unsafe { (*ptr).name.clone() };
-                errors.push((name, err));
-            }
         }
     }
 
-    pub(crate) fn setup_with_order(
-        &mut self,
-        names: &[&str],
-        errors: &mut Vec<(Arc<str>, errs::Err)>,
-    ) {
+    pub(crate) fn setup_with_order(&mut self, names: &[&str], errors: &mut Vec<ErrEntry>) {
         if self.vec_unready.is_empty() {
             return;
         }
@@ -274,8 +268,6 @@ impl DataSrcManager {
             }
         }
 
-        let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
-
         let mut ag = AsyncGroup::new();
         let mut n_done = 0;
         for vec_index_opt in ordered_indexes.iter() {
@@ -283,17 +275,23 @@ impl DataSrcManager {
                 let ssnnptr = &self.vec_unready[*vec_index];
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let setup_fn = unsafe { (*ptr).setup_fn };
+                let name = unsafe { &(*ptr).name };
                 ag._index = *vec_index;
+                ag._name = name.clone();
                 if let Err(err) = setup_fn(ptr, &mut ag) {
-                    indexed_errors.push((ag._index, err));
+                    errors.push(ErrEntry {
+                        index: *vec_index,
+                        name: name.clone(),
+                        err,
+                    });
                     break;
                 }
             }
             n_done += 1;
         }
-        ag.join_and_collect_errors(&mut indexed_errors);
+        ag.join_and_collect_errors(errors);
 
-        if indexed_errors.is_empty() {
+        if errors.is_empty() {
             let old_unready = mem::take(&mut self.vec_unready);
             // Maximizing performance by pre-allocating the required capacity.
             self.vec_ready
@@ -307,12 +305,6 @@ impl DataSrcManager {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let close_fn = unsafe { (*ptr).close_fn };
                 close_fn(ptr);
-            }
-            for (vec_index, err) in indexed_errors.into_iter() {
-                let ssnnptr = &self.vec_unready[vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let name = unsafe { (*ptr).name.clone() };
-                errors.push((name, err));
             }
         }
     }
@@ -868,11 +860,12 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(errors.len(), 1);
-            assert_eq!(errors[0].0, "bar".into());
+            assert_eq!(errors[0].index, 1);
+            assert_eq!(errors[0].name, "bar".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 461 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 453 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 461 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 453 }");
         }
 
         assert_eq!(
@@ -971,11 +964,12 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(errors.len(), 1);
-            assert_eq!(errors[0].0, "foo".into());
+            assert_eq!(errors[0].index, 0);
+            assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 461 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 453 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 461 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 453 }");
         }
 
         assert_eq!(

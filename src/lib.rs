@@ -48,6 +48,21 @@ pub use data_src::{create_static_data_src_container, setup, setup_with_order, us
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
+/// Represents an entry containing an error, along with its context.
+///
+/// This structure is used to aggregate errors that occur during parallel
+/// or asynchronous operations, providing the index of the operation,
+/// a descriptive name, and the error itself.
+#[derive(Debug)]
+pub struct ErrEntry {
+    /// The index of the operation or handler that generated the error.
+    pub index: usize,
+    /// A descriptive name for the operation or context.
+    pub name: Arc<str>,
+    /// The actual error that occurred.
+    pub err: errs::Err,
+}
+
 /// The structure that allows for the concurrent execution of multiple functions
 /// using `std::thread` and waits for all of them to complete.
 ///
@@ -55,8 +70,9 @@ pub mod tokio;
 /// The `AsyncGroup` ensures that all tasks finish before proceeding,
 /// and can collect any errors that occur.
 pub struct AsyncGroup {
-    handlers: Vec<(usize, thread::JoinHandle<errs::Result<()>>)>,
+    handlers: Vec<(usize, Arc<str>, thread::JoinHandle<errs::Result<()>>)>,
     _index: usize,
+    _name: Arc<str>,
 }
 
 /// The trait that abstracts a connection per session to an external data service,

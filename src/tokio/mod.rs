@@ -16,7 +16,7 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 
-use crate::{SendSyncNonNull, TxnFailureReport};
+use crate::{ErrEntry, SendSyncNonNull, TxnFailureReport};
 
 use std::any;
 use std::collections::HashMap;
@@ -77,9 +77,10 @@ pub use crate::_uses_for_async as uses;
 /// and can collect any errors that occur.
 #[allow(clippy::type_complexity)]
 pub struct AsyncGroup {
-    indexes: Vec<usize>,
+    attrs: Vec<(usize, Arc<str>)>,
     tasks: Vec<Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'static>>>,
     _index: usize,
+    _name: Arc<str>,
 }
 
 /// The asynchronous trait for data connection implementations, providing methods for transaction
