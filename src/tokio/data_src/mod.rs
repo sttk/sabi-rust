@@ -12,7 +12,7 @@ pub use global_setup::{
 };
 
 use crate::tokio::{
-    AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcManager,
+    AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcManager, ErrEntry,
     SendSyncNonNull,
 };
 
@@ -35,7 +35,7 @@ pub enum DataSrcError {
     /// An error indicating that one or more global data sources failed during their setup process.
     FailToSetupGlobalDataSrcs {
         /// A vector of errors, each containing the name of the data source and the error itself.
-        errors: Vec<(Arc<str>, errs::Err)>,
+        errors: Vec<ErrEntry>,
     },
 
     /// An error indicating that a global data source setup is currently in progress.
@@ -221,27 +221,31 @@ impl DataSrcManager {
         }
     }
 
-    pub(crate) async fn setup_async(&mut self, errors: &mut Vec<(Arc<str>, errs::Err)>) {
+    pub(crate) async fn setup_async(&mut self, errors: &mut Vec<ErrEntry>) {
         if self.vec_unready.is_empty() {
             return;
         }
-
-        let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
 
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let setup_fn = unsafe { (*ptr).setup_fn };
+            let name = unsafe { &(*ptr).name };
             ag._index = i;
+            ag._name = name.clone();
             if let Err(err) = setup_fn(ptr, &mut ag).await {
-                indexed_errors.push((ag._index, err));
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err,
+                });
                 break;
             }
         }
         let n_done = ag._index;
-        ag.join_and_collect_errors_async(&mut indexed_errors).await;
+        ag.join_and_collect_errors_async(errors).await;
 
-        if indexed_errors.is_empty() {
+        if errors.is_empty() {
             self.vec_ready.append(&mut self.vec_unready);
         } else {
             for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
@@ -249,19 +253,13 @@ impl DataSrcManager {
                 let close_fn = unsafe { (*ptr).close_fn };
                 close_fn(ptr);
             }
-            for (i, err) in indexed_errors.into_iter() {
-                let ssnnptr = &self.vec_unready[i];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let name = unsafe { (*ptr).name.clone() };
-                errors.push((name, err));
-            }
         }
     }
 
     pub(crate) async fn setup_with_order_async(
         &mut self,
         names: &[&str],
-        errors: &mut Vec<(Arc<str>, errs::Err)>,
+        errors: &mut Vec<ErrEntry>,
     ) {
         if self.vec_unready.is_empty() {
             return;
@@ -287,8 +285,6 @@ impl DataSrcManager {
             }
         }
 
-        let mut indexed_errors = Vec::<(usize, errs::Err)>::new();
-
         let mut ag = AsyncGroup::new();
         let mut n_done = 0;
         for vec_index_opt in ordered_indexes.iter() {
@@ -296,17 +292,23 @@ impl DataSrcManager {
                 let ssnnptr = &self.vec_unready[*vec_index];
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let setup_fn = unsafe { (*ptr).setup_fn };
+                let name = unsafe { &(*ptr).name };
                 ag._index = *vec_index;
+                ag._name = name.clone();
                 if let Err(err) = setup_fn(ptr, &mut ag).await {
-                    indexed_errors.push((ag._index, err));
+                    errors.push(ErrEntry {
+                        index: *vec_index,
+                        name: name.clone(),
+                        err,
+                    });
                     break;
                 }
             }
             n_done += 1;
         }
-        ag.join_and_collect_errors_async(&mut indexed_errors).await;
+        ag.join_and_collect_errors_async(errors).await;
 
-        if indexed_errors.is_empty() {
+        if errors.is_empty() {
             let old_unready = mem::take(&mut self.vec_unready);
             // Maximizing performance by pre-allocating the required capacity.
             self.vec_ready
@@ -320,12 +322,6 @@ impl DataSrcManager {
                 let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let close_fn = unsafe { (*ptr).close_fn };
                 close_fn(ptr);
-            }
-            for (vec_index, err) in indexed_errors.into_iter() {
-                let ssnnptr = &self.vec_unready[vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let name = unsafe { (*ptr).name.clone() };
-                errors.push((name, err));
             }
         }
     }
@@ -999,11 +995,12 @@ mod tests_of_data_src {
             assert_eq!(manager.vec_ready.len(), 0);
 
             assert_eq!(errors.len(), 1);
-            assert_eq!(errors[0].0, "foo".into());
+            assert_eq!(errors[0].index, 0);
+            assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 486 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 482 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].1), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 486 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 482 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

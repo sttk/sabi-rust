@@ -2,7 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::AsyncGroup;
+use super::{AsyncGroup, ErrEntry};
 
 use futures::future;
 use std::future::Future;
@@ -11,8 +11,9 @@ impl AsyncGroup {
     pub(crate) fn new() -> Self {
         Self {
             tasks: Vec::new(),
-            indexes: Vec::new(),
+            attrs: Vec::new(),
             _index: 0,
+            _name: Default::default(),
         }
     }
 
@@ -30,10 +31,10 @@ impl AsyncGroup {
         Fut: Future<Output = errs::Result<()>> + Send + 'static,
     {
         self.tasks.push(Box::pin(future));
-        self.indexes.push(self._index);
+        self.attrs.push((self._index, self._name.clone()));
     }
 
-    pub(crate) async fn join_and_collect_errors_async(self, errors: &mut Vec<(usize, errs::Err)>) {
+    pub(crate) async fn join_and_collect_errors_async(self, errors: &mut Vec<ErrEntry>) {
         if self.tasks.is_empty() {
             return;
         }
@@ -41,7 +42,11 @@ impl AsyncGroup {
         let result_all = future::join_all(self.tasks).await;
         for (i, result) in result_all.into_iter().enumerate() {
             if let Err(err) = result {
-                errors.push((self.indexes[i], err));
+                errors.push(ErrEntry {
+                    index: self.attrs[i].0,
+                    name: self.attrs[i].1.clone(),
+                    err,
+                });
             }
         }
     }
@@ -155,6 +160,7 @@ mod tests_of_async_group {
             assert_eq!(*struct_a.string.lock().await, "a");
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             let mut errors = Vec::new();
@@ -172,6 +178,7 @@ mod tests_of_async_group {
             assert_eq!(*struct_a.string.lock().await, "a");
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             let mut errors = Vec::new();
@@ -180,15 +187,16 @@ mod tests_of_async_group {
             assert_eq!(errors.len(), 1);
             assert_eq!(*struct_a.string.lock().await, "a");
 
-            assert_eq!(errors[0].0, 12);
+            assert_eq!(errors[0].index, 12);
+            assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
             assert_eq!(
-                format!("{:?}", errors[0].1),
+                format!("{:?}", errors[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src/tokio/async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }"
             );
             #[cfg(windows)]
             assert_eq!(
-                format!("{:?}", errors[0].1),
+                format!("{:?}", errors[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src\\tokio\\async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }"
             );
         }
@@ -207,12 +215,15 @@ mod tests_of_async_group {
             assert_eq!(*struct_c.string.lock().await, "c".to_string());
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag._index = 34;
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
             ag._index = 56;
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -239,27 +250,31 @@ mod tests_of_async_group {
             assert_eq!(*struct_c.string.lock().await, "c");
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag._index = 34;
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
             ag._index = 56;
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
             let mut err_vec = Vec::new();
             ag.join_and_collect_errors_async(&mut err_vec).await;
 
             assert_eq!(err_vec.len(), 1);
-            assert_eq!(err_vec[0].0, 34);
+            assert_eq!(err_vec[0].index, 34);
+            assert_eq!(err_vec[0].name, "bar".into());
             #[cfg(unix)]
             assert_eq!(
-                format!("{:?}", err_vec[0].1),
+                format!("{:?}", err_vec[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src/tokio/async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
             #[cfg(windows)]
             assert_eq!(
-                format!("{:?}", err_vec[0].1),
+                format!("{:?}", err_vec[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src\\tokio\\async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
 
@@ -282,12 +297,15 @@ mod tests_of_async_group {
             assert_eq!(*struct_c.string.lock().await, "c");
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag._index = 34;
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
             ag._index = 56;
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -295,38 +313,42 @@ mod tests_of_async_group {
 
             assert_eq!(err_vec.len(), 3);
 
-            assert_eq!(err_vec[0].0, 12);
-            assert_eq!(err_vec[1].0, 34);
-            assert_eq!(err_vec[2].0, 56);
+            assert_eq!(err_vec[0].index, 12);
+            assert_eq!(err_vec[1].index, 34);
+            assert_eq!(err_vec[2].index, 56);
+
+            assert_eq!(err_vec[0].name, "foo".into());
+            assert_eq!(err_vec[1].name, "bar".into());
+            assert_eq!(err_vec[2].name, "baz".into());
 
             #[cfg(unix)]
             assert_eq!(
-                format!("{:?}", err_vec[0].1),
+                format!("{:?}", err_vec[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src/tokio/async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
             #[cfg(windows)]
             assert_eq!(
-                format!("{:?}", err_vec[0].1),
+                format!("{:?}", err_vec[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"a\"), file = src\\tokio\\async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
             #[cfg(unix)]
             assert_eq!(
-                format!("{:?}", err_vec[1].1),
+                format!("{:?}", err_vec[1].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src/tokio/async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
             #[cfg(windows)]
             assert_eq!(
-                format!("{:?}", err_vec[1].1),
+                format!("{:?}", err_vec[1].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"b\"), file = src\\tokio\\async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
             #[cfg(unix)]
             assert_eq!(
-                format!("{:?}", err_vec[2].1),
+                format!("{:?}", err_vec[2].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"c\"), file = src/tokio/async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
             #[cfg(windows)]
             assert_eq!(
-                format!("{:?}", err_vec[2].1),
+                format!("{:?}", err_vec[2].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"c\"), file = src\\tokio\\async_group.rs, line = ".to_string() + &(BASE_LINE + 30).to_string() + " }",
             );
 
@@ -343,6 +365,7 @@ mod tests_of_async_group {
             assert_eq!(*struct_d.string.lock().await, "d");
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_d.process(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -361,6 +384,7 @@ mod tests_of_async_group {
             assert_eq!(*struct_d.string.lock().await, "d");
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_d.process_multiple(&mut ag);
 
             let mut err_vec = Vec::new();
@@ -368,28 +392,31 @@ mod tests_of_async_group {
 
             assert_eq!(err_vec.len(), 2);
 
-            assert_eq!(err_vec[0].0, 12);
-            assert_eq!(err_vec[1].0, 12);
+            assert_eq!(err_vec[0].index, 12);
+            assert_eq!(err_vec[1].index, 12);
+
+            assert_eq!(err_vec[0].name, "foo".into());
+            assert_eq!(err_vec[1].name, "foo".into());
 
             #[cfg(unix)]
             assert_eq!(
-                format!("{:?}", err_vec[0].1),
+                format!("{:?}", err_vec[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src/tokio/async_group.rs, line = ".to_string() + &(BASE_LINE + 49).to_string() + " }",
             );
             #[cfg(windows)]
             assert_eq!(
-                format!("{:?}", err_vec[0].1),
+                format!("{:?}", err_vec[0].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src\\tokio\\async_group.rs, line = ".to_string() + &(BASE_LINE + 49).to_string() + " }"
             );
 
             #[cfg(unix)]
             assert_eq!(
-                format!("{:?}", err_vec[1].1),
+                format!("{:?}", err_vec[1].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src/tokio/async_group.rs, line = ".to_string() + &(BASE_LINE + 66).to_string() + " }",
             );
             #[cfg(windows)]
             assert_eq!(
-                format!("{:?}", err_vec[1].1),
+                format!("{:?}", err_vec[1].err),
                 "errs::Err { reason = sabi::tokio::async_group::tests_of_async_group::Reasons BadString(\"d\"), file = src\\tokio\\async_group.rs, line = ".to_string() + &(BASE_LINE + 66).to_string() + " }"
             );
 
@@ -415,6 +442,7 @@ mod tests_of_async_group {
             assert_eq!(*struct_a.string.lock().await, "a".to_string());
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag.join_and_ignore_errors_async().await;
@@ -429,6 +457,7 @@ mod tests_of_async_group {
             assert_eq!(*struct_a.string.lock().await, "a".to_string());
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag.join_and_ignore_errors_async().await;
@@ -449,12 +478,15 @@ mod tests_of_async_group {
             assert_eq!(*struct_c.string.lock().await, "c".to_string());
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag._index = 34;
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
             ag._index = 56;
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
             ag.join_and_ignore_errors_async().await;
@@ -478,12 +510,15 @@ mod tests_of_async_group {
             assert_eq!(*struct_c.string.lock().await, "c".to_string());
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag._index = 34;
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
             ag._index = 56;
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
             ag.join_and_ignore_errors_async().await;
@@ -507,12 +542,15 @@ mod tests_of_async_group {
             assert_eq!(*struct_c.string.lock().await, "c".to_string());
 
             ag._index = 12;
+            ag._name = "foo".into();
             struct_a.process(&mut ag);
 
             ag._index = 34;
+            ag._name = "bar".into();
             struct_b.process(&mut ag);
 
             ag._index = 56;
+            ag._name = "baz".into();
             struct_c.process(&mut ag);
 
             ag.join_and_ignore_errors_async().await;

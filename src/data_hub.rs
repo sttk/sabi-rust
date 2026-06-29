@@ -8,7 +8,7 @@ use crate::{DataConn, DataConnManager, DataHub, DataSrc, DataSrcManager, SendSyn
 #[allow(unused)] // for rustdoc
 use crate::DataAcc;
 
-use crate::DataConnContainer;
+use crate::{DataConnContainer, ErrEntry};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ pub enum DataHubError {
     /// Contains a vector of data source names and their corresponding errors.
     FailToSetupLocalDataSrcs {
         /// The vector contains errors that occurred in each [`DataSrc`] object.
-        errors: Vec<(Arc<str>, errs::Err)>,
+        errors: Vec<ErrEntry>,
     },
 
     /// Indicates that no [`DataSrc`] was found to create a [`DataConn`] for the specified name
@@ -806,8 +806,9 @@ mod tests_of_data_hub {
                 match err.reason::<DataHubError>() {
                     Ok(DataHubError::FailToSetupLocalDataSrcs { errors }) => {
                         assert_eq!(errors.len(), 1);
-                        assert_eq!(errors[0].0, "bar".into());
-                        assert_eq!(errors[0].1.reason::<String>().unwrap(), "setup error");
+                        assert_eq!(errors[0].index, 1);
+                        assert_eq!(errors[0].name, "bar".into());
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "setup error");
                     }
                     _ => panic!(),
                 }
@@ -1084,8 +1085,9 @@ mod tests_of_data_hub {
                 match e.reason::<DataConnError>() {
                     Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
                         assert_eq!(errors.len(), 1);
-                        assert_eq!(errors[0].0, "foo".into());
-                        assert_eq!(errors[0].1.reason::<&str>().unwrap(), &"pre commit error");
+                        assert_eq!(errors[0].index, 0);
+                        assert_eq!(errors[0].name, "foo".into());
+                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"pre commit error");
                     }
                     _ => panic!(),
                 }
@@ -1149,8 +1151,9 @@ mod tests_of_data_hub {
                 match e.reason::<DataConnError>() {
                     Ok(DataConnError::FailToCommitDataConn { errors }) => {
                         assert_eq!(errors.len(), 1);
-                        assert_eq!(errors[0].0, "foo".into());
-                        assert_eq!(errors[0].1.reason::<&str>().unwrap(), &"commit error");
+                        assert_eq!(errors[0].index, 0);
+                        assert_eq!(errors[0].name, "foo".into());
+                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"commit error");
                     }
                     _ => panic!(),
                 }
@@ -1216,10 +1219,18 @@ mod tests_of_data_hub {
                 match e.reason::<DataConnError>() {
                     Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
                         assert_eq!(errors.len(), 2);
-                        assert_eq!(errors[0].0, "foo".into());
-                        assert_eq!(errors[0].1.reason::<&str>().unwrap(), &"post commit error");
-                        assert_eq!(errors[1].0, "bar".into());
-                        assert_eq!(errors[1].1.reason::<&str>().unwrap(), &"post commit error");
+                        assert_eq!(errors[0].index, 0);
+                        assert_eq!(errors[0].name, "foo".into());
+                        assert_eq!(
+                            errors[0].err.reason::<&str>().unwrap(),
+                            &"post commit error"
+                        );
+                        assert_eq!(errors[1].index, 1);
+                        assert_eq!(errors[1].name, "bar".into());
+                        assert_eq!(
+                            errors[1].err.reason::<&str>().unwrap(),
+                            &"post commit error"
+                        );
                     }
                     _ => panic!(),
                 }
@@ -1398,8 +1409,9 @@ mod tests_of_data_hub {
                 match e.reason::<DataHubError>() {
                     Ok(DataHubError::FailToSetupLocalDataSrcs { errors }) => {
                         assert_eq!(errors.len(), 1);
-                        assert_eq!(errors[0].0, "foo".into());
-                        assert_eq!(errors[0].1.reason::<String>().unwrap(), "setup error");
+                        assert_eq!(errors[0].index, 0);
+                        assert_eq!(errors[0].name, "foo".into());
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "setup error");
                     }
                     _ => panic!(),
                 }
