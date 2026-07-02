@@ -909,6 +909,54 @@ mod tests_of_data_conn {
         }
 
         #[test]
+        fn test_find_by_name_of_ordered_dataconn() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            let mut manager = DataConnManager::with_commit_order(&["baz", "qux", "foo"]);
+
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
+            let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
+
+            let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
+            let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
+            let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
+
+            let conn = SyncDataConn::new(3, logger.clone(), Fail::Not);
+            let boxed = Box::new(DataConnContainer::new("baz", Box::new(conn)));
+            let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
+            let ssnnptr = SendSyncNonNull::new(nnptr);
+            manager.add(ssnnptr);
+
+            if let Some(ssnnptr) = manager.find_by_name("foo") {
+                let name = unsafe { (*ssnnptr.non_null_ptr.as_ptr()).name.clone() };
+                assert_eq!(name.as_ref(), "foo");
+            } else {
+                panic!();
+            }
+
+            if let Some(ssnnptr) = manager.find_by_name("bar") {
+                let name = unsafe { (*ssnnptr.non_null_ptr.as_ptr()).name.clone() };
+                assert_eq!(name.as_ref(), "bar");
+            } else {
+                panic!();
+            }
+
+            if let Some(ssnnptr) = manager.find_by_name("baz") {
+                let name = unsafe { (*ssnnptr.non_null_ptr.as_ptr()).name.clone() };
+                assert_eq!(name.as_ref(), "baz");
+            } else {
+                panic!();
+            }
+
+            assert!(manager.find_by_name("qux").is_none());
+        }
+
+        #[test]
         fn test_to_typed_ptr() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
