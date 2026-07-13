@@ -4,7 +4,7 @@
   </a>
 
   <h2>
-  "sabi" - A small framework to separate logics and data accesses
+  "sabi" - A small framework to separate logic and data access
   </h2>
   <br>
 
@@ -260,7 +260,7 @@ pub trait SettingDataAccAsync: DataAcc {
         }).await;
 
         let stdio_data_conn = self.get_data_conn_async::<StdioDataConnAsync>("stdio").await?;
-        stdio_data_conn.add_post_commit(|_stdin, stdout, _stderr| {
+        stdio_data_conn.add_post_commit_async(|_stdin, stdout, _stderr| {
             stdout.println(text)
         }).await;
 
@@ -332,13 +332,13 @@ async fn run_async() -> errs::Result<()> {
         // If this `DataHub` is moved between threads, `ds` must also implement `Send`.
         data.uses("stdio", StdioDataSrc::new());
 
-        // Execute application logic within an asynchronous transaction
+        // Execute application logic without an asynchronous transaction
         // The `logic!` macro helps convert an async function into the required closure type.
         // The resulting future is `Send`.
         data.run_async(logic!(my_async_logic)).await?;
 
         // If you need to execute logic within a transaction, use `txn_async` method instead of
-        // `txn_async`.
+        // `run_async`.
         //data.txn_async(logic!(my_async_logic)).await?;
     })
     .await
