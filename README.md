@@ -4,7 +4,7 @@
   </a>
 
   <h2>
-  "sabi" - A small framework to separate logics and data accesses
+  "sabi" - A small framework to separate logic and data access
   </h2>
   <br>
 
@@ -13,22 +13,34 @@
 
 ## Overview
 
-**sabi** was developed with the goal of achieving a thorough separation between business logic and data access. However, it sets itself apart from conventional Dependency Injection (DI) frameworks that merely invert dependencies by sandwiching an interface between the two layers.
+**sabi** was developed with the goal of thoroughly separating business logic from data access. However, it differs from conventional Dependency Injection (DI) frameworks that merely invert dependencies by placing an interface between the two layers—**sabi** draws a clear line beyond that simple approach.
 
-In particular, two key techniques elevate **sabi** into a highly advanced framework: the introduction of data access traits optimized for each specific piece of logic, and an approach that routes inputs and outputs from the controller layer directly into the data access layer via `DataSrc`, bypassing the logic layer entirely.
+What elevates **sabi** to an advanced framework in particular are the following two key techniques: introducing a data-access interface optimized for each individual piece of logic, and routing input/output from the controller layer directly to the data access layer via `DataSrc`, completely bypassing the logic layer.
 
-The former approach fully materializes the **Interface Segregation Principle (ISP)**, which has frequently become a mere formality within the SOLID principles. Furthermore, because adding methods to `DataAcc` or incorporating additional services via `DataSrc` does not affect existing logic that does not utilize them, capabilities can be extended without modifying existing code—thereby conceptually satisfying the **Open-Closed Principle (OCP)**.
+### Introducing Data-Access Traits Optimized Per Logic Unit
 
-Additionally, even if a `DataAcc` implementation providing a specific capability is replaced with an alternative implementation, or if responsibilities are rearranged among different `DataAcc` traits within the data access layer, the behavior of the logic layer remains unchanged as long as the underlying contract is maintained. Thus, the **Liskov Substitution Principle (LSP)** is realized at the contractual level.
+The former approach thoroughly embodies the Interface Segregation Principle (ISP)—one of the SOLID principles that has often ended up more nominal than real in practice. Each piece of logic (use case) defines, on the logic side, its own dedicated trait (interface) that specifies only the operations it truly needs. Meanwhile, the data access side implements traits based on its responsibility as a data provider. The `DataHub` then mediates and maps between the two, so that the logic side never needs to be aware of the data access side's structure, and the data access side never needs to depend on the structure of individual pieces of logic—each maintains its own independent responsibility.
 
-Moreover, because both high-level logic and low-level data access depend on the `DataAcc` contract defined as an individual capability, the **Dependency Inversion Principle (DIP)** is also achieved at the architectural level. In this manner, rather than adhering strictly to the classical OOP context that presupposes inheritance, **sabi** realizes the core intent of each principle—"separation of concerns," "localization of change impact," "substitutability based on contracts," and "dependence on abstractions"—at the architectural level. It possesses a structure that conceptually aligns with all SOLID principles, an achievement that is exceptionally rare in the history of software design.
+This design is grounded in the philosophy that "the world does not exist as a single, fixed, objective reality, but rather reveals its meaning and form according to the questions and purposes held by the observing subject." The trait that logic should see should not be dictated by the constraints of the data access side, but should instead be defined based on the logic's own context and needs. The same holds true in reverse for the trait that data access should see. What matters to the logic is not the structure of the database or the ORM, but the "capability required to realize this particular use case." What matters to the data access side, on the other hand, is how to access storage or external services. By having both sides define their traits according to their own respective contexts, and having the `DataHub` bridge them together, true loose coupling is achieved—one where neither side depends on the other's internal structure.
 
-The latter approach—which routes inputs and outputs from the controller layer directly into the data access layer, bypassing the logic layer entirely—was conceived by breaking down the role of the controller layer into two distinct elements: "logic invocation" and "input/output data." In conventional architectures, because these two elements remained unseparated, a hierarchical structure dedicated solely to data flow (the so-called "data bucket brigade") was inevitable, requiring data to be transformed as it was passed from one layer to the next. However, by routing input/output data directly to the infrastructure layer (the data access department), this redundant data flow and the very hierarchical structure that supported it become entirely unnecessary.
+Furthermore, because logic never needs to know any implementation details of data access, it can easily be swapped out for mocks that provide the necessary capabilities during testing, achieving high testability as well.
 
-As a result, the residual hierarchical dependency that typically persists between logic and data access is completely eliminated, elevating them into an equal relationship based on the contract defined by the trait's method signatures. This can be viewed as an evolutionary extension of the Dependency Inversion Principle (DIP)—pushing beyond conventional DIP, which merely inverts the direction of dependency, to minimize and localize the dependency itself within contractual boundaries.
+### A Structure That Routes Controller-Layer I/O Directly to the Data Access Layer, Bypassing the Logic Layer
 
-This structure delivers the "restricted dependencies" and "localization of explicitly bounded contexts" required for AI-driven automated programming, making **sabi** a cutting-edge, AI-friendly, Capability-oriented framework for today's AI era.
+The latter approach—routing input/output from the controller layer directly to the data access layer, completely bypassing the logic layer—was conceived by decomposing the controller layer's role into two elements: "invoking logic" and "input/output data." In conventional architectures, because these two elements were never separated, a layered structure whose sole responsibility was data flow (the so-called "data bucket brigade") became unavoidable, forcing data to be transformed every time it crossed a layer. However, by routing input/output data directly to the infrastructure layer (the data access division), this redundant data flow—and the layered structure that existed to support it—becomes entirely unnecessary.
 
+As a result, the hierarchical dependency that would normally remain between logic and data access is completely eliminated, and is elevated instead into an equal relationship based on a contract defined by the trait's method signatures. This can be seen as an evolutionary extension of the Dependency Inversion Principle (DIP)—taking the conventional DIP, which merely reverses the direction of dependency, a step further by minimizing and localizing the dependency itself within the boundary of the contract.
+
+### An AI-Friendly, Capability-Oriented Framework
+
+Moreover, this structure is also well-suited to AI-driven automated programming. For AI-driven automated programming to be performed safely and accurately, the following conditions are required:
+
+* **Localized dependencies**: The scope of dependencies an AI must grasp for a single change should be confined to a narrow portion of the system, not the system as a whole.
+* **Explicit boundaries of side effects**: The extent to which side effects can propagate should be made explicit in the code itself, rather than relying on implicit call ordering.
+* **Localized impact of change**: Adding features or swapping implementations should not ripple out into existing code that doesn't use them.
+* **Substitutability through contract**: An implementation should be safely replaceable as long as it satisfies the contract (trait), without needing to know its implementation details.
+
+**sabi** satisfies all of these conditions at the structural level by defining a dedicated data access trait for each piece of logic and making that logic depend only on that narrow trait—so that adding functionality to a particular `DataAcc` never affects existing logic, and swapping implementations can be done safely as long as the trait's contract is satisfied. In this way, **sabi** is not merely a DI framework, but an AI-friendly, capability-oriented framework suited to the modern AI era.
 
 ## Install
 
@@ -95,7 +107,7 @@ pub trait GettingDataAcc: DataAcc {
 pub trait SettingDataAcc: DataAcc {
     fn set_text(&mut self, text: String) -> errs::Result<()> {
         let redis_data_conn = self.get_data_conn::<RedisDataConn>("redis")?;
-        let redis_conn = data_conn.get_connection();
+        let redis_conn = redis_data_conn.get_connection();
         redis_conn
             .set("key", text)
             .map_err(|e| errs::Err::with_source("fail to set text to key", e))?;
@@ -234,13 +246,13 @@ pub trait GettingDataAccAsync: DataAcc {
 pub trait SettingDataAccAsync: DataAcc {
     async fn set_text_async(&mut self, text: String) -> errs::Result<()> {
         let redis_data_conn = self.get_data_conn_async::<RedisDataConnAsync>("redis").await?;
-        let redis_conn = data_conn.get_connection();
+        let redis_conn = redis_data_conn.get_connection();
         redis_conn
             .set("key", text)
             .await
             .map_err(|e| errs::Err::with_source("fail to set text to key", e))?;
 
-        redis_data_conn.add_rollback(|redis_conn| {
+        redis_data_conn.add_rollback_async(|redis_conn| {
             redis_conn
                 .del("key")
                 .await
@@ -248,7 +260,7 @@ pub trait SettingDataAccAsync: DataAcc {
         }).await;
 
         let stdio_data_conn = self.get_data_conn_async::<StdioDataConnAsync>("stdio").await?;
-        stdio_data_conn.add_post_commit(|_stdin, stdout, _stderr| {
+        stdio_data_conn.add_post_commit_async(|_stdin, stdout, _stderr| {
             stdout.println(text)
         }).await;
 
@@ -316,20 +328,17 @@ async fn run_async() -> errs::Result<()> {
         let mut data = DataHub::new();
 
         // Register session-local DataSrc with DataHub using the `uses` method.
-        // This makes `BarDataSrc` available only within this `DataHub` instance's session.
+        // This makes `StdioDataSrc` available only within this `DataHub` instance's session.
         // If this `DataHub` is moved between threads, `ds` must also implement `Send`.
         data.uses("stdio", StdioDataSrc::new());
 
-        // Execute application logic without a transactional control.
-        data.run_async(logic!(my_async_logic)).await?;
-
-        // Execute application logic within an asynchronous transaction
+        // Execute application logic without an asynchronous transaction
         // The `logic!` macro helps convert an async function into the required closure type.
         // The resulting future is `Send`.
         data.run_async(logic!(my_async_logic)).await?;
 
         // If you need to execute logic within a transaction, use `txn_async` method instead of
-        // `txn_async`.
+        // `run_async`.
         //data.txn_async(logic!(my_async_logic)).await?;
     })
     .await
