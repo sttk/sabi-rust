@@ -107,7 +107,7 @@ pub trait GettingDataAcc: DataAcc {
 pub trait SettingDataAcc: DataAcc {
     fn set_text(&mut self, text: String) -> errs::Result<()> {
         let redis_data_conn = self.get_data_conn::<RedisDataConn>("redis")?;
-        let redis_conn = data_conn.get_connection();
+        let redis_conn = redis_data_conn.get_connection();
         redis_conn
             .set("key", text)
             .map_err(|e| errs::Err::with_source("fail to set text to key", e))?;
@@ -246,13 +246,13 @@ pub trait GettingDataAccAsync: DataAcc {
 pub trait SettingDataAccAsync: DataAcc {
     async fn set_text_async(&mut self, text: String) -> errs::Result<()> {
         let redis_data_conn = self.get_data_conn_async::<RedisDataConnAsync>("redis").await?;
-        let redis_conn = data_conn.get_connection();
+        let redis_conn = redis_data_conn.get_connection();
         redis_conn
             .set("key", text)
             .await
             .map_err(|e| errs::Err::with_source("fail to set text to key", e))?;
 
-        redis_data_conn.add_rollback(|redis_conn| {
+        redis_data_conn.add_rollback_async(|redis_conn| {
             redis_conn
                 .del("key")
                 .await
@@ -328,12 +328,9 @@ async fn run_async() -> errs::Result<()> {
         let mut data = DataHub::new();
 
         // Register session-local DataSrc with DataHub using the `uses` method.
-        // This makes `BarDataSrc` available only within this `DataHub` instance's session.
+        // This makes `StdioDataSrc` available only within this `DataHub` instance's session.
         // If this `DataHub` is moved between threads, `ds` must also implement `Send`.
         data.uses("stdio", StdioDataSrc::new());
-
-        // Execute application logic without a transactional control.
-        data.run_async(logic!(my_async_logic)).await?;
 
         // Execute application logic within an asynchronous transaction
         // The `logic!` macro helps convert an async function into the required closure type.
