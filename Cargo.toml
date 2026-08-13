@@ -24,7 +24,7 @@ futures = { version = "0.3", optional = true }
 trait-variant = "0.1.2"
 
 [dev-dependencies]
-trybuild = "1"
+trybuild = "=1.0.119"
 override_macro = "0.1"
 
 [features]
