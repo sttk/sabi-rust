@@ -794,6 +794,30 @@ mod tests_of_data_src {
     }
 
     #[test]
+    fn setup_no_data_src() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut manager = DataSrcManager::new(true);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 0);
+
+            let mut errors = Vec::new();
+            manager.setup(&mut errors);
+
+            assert_eq!(errors.len(), 0);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 0);
+        }
+
+        assert_eq!(logger.lock().unwrap().len(), 0);
+    }
+
+    #[test]
     fn test_of_setup_and_ok() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
@@ -883,6 +907,30 @@ mod tests_of_data_src {
                 "SyncDataSrc::drop 1",
             ],
         );
+    }
+
+    #[test]
+    fn setup_with_order_no_data_src() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut manager = DataSrcManager::new(true);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 0);
+
+            let mut errors = Vec::new();
+            manager.setup_with_order(&["foo", "bar"], &mut errors);
+
+            assert_eq!(errors.len(), 0);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 0);
+        }
+
+        assert_eq!(logger.lock().unwrap().len(), 0);
     }
 
     #[test]
@@ -1142,6 +1190,34 @@ mod tests_of_data_src {
     }
 
     #[test]
+    fn test_of_setup_with_order_buf_one_of_names_is_not_used_2() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut manager = DataSrcManager::new(true);
+
+            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            manager.add("foo", ds1);
+
+            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            manager.add("bar", ds2);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 2);
+            assert_eq!(manager.vec_ready.len(), 0);
+
+            let mut errors = Vec::new();
+            manager.setup_with_order(&["baz", "foo", "xxx"], &mut errors);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 2);
+
+            assert!(errors.is_empty());
+        }
+    }
+
+    #[test]
     fn test_of_copy_ds_ready_to_map() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut errors = Vec::new();
@@ -1173,6 +1249,39 @@ mod tests_of_data_src {
         assert_eq!(index_map.get("foo").unwrap(), &(true, 0));
         assert_eq!(index_map.get("bar").unwrap(), &(false, 0));
         assert_eq!(index_map.get("baz").unwrap(), &(false, 1));
+    }
+
+    #[test]
+    fn add_copydsreadytomap_remove_copydsreadytomap() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut errors = Vec::new();
+
+        let mut manager = DataSrcManager::new(true);
+
+        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        manager.add("foo", ds1);
+
+        let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+        manager.add("bar", ds2);
+
+        manager.setup(&mut errors);
+        assert!(errors.is_empty());
+
+        let mut index_map = HashMap::<Arc<str>, (bool, usize)>::new();
+        manager.copy_ds_ready_to_map(&mut index_map);
+        assert_eq!(index_map.len(), 2);
+        assert_eq!(index_map.get("foo").unwrap(), &(true, 0));
+        assert_eq!(index_map.get("bar").unwrap(), &(true, 1));
+
+        manager.remove("foo");
+
+        manager.setup(&mut errors);
+        assert!(errors.is_empty());
+
+        let mut index_map = HashMap::<Arc<str>, (bool, usize)>::new();
+        manager.copy_ds_ready_to_map(&mut index_map);
+        assert_eq!(index_map.len(), 1);
+        assert_eq!(index_map.get("bar").unwrap(), &(true, 0));
     }
 
     #[test]
