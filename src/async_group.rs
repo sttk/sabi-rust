@@ -4,6 +4,7 @@
 
 use crate::{AsyncGroup, ErrEntry};
 
+use std::sync::Arc;
 use std::{mem, thread};
 
 /// The enum type representing the reasons for errors that can occur within an [`AsyncGroup`].
@@ -67,6 +68,10 @@ impl AsyncGroup {
                         s.to_string()
                     } else if let Some(s) = e.downcast_ref::<String>() {
                         s.clone()
+                    } else if let Some(s) = e.downcast_ref::<Arc<&str>>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<Arc<str>>() {
+                        s.to_string()
                     } else {
                         "Unknown panic payload".to_string()
                     };
@@ -169,6 +174,7 @@ mod tests_of_async_group {
 
     mod tests_of_join_and_collect_errors {
         use super::*;
+        use std::panic::panic_any;
 
         #[test]
         fn zero() {
@@ -448,6 +454,121 @@ mod tests_of_async_group {
             );
 
             assert_eq!(*struct_d.string.lock().unwrap(), "d");
+        }
+
+        #[test]
+        fn async_code_calls_thread_panic_with_a_str() {
+            let mut ag = AsyncGroup::new();
+
+            ag._index = 123;
+            ag._name = "foo".into();
+
+            ag.add(|| {
+                panic!("panic");
+            });
+
+            let mut errors = Vec::<ErrEntry>::new();
+            ag.join_and_collect_errors(&mut errors);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].index, 123);
+            assert_eq!(errors[0].name, "foo".into());
+            #[cfg(unix)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            #[cfg(windows)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+        }
+
+        #[test]
+        fn async_code_calls_thread_panic_with_a_string() {
+            let mut ag = AsyncGroup::new();
+
+            ag._index = 123;
+            ag._name = "foo".into();
+
+            ag.add(|| {
+                panic_any("panic".to_string());
+            });
+
+            let mut errors = Vec::<ErrEntry>::new();
+            ag.join_and_collect_errors(&mut errors);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].index, 123);
+            assert_eq!(errors[0].name, "foo".into());
+            #[cfg(unix)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            #[cfg(windows)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+        }
+
+        #[test]
+        fn async_code_calls_thread_panic_with_an_arc_str_ref() {
+            let mut ag = AsyncGroup::new();
+
+            ag._index = 123;
+            ag._name = "foo".into();
+
+            ag.add(|| {
+                panic_any(Arc::new("panic"));
+            });
+
+            let mut errors = Vec::<ErrEntry>::new();
+            ag.join_and_collect_errors(&mut errors);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].index, 123);
+            assert_eq!(errors[0].name, "foo".into());
+            #[cfg(unix)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            #[cfg(windows)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+        }
+
+        #[test]
+        fn async_code_calls_thread_panic_with_an_arc_str() {
+            let mut ag = AsyncGroup::new();
+
+            ag._index = 123;
+            ag._name = "foo".into();
+
+            ag.add(|| {
+                panic_any(Arc::<str>::from("panic"));
+            });
+
+            let mut errors = Vec::<ErrEntry>::new();
+            ag.join_and_collect_errors(&mut errors);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].index, 123);
+            assert_eq!(errors[0].name, "foo".into());
+            #[cfg(unix)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            #[cfg(windows)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+        }
+
+        #[test]
+        fn async_code_calls_thread_panic_with_an_unknown_value() {
+            let mut ag = AsyncGroup::new();
+
+            ag._index = 123;
+            ag._name = "foo".into();
+
+            ag.add(|| {
+                panic_any(987);
+            });
+
+            let mut errors = Vec::<ErrEntry>::new();
+            ag.join_and_collect_errors(&mut errors);
+
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].index, 123);
+            assert_eq!(errors[0].name, "foo".into());
+            #[cfg(unix)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"Unknown panic payload\"), file = src/async_group.rs, line = 78 }");
+            #[cfg(windows)]
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"Unknown panic payload\"), file = src\\async_group.rs, line = 78 }");
         }
     }
 

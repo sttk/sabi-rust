@@ -173,6 +173,7 @@ pub trait DataConn {
     ///
     /// * `ag`: A mutable reference to an [`AsyncGroup`] for asynchronous task execution.
     /// * `reports`: A slice of [`TxnFailureReport`] containing failure details for all connections.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn on_txn_failure(&mut self, ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {}
 
     /// Closes the connection to the external data service.
@@ -184,6 +185,7 @@ pub trait DataConn {
 
 struct NoopDataConn {}
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl DataConn for NoopDataConn {
     fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
@@ -271,6 +273,7 @@ where
 
 struct NoopDataSrc {}
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl DataSrc<NoopDataConn> for NoopDataSrc {
     fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
