@@ -35,8 +35,8 @@ unit() {
 
 cover() {
   cargo llvm-cov clean
-  cargo llvm-cov --all-features --html --quiet
-  cargo llvm-cov report
+  cargo +nightly llvm-cov --all-features --html --quiet
+  cargo +nightly llvm-cov report
 }
 
 bench() {

@@ -25,7 +25,9 @@
 //!
 //! This framework brings clear separation and robustness to Rust application design.
 
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(unused_features)]
 
 mod async_group;
 mod data_acc;
