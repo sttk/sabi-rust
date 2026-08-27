@@ -10,6 +10,7 @@ impl DataAcc for DataHub {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests_of_data_acc {
     use super::*;

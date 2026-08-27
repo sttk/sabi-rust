@@ -364,6 +364,7 @@ impl Drop for DataSrcManager {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests_of_data_src {
     use super::*;
@@ -863,9 +864,9 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 1);
             assert_eq!(errors[0].name, "bar".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 453 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 454 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 453 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 454 }");
         }
 
         assert_eq!(
@@ -967,9 +968,9 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 0);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 453 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 454 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 453 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 454 }");
         }
 
         assert_eq!(

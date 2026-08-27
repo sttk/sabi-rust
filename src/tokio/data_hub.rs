@@ -291,6 +291,7 @@ macro_rules! _logic {
     };
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests_of_data_hub {
     use super::*;

@@ -416,6 +416,7 @@ impl Drop for DataConnManager {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests_of_data_conn {
     use super::*;

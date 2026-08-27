@@ -83,6 +83,7 @@ impl TxnFailureReport {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod unit_tests {
     use super::*;

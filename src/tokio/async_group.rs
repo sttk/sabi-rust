@@ -56,6 +56,7 @@ impl AsyncGroup {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests_of_async_group {
     use super::*;
