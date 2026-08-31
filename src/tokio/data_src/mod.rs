@@ -72,6 +72,23 @@ pub enum DataSrcError {
     },
 }
 
+// NOTE: Uses the thin-pointer approach (#[repr(C)] + function pointers).
+//
+// Different DataSrc<C> implementations, each with a different C, must be
+// mixed together in a single Vec<T>. Making it dyn would fix T =
+// dyn DataSrc<C>, which pins C to one concrete type; a separate Vec<T>
+// would then be needed for each C, which defeats this requirement.
+//
+// Also, if the value produced by create_data_conn_fn were passed to
+// DataConnContainer::new by the caller (DataSrcManager) to be type-erased
+// there, the static type of the function pointer read out through an
+// unsafe pointer (i.e. the default type arguments) would end up
+// disagreeing with the actual runtime value, causing it to be erased
+// under the wrong type — a bug that was actually observed in practice.
+// Type erasure (wrapping) must always be completed inside the
+// monomorphized function itself; this is another reason dyn cannot be
+// used here.
+
 impl<S, C> DataSrcContainer<S, C>
 where
     S: DataSrc<C> + 'static,
@@ -999,9 +1016,9 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 0);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 483 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 500 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 483 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 500 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

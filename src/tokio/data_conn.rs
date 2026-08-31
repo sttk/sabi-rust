@@ -43,6 +43,29 @@ pub enum DataConnError {
     },
 }
 
+// NOTE: Uses the thin-pointer approach (#[repr(C)] + function pointers).
+//
+// DataConn itself isn't generic, so rewriting this as Box<dyn DataConn> +
+// downcasting via Any is technically possible and works correctly on its
+// own.
+//
+// However, DataSrcContainer (thin-pointer approach) holds its raw pointer
+// as SendSyncNonNull<DataSrcContainer>, i.e. with the default type
+// arguments (S = NoopDataSrc, C = NoopDataConn). If DataConnContainer were
+// dyn-DataConn-based, DataSrcContainer::create_data_conn_fn would have to
+// return Box<C> to its caller, and that C would be determined by the
+// static type of the function pointer read out through an unsafe pointer
+// (i.e. the default type arguments) rather than by the actual C the
+// caller (the user) requests via get_data_conn::<C>. That C ends up fixed
+// at NoopDataConn regardless of what the caller actually asked for. This
+// mismatch between the static C and the real runtime value, once passed
+// into DataConnContainer::new, causes the value to be erased under the
+// wrong type — a bug that was actually observed in practice (e.g. a
+// MyDataConn ending up treated as a NoopDataConn).
+//
+// Since DataSrcContainer uses the thin-pointer approach, DataConnContainer
+// keeps the same approach as well, in order to interface with it safely.
+
 impl<C> DataConnContainer<C>
 where
     C: DataConn + 'static,
@@ -2005,11 +2028,11 @@ mod tests_of_data_conn {
                     "NoCommitDataConn::post_commit 3",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/data_conn.rs, line = 657 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }]",
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 220),
                     "NoCommitDataConn::on_txn_failure 3",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/data_conn.rs, line = 657 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }]",
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 220),
                     "AsyncDataConn::on_txn_failure 2",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/data_conn.rs, line = 657 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }]",
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 220),
                     "NoCommitDataConn::close 3",
                     "NoCommitDataConn::drop 3",
                     "AsyncDataConn::close 2",
@@ -2035,11 +2058,11 @@ mod tests_of_data_conn {
                     "NoCommitDataConn::post_commit 3",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\tokio\\data_conn.rs, line = 657 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }]",
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 220),
                     "NoCommitDataConn::on_txn_failure 3",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\tokio\\data_conn.rs, line = 657 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }]",
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 220),
                     "AsyncDataConn::on_txn_failure 2",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\tokio\\data_conn.rs, line = 657 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }]",
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 220),
                     "NoCommitDataConn::close 3",
                     "NoCommitDataConn::drop 3",
                     "AsyncDataConn::close 2",
