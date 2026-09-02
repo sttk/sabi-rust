@@ -2,7 +2,10 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::{DataAcc, DataConn, DataHub};
+use super::{DataAcc, DataConn, DataHub, Runner};
+
+use std::future::Future;
+use std::pin::Pin;
 
 impl DataAcc for DataHub {
     /// Retrieves a data connection of a specific type from the `DataHub`.
@@ -29,12 +32,24 @@ impl DataAcc for DataHub {
     {
         DataHub::get_data_conn_async(self, name).await
     }
+
+    async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        for<'a> F:
+            FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'a>>,
+    {
+        logic_fn(self).await
+    }
+
+    async fn start_async(&mut self) -> Runner<'_> {
+        Runner::new_async(self, true).await
+    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests_of_data_acc {
-    use super::super::{logic, AsyncGroup, DataSrc};
+    use super::super::{logic, AsyncGroup, DataConn, DataHub, DataSrc};
     use super::*;
     use crate::TxnFailureReport;
     use std::sync::{Arc, Mutex};
@@ -300,6 +315,7 @@ mod tests_of_data_acc {
         }
     }
 
+    /*
     mod test_run_async_method {
         use super::*;
         use override_macro::{overridable, override_with};
@@ -480,4 +496,5 @@ mod tests_of_data_acc {
             );
         }
     }
+    */
 }

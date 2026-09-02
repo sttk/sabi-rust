@@ -3,7 +3,9 @@
 // See the file LICENSE in this distribution for more details.
 
 use crate::data_src::{copy_global_data_srcs_to_map, create_data_conn_from_global_data_src};
-use crate::{DataConn, DataConnManager, DataHub, DataSrc, DataSrcManager, SendSyncNonNull};
+use crate::{
+    DataConn, DataConnManager, DataHub, DataSrc, DataSrcManager, SendSyncNonNull, TxnFailureReport,
+};
 
 #[allow(unused)] // for rustdoc
 use crate::DataAcc;
@@ -12,7 +14,7 @@ use crate::{DataConnContainer, ErrEntry};
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{any, ptr};
+use std::{any, mem, ptr};
 
 /// An enum type representing the reasons for errors that can occur within [`DataHub`] operations.
 #[derive(Debug)]
@@ -32,6 +34,10 @@ pub enum DataHubError {
 
         /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
+    },
+
+    FailToRunLogics {
+        errors: Vec<ErrEntry>,
     },
 }
 
@@ -120,7 +126,7 @@ impl DataHub {
     }
 
     #[inline]
-    fn begin(&mut self) -> errs::Result<()> {
+    pub(crate) fn begin(&mut self) -> errs::Result<()> {
         self.fixed = true;
 
         let mut errors = Vec::new();
@@ -138,76 +144,24 @@ impl DataHub {
     }
 
     #[inline]
-    fn end(&mut self) {
+    pub(crate) fn new_failure_reports(&self) -> Vec<TxnFailureReport> {
+        self.data_conn_manager.new_failure_reports()
+    }
+
+    #[inline]
+    pub(crate) fn commit(&mut self, reports: &mut [TxnFailureReport]) -> errs::Result<()> {
+        self.data_conn_manager.commit(reports)
+    }
+
+    #[inline]
+    pub(crate) fn rollback(&mut self, reports: Vec<TxnFailureReport>) {
+        self.data_conn_manager.rollback(reports);
+    }
+
+    #[inline]
+    pub(crate) fn end(&mut self) {
         self.data_conn_manager.close();
         self.fixed = false;
-    }
-
-    /// Executes a given logic function without transaction control.
-    ///
-    /// This method sets up local data sources, runs the provided closure,
-    /// and then cleans up the [`DataHub`]'s session resources. It does not
-    /// perform commit or rollback operations.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to [`DataHub`] as an argument.
-    ///
-    /// # Returns
-    ///
-    /// * `errs::Result<()>`: The result of the logic function's execution,
-    ///   or an error if executing `logic_fn` fails.
-    pub fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
-    where
-        F: FnMut(&mut DataHub) -> errs::Result<()>,
-    {
-        let mut r = self.begin();
-        if r.is_ok() {
-            r = logic_fn(self);
-        }
-        self.end();
-        r
-    }
-
-    /// Executes a given logic function within a managed transaction.
-    ///
-    /// This method starts by setting up local data sources, runs the provided closure,
-    /// and then attempts to commit all open data connections in the session.
-    ///
-    /// If any error occurs during the execution of the closure or during the commit phase,
-    /// it initiates a rollback on all data connections and reports the transaction failure details.
-    /// Finally, it cleans up session resources.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to [`DataHub`] as an argument.
-    ///
-    /// # Returns
-    ///
-    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
-    ///   or an [`errs::Err`] if any phase fails.
-    pub fn txn<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
-    where
-        F: FnMut(&mut DataHub) -> errs::Result<()>,
-    {
-        let mut r = self.begin();
-        if r.is_ok() {
-            r = logic_fn(self);
-        }
-
-        let mut reports = self.data_conn_manager.new_failure_reports();
-
-        if r.is_ok() {
-            r = self.data_conn_manager.commit(&mut reports);
-        }
-        if r.is_err() {
-            self.data_conn_manager.rollback(reports);
-        }
-
-        self.end();
-        r
     }
 
     /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
@@ -263,6 +217,174 @@ impl DataHub {
             name: name.into(),
             data_conn_type: any::type_name::<C>(),
         }))
+    }
+
+    /// Executes a given logic function without transaction control.
+    ///
+    /// This method sets up local data sources, runs the provided closure,
+    /// and then cleans up the [`DataHub`]'s session resources. It does not
+    /// perform commit or rollback operations.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
+    ///   It takes a mutable reference to [`DataHub`] as an argument.
+    ///
+    /// # Returns
+    ///
+    /// * `errs::Result<()>`: The result of the logic function's execution,
+    ///   or an error if executing `logic_fn` fails.
+    pub fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>,
+    {
+        let mut r = self.begin();
+        if r.is_ok() {
+            r = logic_fn(self);
+        }
+        self.end();
+        r
+    }
+
+    pub fn start(&mut self) -> Runner<'_> {
+        Runner::new(self, false)
+    }
+}
+
+enum RunnerErrAt {
+    Start { err: errs::Err },
+    Run { errors: Vec<ErrEntry> },
+    Block { errors: Vec<ErrEntry> },
+}
+
+pub struct Runner<'a> {
+    hub: &'a mut DataHub,
+    err: RunnerErrAt,
+    index: usize,
+    nested: bool,
+}
+
+impl<'a> Runner<'a> {
+    pub(crate) fn new(hub: &'a mut DataHub, nested: bool) -> Runner<'a> {
+        if nested {
+            Self {
+                hub,
+                err: RunnerErrAt::Run {
+                    errors: Vec::with_capacity(0),
+                },
+                index: 0,
+                nested,
+            }
+        } else if let Err(err) = hub.begin() {
+            Self {
+                hub,
+                err: RunnerErrAt::Start { err },
+                index: 0,
+                nested,
+            }
+        } else {
+            Self {
+                hub,
+                err: RunnerErrAt::Run {
+                    errors: Vec::with_capacity(0),
+                },
+                index: 0,
+                nested,
+            }
+        }
+    }
+
+    pub fn run<F>(mut self, mut logic_fn: F) -> Self
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>,
+    {
+        let index = self.index;
+        self.index = index + 1;
+
+        match self.err {
+            RunnerErrAt::Run { ref mut errors } => {
+                if errors.is_empty() {
+                    if let Err(err) = logic_fn(self.hub) {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("Runner#run(logic-{})", index).into(),
+                            err,
+                        });
+                    }
+                }
+                self
+            }
+            _ => self,
+        }
+    }
+
+    pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>,
+    {
+        let index = self.index;
+        self.index = index + 1;
+
+        match self.err {
+            RunnerErrAt::Run { ref mut errors } => {
+                if let Err(err) = logic_fn(self.hub) {
+                    errors.push(ErrEntry {
+                        index,
+                        name: format!("Runner#run_force(logic-{})", index).into(),
+                        err,
+                    });
+                }
+                self
+            }
+            _ => self,
+        }
+    }
+
+    pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>,
+    {
+        let index = self.index;
+        self.index = index + 1;
+
+        match self.err {
+            RunnerErrAt::Run { ref mut errors } => {
+                if errors.is_empty() {
+                    if let Err(err) = logic_fn(self.hub) {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("Runner#run_or_block(logic-{})", index).into(),
+                            err,
+                        });
+                        self.err = RunnerErrAt::Block {
+                            errors: mem::take(errors),
+                        };
+                    }
+                }
+                self
+            }
+            _ => self,
+        }
+    }
+
+    pub fn end(self) -> errs::Result<()> {
+        if !self.nested {
+            self.hub.end();
+        }
+
+        match self.err {
+            RunnerErrAt::Start { err } => Err(err),
+            RunnerErrAt::Run { errors } => {
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+                }
+            }
+            RunnerErrAt::Block { errors } => {
+                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+            }
+        }
     }
 }
 
@@ -916,520 +1038,6 @@ mod tests_of_data_hub {
     }
 
     #[test]
-    fn test_txn_and_no_data_access_and_ok() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
-
-            let logger_clone = logger.clone();
-            assert!(hub
-                .txn(move |_data| {
-                    logger_clone
-                        .lock()
-                        .unwrap()
-                        .push("execute logic".to_string());
-                    Ok(())
-                })
-                .is_ok());
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_and_has_data_access_and_ok() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
-
-            let logger_clone = logger.clone();
-            hub.txn(move |data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
-                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
-                Ok(())
-            })
-            .unwrap();
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::create_data_conn 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit 1",
-                "MyDataConn::pre_commit 2",
-                "MyDataConn::commit 1",
-                "MyDataConn::commit 2",
-                "MyDataConn::post_commit 1",
-                "MyDataConn::post_commit 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_but_failed_to_run_logic() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
-
-            let logger_clone = logger.clone();
-            if let Err(e) = hub.txn(move |data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
-                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
-                Err(errs::Err::new("logic error"))
-            }) {
-                match e.reason::<&str>() {
-                    Ok(s) => assert_eq!(s, &"logic error"),
-                    _ => panic!(),
-                }
-            }
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::create_data_conn 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn 2",
-                "MyDataConn::new 2",
-                "MyDataConn::rollback 1",
-                "MyDataConn::rollback 2",
-                "MyDataConn::on_txn_failure 1",
-                "MyDataConn::on_txn_failure 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_but_failed_to_pre_commit() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToPreCommit),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToPreCommit),
-            );
-
-            let logger_clone = logger.clone();
-            if let Err(e) = hub.txn(move |data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
-                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
-                Ok(())
-            }) {
-                match e.reason::<DataConnError>() {
-                    Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
-                        assert_eq!(errors.len(), 1);
-                        assert_eq!(errors[0].index, 0);
-                        assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"pre commit error");
-                    }
-                    _ => panic!(),
-                }
-            }
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::create_data_conn 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit 1 failed",
-                "MyDataConn::rollback 1",
-                "MyDataConn::rollback 2",
-                "MyDataConn::on_txn_failure 1",
-                "MyDataConn::on_txn_failure 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_but_failed_to_commit() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToCommit),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToCommit),
-            );
-
-            let logger_clone = logger.clone();
-            if let Err(e) = hub.txn(move |data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
-                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
-                Ok(())
-            }) {
-                match e.reason::<DataConnError>() {
-                    Ok(DataConnError::FailToCommitDataConn { errors }) => {
-                        assert_eq!(errors.len(), 1);
-                        assert_eq!(errors[0].index, 0);
-                        assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"commit error");
-                    }
-                    _ => panic!(),
-                }
-            }
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::create_data_conn 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit 1",
-                "MyDataConn::pre_commit 2",
-                "MyDataConn::commit 1 failed",
-                "MyDataConn::rollback 1",
-                "MyDataConn::rollback 2",
-                "MyDataConn::on_txn_failure 1",
-                "MyDataConn::on_txn_failure 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_but_failed_to_post_commit() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToPostCommit),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToPostCommit),
-            );
-
-            let logger_clone = logger.clone();
-            if let Err(e) = hub.txn(move |data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
-                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
-                Ok(())
-            }) {
-                match e.reason::<DataConnError>() {
-                    Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
-                        assert_eq!(errors.len(), 2);
-                        assert_eq!(errors[0].index, 0);
-                        assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(
-                            errors[0].err.reason::<&str>().unwrap(),
-                            &"post commit error"
-                        );
-                        assert_eq!(errors[1].index, 1);
-                        assert_eq!(errors[1].name, "bar".into());
-                        assert_eq!(
-                            errors[1].err.reason::<&str>().unwrap(),
-                            &"post commit error"
-                        );
-                    }
-                    _ => panic!(),
-                }
-            }
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::create_data_conn 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit 1",
-                "MyDataConn::pre_commit 2",
-                "MyDataConn::commit 1",
-                "MyDataConn::commit 2",
-                "MyDataConn::post_commit 1 failed",
-                "MyDataConn::post_commit 2 failed",
-                "MyDataConn::on_txn_failure 1",
-                "MyDataConn::on_txn_failure 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_but_failed_to_rollback() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToRollback),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToRollback),
-            );
-
-            let logger_clone = logger.clone();
-            if let Err(e) = hub.txn(move |data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
-                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
-                Err(errs::Err::new("logic error"))
-            }) {
-                match e.reason::<&str>() {
-                    Ok(s) => assert_eq!(s, &"logic error"),
-                    _ => panic!(),
-                }
-            }
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::create_data_conn 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn 2",
-                "MyDataConn::new 2",
-                "MyDataConn::rollback 1 failed",
-                "MyDataConn::rollback 2 failed",
-                "MyDataConn::on_txn_failure 1",
-                "MyDataConn::on_txn_failure 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_with_commit_order() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::with_commit_order(&["bar", "foo"]);
-
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
-
-            let logger_clone = logger.clone();
-
-            if let Err(e) = hub.txn(move |data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                let _conn1 = data.get_data_conn::<MyDataConn>("foo")?;
-                let _conn2 = data.get_data_conn::<MyDataConn>("bar")?;
-                Ok(())
-            }) {
-                match e.reason::<&str>() {
-                    Ok(s) => assert_eq!(s, &"logic error"),
-                    _ => panic!(),
-                }
-            }
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup 1",
-                "MyDataSrc::setup 2",
-                "execute logic",
-                "MyDataSrc::create_data_conn 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit 2",
-                "MyDataConn::pre_commit 1",
-                "MyDataConn::commit 2",
-                "MyDataConn::commit 1",
-                "MyDataConn::post_commit 2",
-                "MyDataConn::post_commit 1",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_txn_but_fail_to_setup() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
-        {
-            let mut hub = DataHub::new();
-
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToSetup),
-            );
-
-            let logger_clone = logger.clone();
-
-            if let Err(e) = hub.txn(move |_data| {
-                logger_clone
-                    .lock()
-                    .unwrap()
-                    .push("execute logic".to_string());
-                Ok(())
-            }) {
-                match e.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToSetupLocalDataSrcs { errors }) => {
-                        assert_eq!(errors.len(), 1);
-                        assert_eq!(errors[0].index, 0);
-                        assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "setup error");
-                    }
-                    _ => panic!(),
-                }
-            }
-        }
-
-        assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::setup 1 failed",
-                "MyDataSrc::drop 1",
-            ]
-        );
-    }
-
-    #[test]
     fn test_get_data_conn_cached() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
@@ -1439,7 +1047,7 @@ mod tests_of_data_hub {
 
             let logger_clone = logger.clone();
 
-            if let Err(e) = hub.txn(move |data| {
+            if let Err(e) = hub.run(move |data| {
                 logger_clone
                     .lock()
                     .unwrap()
@@ -1460,9 +1068,6 @@ mod tests_of_data_hub {
                 "execute logic",
                 "MyDataSrc::create_data_conn 1",
                 "MyDataConn::new 1",
-                "MyDataConn::pre_commit 1",
-                "MyDataConn::commit 1",
-                "MyDataConn::post_commit 1",
                 "MyDataConn::close 1",
                 "MyDataConn::drop 1",
                 "MyDataSrc::close 1",
@@ -1479,7 +1084,7 @@ mod tests_of_data_hub {
 
             let logger_clone = logger.clone();
 
-            if let Err(e) = hub.txn(move |data| {
+            if let Err(e) = hub.run(move |data| {
                 logger_clone
                     .lock()
                     .unwrap()
@@ -1519,7 +1124,7 @@ mod tests_of_data_hub {
 
             let logger_clone = logger.clone();
 
-            if let Err(e) = hub.txn(move |data| {
+            if let Err(e) = hub.run(move |data| {
                 logger_clone
                     .lock()
                     .unwrap()
@@ -1566,7 +1171,7 @@ mod tests_of_data_hub {
 
             let logger_clone = logger.clone();
 
-            if let Err(e) = hub.txn(move |data| {
+            if let Err(e) = hub.run(move |data| {
                 logger_clone
                     .lock()
                     .unwrap()
@@ -1625,8 +1230,6 @@ mod tests_of_data_hub {
                 "execute logic",
                 "MyDataSrc::create_data_conn 1",
                 "MyDataConn::new 1",
-                "MyDataConn::rollback 1",
-                "MyDataConn::on_txn_failure 1",
                 "MyDataConn::close 1",
                 "MyDataConn::drop 1",
                 "MyDataSrc::close 1",
@@ -1643,5 +1246,367 @@ mod tests_of_data_hub {
         });
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_runner_and_ok() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone_0 = logger.clone();
+            let logger_clone_1 = logger.clone();
+            let logger_clone_2 = logger.clone();
+
+            let result = hub
+                .start()
+                .run_or_block(move |_data| {
+                    logger_clone_0
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-0".to_string());
+                    Ok(())
+                })
+                .run(move |_data| {
+                    logger_clone_1
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-1".to_string());
+                    Ok(())
+                })
+                .run_force(move |_data| {
+                    logger_clone_2
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-2".to_string());
+                    Ok(())
+                })
+                .end();
+
+            assert!(result.is_ok());
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic-0",
+                "execute logic-1",
+                "execute logic-2",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_runner_and_fail_to_start() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses(
+                "bar",
+                MyDataSrc::new(2, logger.clone(), Failure::FailToSetup),
+            );
+
+            let logger_clone_0 = logger.clone();
+            let logger_clone_1 = logger.clone();
+            let logger_clone_2 = logger.clone();
+
+            let result = hub
+                .start()
+                .run(move |_data| {
+                    logger_clone_0
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-0".to_string());
+                    Ok(())
+                })
+                .run_force(move |_data| {
+                    logger_clone_1
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-1".to_string());
+                    Ok(())
+                })
+                .run_or_block(move |_data| {
+                    logger_clone_2
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-2".to_string());
+                    Ok(())
+                })
+                .end();
+
+            if let Err(err) = result {
+                match err.reason::<DataHubError>() {
+                    Ok(DataHubError::FailToSetupLocalDataSrcs { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].index, 1);
+                        assert_eq!(errors[0].name, "bar".into());
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "setup error");
+                    }
+                    _ => panic!(),
+                }
+            } else {
+                panic!();
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2 failed",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_runner_and_fail_to_run_logics_then_skop_run_and_run_or_block_but_run_force_runs() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone_0 = logger.clone();
+            let logger_clone_1 = logger.clone();
+            let logger_clone_2 = logger.clone();
+            let logger_clone_3 = logger.clone();
+
+            let result = hub
+                .start()
+                .run(move |_data| {
+                    logger_clone_0
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-0".to_string());
+                    Err(errs::Err::new("logic-0 failed"))
+                })
+                .run(move |_data| {
+                    logger_clone_1
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-1".to_string());
+                    Ok(())
+                })
+                .run_or_block(move |_data| {
+                    logger_clone_2
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-2".to_string());
+                    Ok(())
+                })
+                .run_force(move |_data| {
+                    logger_clone_3
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-3".to_string());
+                    Ok(())
+                })
+                .end();
+
+            if let Err(err) = result {
+                match err.reason::<DataHubError>() {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].index, 0);
+                        assert_eq!(errors[0].name, "Runner#run(logic-0)".into());
+                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"logic-0 failed");
+                    }
+                    _ => panic!(),
+                }
+            } else {
+                panic!();
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic-0",
+                "execute logic-3",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_runner_and_fail_to_run_or_block_then_skip_run() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone_0 = logger.clone();
+            let logger_clone_1 = logger.clone();
+            let logger_clone_2 = logger.clone();
+            let logger_clone_3 = logger.clone();
+
+            let result = hub
+                .start()
+                .run_or_block(move |_data| {
+                    logger_clone_0
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-0".to_string());
+                    Err(errs::Err::new("logic-0 failed"))
+                })
+                .run(move |_data| {
+                    logger_clone_1
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-1".to_string());
+                    Ok(())
+                })
+                .run_force(move |_data| {
+                    logger_clone_2
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-2".to_string());
+                    Ok(())
+                })
+                .run_or_block(move |_data| {
+                    logger_clone_3
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-3".to_string());
+                    Ok(())
+                })
+                .end();
+
+            if let Err(err) = result {
+                match err.reason::<DataHubError>() {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].index, 0);
+                        assert_eq!(errors[0].name, "Runner#run_or_block(logic-0)".into());
+                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"logic-0 failed");
+                    }
+                    _ => panic!(),
+                }
+            } else {
+                panic!();
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic-0",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_runner_and_fail_to_run_force_then_skip_run_but_run_force_runs() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let mut hub = DataHub::new();
+
+            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+
+            let logger_clone_0 = logger.clone();
+            let logger_clone_1 = logger.clone();
+            let logger_clone_2 = logger.clone();
+            let logger_clone_3 = logger.clone();
+
+            let result = hub
+                .start()
+                .run_force(move |_data| {
+                    logger_clone_0
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-0".to_string());
+                    Err(errs::Err::new("logic-0 failed"))
+                })
+                .run(move |_data| {
+                    logger_clone_1
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-1".to_string());
+                    Ok(())
+                })
+                .run_force(move |_data| {
+                    logger_clone_2
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-2".to_string());
+                    Ok(())
+                })
+                .run_or_block(move |_data| {
+                    logger_clone_3
+                        .lock()
+                        .unwrap()
+                        .push("execute logic-3".to_string());
+                    Ok(())
+                })
+                .end();
+
+            if let Err(err) = result {
+                match err.reason::<DataHubError>() {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
+                        assert_eq!(errors.len(), 1);
+                        assert_eq!(errors[0].index, 0);
+                        assert_eq!(errors[0].name, "Runner#run_force(logic-0)".into());
+                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"logic-0 failed");
+                    }
+                    _ => panic!(),
+                }
+            } else {
+                panic!();
+            }
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "MyDataSrc::new 1",
+                "MyDataSrc::new 2",
+                "MyDataSrc::setup 1",
+                "MyDataSrc::setup 2",
+                "execute logic-0",
+                "execute logic-2",
+                "MyDataSrc::close 2",
+                "MyDataSrc::drop 2",
+                "MyDataSrc::close 1",
+                "MyDataSrc::drop 1",
+            ]
+        );
     }
 }

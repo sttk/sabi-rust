@@ -15,6 +15,15 @@ mod data_acc;
 mod data_conn;
 mod data_hub;
 mod data_src;
+mod txn_data_hub;
+
+pub use data_conn::DataConnError;
+pub use data_hub::{DataHubError, Runner};
+pub use data_src::{
+    create_static_data_src_container, setup_async, setup_with_order_async, uses, uses_async,
+    DataSrcError,
+};
+pub use txn_data_hub::{Txn, TxnError};
 
 use crate::{ErrEntry, SendSyncNonNull, TxnFailureReport};
 
@@ -23,13 +32,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-
-pub use data_conn::DataConnError;
-pub use data_hub::DataHubError;
-pub use data_src::{
-    create_static_data_src_container, setup_async, setup_with_order_async, uses, uses_async,
-    DataSrcError,
-};
 
 /// A convenience macro to easily convert an asynchronous function into a `Pin<Box<dyn Future>>`
 /// closure suitable for `DataHub`'s `run_async` or `txn_async` methods.
@@ -119,6 +121,7 @@ pub trait DataConn {
     /// # Returns
     ///
     /// A `Result` indicating success or failure of the pre-commit operation.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn pre_commit_async(
         &mut self,
         ag: &mut AsyncGroup,
@@ -137,6 +140,7 @@ pub trait DataConn {
     /// # Returns
     ///
     /// A `Result` indicating success or failure of the post-commit operation.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn post_commit_async(
         &mut self,
         ag: &mut AsyncGroup,
@@ -409,6 +413,19 @@ pub trait DataAcc {
         &mut self,
         name: &str,
     ) -> impl Future<Output = errs::Result<&mut C>> + Send;
+
+    #[allow(async_fn_in_trait)]
+    async fn run_async<F>(&mut self, logic_fn: F) -> errs::Result<()>
+    where
+        for<'a> F:
+            FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'a>>;
+
+    #[allow(async_fn_in_trait)]
+    async fn start_async(&mut self) -> Runner<'_>;
+}
+
+pub struct TxnDataHub {
+    hub: DataHub,
 }
 
 #[doc(hidden)]

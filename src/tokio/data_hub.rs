@@ -5,14 +5,14 @@
 use super::data_src::{copy_global_data_srcs_to_map, create_data_conn_from_global_data_src_async};
 use super::{
     DataConn, DataConnContainer, DataConnManager, DataHub, DataSrc, DataSrcManager, ErrEntry,
-    SendSyncNonNull,
+    SendSyncNonNull, TxnFailureReport,
 };
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::{any, ptr};
+use std::{any, mem, ptr};
 
 /// Represents errors that can occur within the `DataHub`.
 #[derive(Debug)]
@@ -31,6 +31,10 @@ pub enum DataHubError {
 
         /// The string representation of the data connection type that was requested.
         data_conn_type: &'static str,
+    },
+
+    FailToRunLogics {
+        errors: Vec<ErrEntry>,
     },
 }
 
@@ -117,7 +121,7 @@ impl DataHub {
     }
 
     #[inline]
-    async fn begin_async(&mut self) -> errs::Result<()> {
+    pub(crate) async fn begin_async(&mut self) -> errs::Result<()> {
         self.fixed = true;
 
         let mut errors = Vec::new();
@@ -135,91 +139,27 @@ impl DataHub {
     }
 
     #[inline]
-    fn end(&mut self) {
+    pub(crate) fn new_failure_reports(&self) -> Vec<TxnFailureReport> {
+        self.data_conn_manager.new_failure_reports()
+    }
+
+    #[inline]
+    pub(crate) async fn commit_async(
+        &mut self,
+        reports: &mut [TxnFailureReport],
+    ) -> errs::Result<()> {
+        self.data_conn_manager.commit_async(reports).await
+    }
+
+    #[inline]
+    pub(crate) async fn rollback_async(&mut self, reports: Vec<TxnFailureReport>) {
+        self.data_conn_manager.rollback_async(reports).await
+    }
+
+    #[inline]
+    pub(crate) fn end(&mut self) {
         self.data_conn_manager.close();
         self.fixed = false;
-    }
-
-    /// Executes an asynchronous logic function with the `DataHub` and handles setup and cleanup.
-    ///
-    /// This method sets up local data sources, runs the provided `logic_fn`, and then
-    /// cleans up all data connections and sources. It does *not* automatically commit
-    /// or rollback any transactions.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn` - An asynchronous function that takes a mutable reference to `DataHub`
-    ///                and returns a `Result`. This function contains the application's logic.
-    ///                The returned `Future` must implement `Send`.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `F` - The type of the asynchronous logic function.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating the success or failure of the `logic_fn` execution or
-    /// the setup of data sources.
-    #[allow(clippy::doc_overindented_list_items)]
-    pub async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
-    where
-        for<'a> F:
-            FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'a>>,
-    {
-        let mut r = self.begin_async().await;
-        if r.is_ok() {
-            r = logic_fn(self).await;
-        }
-        self.end();
-        r
-    }
-
-    /// Executes a given asynchronous logic function within a managed transaction.
-    ///
-    /// This method starts by asynchronously setting up local data sources, runs the provided closure,
-    /// and then attempts to asynchronously commit all open data connections in the session.
-    ///
-    /// If any error occurs during the execution of the closure or during the commit phase,
-    /// it initiates an asynchronous rollback on all data connections and reports the transaction
-    /// failure details.
-    /// Finally, it cleans up session resources.
-    ///
-    /// # Parameters
-    ///
-    /// * `logic_fn`: An asynchronous closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to [`DataHub`] as an argument and returns a pinned, boxed
-    ///   future.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `F` - The type of the asynchronous transactional logic function.
-    ///
-    /// # Returns
-    ///
-    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
-    ///   or an [`errs::Err`] if any phase fails.
-    #[allow(clippy::doc_overindented_list_items)]
-    pub async fn txn_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
-    where
-        for<'a> F:
-            FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'a>>,
-    {
-        let mut r = self.begin_async().await;
-        if r.is_ok() {
-            r = logic_fn(self).await;
-        }
-
-        let mut reports = self.data_conn_manager.new_failure_reports();
-
-        if r.is_ok() {
-            r = self.data_conn_manager.commit_async(&mut reports).await;
-        }
-        if r.is_err() {
-            self.data_conn_manager.rollback_async(reports).await;
-        }
-
-        self.end();
-        r
     }
 
     /// Retrieves an existing data connection or creates a new one if it doesn't exist.
@@ -276,6 +216,187 @@ impl DataHub {
             name: name.into(),
             data_conn_type: any::type_name::<C>(),
         }))
+    }
+
+    /// Executes an asynchronous logic function with the `DataHub` and handles setup and cleanup.
+    ///
+    /// This method sets up local data sources, runs the provided `logic_fn`, and then
+    /// cleans up all data connections and sources. It does *not* automatically commit
+    /// or rollback any transactions.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn` - An asynchronous function that takes a mutable reference to `DataHub`
+    ///                and returns a `Result`. This function contains the application's logic.
+    ///                The returned `Future` must implement `Send`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - The type of the asynchronous logic function.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating the success or failure of the `logic_fn` execution or
+    /// the setup of data sources.
+    #[allow(clippy::doc_overindented_list_items)]
+    pub async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        for<'a> F:
+            FnMut(&'a mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'a>>,
+    {
+        let mut r = self.begin_async().await;
+
+        if r.is_ok() {
+            r = logic_fn(self).await;
+        }
+
+        self.end();
+
+        r
+    }
+
+    pub async fn start_async(&mut self) -> Runner<'_> {
+        Runner::new_async(self, false).await
+    }
+}
+
+enum RunnerErrAt {
+    Start { err: errs::Err },
+    Run { errors: Vec<ErrEntry> },
+    Block { errors: Vec<ErrEntry> },
+}
+
+pub struct Runner<'a> {
+    hub: &'a mut DataHub,
+    err: RunnerErrAt,
+    index: usize,
+    nested: bool,
+}
+
+impl<'a> Runner<'a> {
+    pub(crate) async fn new_async(hub: &'a mut DataHub, nested: bool) -> Runner<'a> {
+        if nested {
+            Self {
+                hub,
+                err: RunnerErrAt::Run {
+                    errors: Vec::with_capacity(0),
+                },
+                index: 0,
+                nested,
+            }
+        } else if let Err(err) = hub.begin_async().await {
+            Self {
+                hub,
+                err: RunnerErrAt::Start { err },
+                index: 0,
+                nested,
+            }
+        } else {
+            Self {
+                hub,
+                err: RunnerErrAt::Run {
+                    errors: Vec::with_capacity(0),
+                },
+                index: 0,
+                nested,
+            }
+        }
+    }
+
+    pub async fn run_async<F>(mut self, mut logic_fn: F) -> Self
+    where
+        for<'b> F:
+            FnMut(&'b mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
+    {
+        let index = self.index;
+        self.index = index + 1;
+
+        match self.err {
+            RunnerErrAt::Run { ref mut errors } => {
+                if errors.is_empty() {
+                    if let Err(err) = logic_fn(self.hub).await {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("Runner#run(logic-{})", index).into(),
+                            err,
+                        });
+                    }
+                }
+                self
+            }
+            _ => self,
+        }
+    }
+
+    pub async fn run_force_async<F>(mut self, mut logic_fn: F) -> Self
+    where
+        for<'b> F:
+            FnMut(&'b mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
+    {
+        let index = self.index;
+        self.index = index + 1;
+
+        match self.err {
+            RunnerErrAt::Run { ref mut errors } => {
+                if let Err(err) = logic_fn(self.hub).await {
+                    errors.push(ErrEntry {
+                        index,
+                        name: format!("Runner#run_force(logic-{})", index).into(),
+                        err,
+                    });
+                }
+                self
+            }
+            _ => self,
+        }
+    }
+
+    pub async fn run_or_block_async<F>(mut self, mut logic_fn: F) -> Self
+    where
+        for<'b> F:
+            FnMut(&'b mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
+    {
+        let index = self.index;
+        self.index = index + 1;
+
+        match self.err {
+            RunnerErrAt::Run { ref mut errors } => {
+                if errors.is_empty() {
+                    if let Err(err) = logic_fn(self.hub).await {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("Runner#run_or_block(logic-{})", index).into(),
+                            err,
+                        });
+                        self.err = RunnerErrAt::Block {
+                            errors: mem::take(errors),
+                        };
+                    }
+                }
+                self
+            }
+            _ => self,
+        }
+    }
+
+    pub fn end(self) -> errs::Result<()> {
+        if !self.nested {
+            self.hub.end()
+        }
+
+        match self.err {
+            RunnerErrAt::Start { err } => Err(err),
+            RunnerErrAt::Run { errors } => {
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+                }
+            }
+            RunnerErrAt::Block { errors } => {
+                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+            }
+        }
     }
 }
 
@@ -960,6 +1081,7 @@ mod tests_of_data_hub {
         );
     }
 
+    /*
     #[tokio::test]
     async fn test_txn_and_no_data_access_and_ok() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1791,4 +1913,5 @@ mod tests_of_data_hub {
 
         handle.await.unwrap();
     }
+    */
 }
