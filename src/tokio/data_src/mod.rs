@@ -932,6 +932,18 @@ mod tests_of_data_src {
     }
 
     #[tokio::test]
+    async fn setup_with_order_no_data_src() {
+        let mut errors = Vec::<ErrEntry>::new();
+        {
+            let mut manager = DataSrcManager::new(true);
+            manager
+                .setup_with_order_async(&["foo", "bar"], &mut errors)
+                .await;
+        }
+        assert_eq!(errors.len(), 0);
+    }
+
+    #[tokio::test]
     async fn test_of_setup_with_order_and_ok() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 

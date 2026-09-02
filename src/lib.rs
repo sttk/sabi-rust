@@ -35,16 +35,18 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 mod non_null;
+mod txn_data_hub;
 mod txn_failure;
+
+pub use async_group::AsyncGroupError;
+pub use data_conn::DataConnError;
+pub use data_hub::{DataHubError, Runner};
+pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses, DataSrcError};
+pub use txn_data_hub::{Txn, TxnError};
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, cell, marker, ptr, thread};
-
-pub use async_group::AsyncGroupError;
-pub use data_conn::DataConnError;
-pub use data_hub::DataHubError;
-pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses, DataSrcError};
 
 #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 #[cfg(feature = "tokio")]
@@ -121,6 +123,7 @@ pub trait DataConn {
     /// # Returns
     ///
     /// * `errs::Result<()>`: `Ok(())` if pre-commit is successful, or an [`errs::Err`] if it fails.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn pre_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
     }
@@ -141,6 +144,7 @@ pub trait DataConn {
     ///
     /// * `errs::Result<()>`: `Ok(())` if post-commit tasks succeed, or an [`errs::Err`] if they
     ///   fail.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn post_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
     }
@@ -363,6 +367,16 @@ pub trait DataAcc {
     ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
     ///   [`DataConn`] cannot be cast to the specified type `C`.
     fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> errs::Result<&mut C>;
+
+    fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>;
+
+    fn start(&mut self) -> Runner<'_>;
+}
+
+pub struct TxnDataHub {
+    hub: DataHub,
 }
 
 #[doc(hidden)]

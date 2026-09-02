@@ -2,11 +2,22 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::{DataAcc, DataConn, DataHub};
+use crate::{DataAcc, DataConn, DataHub, Runner};
 
 impl DataAcc for DataHub {
     fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> errs::Result<&mut C> {
         DataHub::get_data_conn(self, name)
+    }
+
+    fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>,
+    {
+        logic_fn(self)
+    }
+
+    fn start(&mut self) -> Runner<'_> {
+        Runner::new(self, true)
     }
 }
 
@@ -14,7 +25,7 @@ impl DataAcc for DataHub {
 #[cfg(test)]
 mod tests_of_data_acc {
     use super::*;
-    use crate::{AsyncGroup, DataSrc, TxnFailureReport};
+    use crate::{AsyncGroup, DataConn, DataHub, DataSrc, TxnFailureReport};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
@@ -265,11 +276,11 @@ mod tests_of_data_acc {
         }
     }
 
-    mod test_run_method {
+    mod test_get_data_conn {
         use super::*;
         use override_macro::{overridable, override_with};
 
-        #[overridable(mod = test_run_method)]
+        #[overridable(mod = test_get_data_conn)]
         trait SampleData {
             fn get_value(&mut self) -> errs::Result<String>;
             fn set_value(&mut self, v: &str) -> errs::Result<()>;
@@ -283,7 +294,7 @@ mod tests_of_data_acc {
             Ok(())
         }
 
-        #[overridable(mod = test_run_method)]
+        #[overridable(mod = test_get_data_conn)]
         trait FooDataAcc: DataAcc {
             fn get_value(&mut self) -> errs::Result<String> {
                 let conn = self.get_data_conn::<FooDataConn>("foo")?;
@@ -293,7 +304,7 @@ mod tests_of_data_acc {
 
         impl FooDataAcc for DataHub {}
 
-        #[overridable(mod = test_run_method)]
+        #[overridable(mod = test_get_data_conn)]
         trait BarDataAcc: DataAcc {
             fn set_value(&mut self, text: &str) -> errs::Result<()> {
                 let conn = self.get_data_conn::<BarDataConn>("bar")?;
@@ -304,7 +315,7 @@ mod tests_of_data_acc {
 
         impl BarDataAcc for DataHub {}
 
-        #[override_with(test_run_method::FooDataAcc, test_run_method::BarDataAcc)]
+        #[override_with(test_get_data_conn::FooDataAcc, test_get_data_conn::BarDataAcc)]
         impl SampleData for DataHub {}
 
         #[test]
@@ -352,35 +363,42 @@ mod tests_of_data_acc {
         }
     }
 
-    mod test_txn_method {
+    mod test_run {
         use super::*;
         use override_macro::{overridable, override_with};
 
-        #[overridable(mod = test_txn_method)]
-        trait SampleData {
+        #[overridable(mod = test_run)]
+        trait HogeData {
+            fn process(&mut self) -> errs::Result<()>;
+        }
+
+        #[overridable(mod = test_run)]
+        trait FugaData {
             fn get_value(&mut self) -> errs::Result<String>;
             fn set_value(&mut self, v: &str) -> errs::Result<()>;
         }
 
-        fn sample_logic(data: &mut impl SampleData) -> errs::Result<()> {
-            let v = data.get_value()?;
-            let _ = data.set_value(&v);
+        fn hoge_logic(data: &mut impl HogeData) -> errs::Result<()> {
+            data.process()?;
+            Ok(())
+        }
+
+        fn fuga_logic(data: &mut impl FugaData) -> errs::Result<()> {
             let v = data.get_value()?;
             let _ = data.set_value(&v);
             Ok(())
         }
 
-        #[overridable(mod = test_txn_method)]
+        #[overridable(mod = test_run)]
         trait FooDataAcc: DataAcc {
             fn get_value(&mut self) -> errs::Result<String> {
                 let conn = self.get_data_conn::<FooDataConn>("foo")?;
                 Ok(conn.get_text())
             }
         }
-
         impl FooDataAcc for DataHub {}
 
-        #[overridable(mod = test_txn_method)]
+        #[overridable(mod = test_run)]
         trait BarDataAcc: DataAcc {
             fn set_value(&mut self, text: &str) -> errs::Result<()> {
                 let conn = self.get_data_conn::<BarDataConn>("bar")?;
@@ -388,11 +406,22 @@ mod tests_of_data_acc {
                 Ok(())
             }
         }
-
         impl BarDataAcc for DataHub {}
 
-        #[override_with(test_txn_method::FooDataAcc, test_txn_method::BarDataAcc)]
-        impl test_txn_method::SampleData for DataHub {}
+        #[overridable(mod = test_run)]
+        trait BazDataAcc: DataAcc {
+            fn process(&mut self) -> errs::Result<()> {
+                self.run(fuga_logic)?;
+                Ok(())
+            }
+        }
+        impl BazDataAcc for DataHub {}
+
+        #[override_with(test_run::FooDataAcc, test_run::BarDataAcc, test_run::BazDataAcc)]
+        impl test_run::HogeData for DataHub {}
+
+        #[override_with(test_run::FooDataAcc, test_run::BarDataAcc, test_run::BazDataAcc)]
+        impl test_run::FugaData for DataHub {}
 
         #[test]
         fn test() {
@@ -404,7 +433,7 @@ mod tests_of_data_acc {
                 data.uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
                 data.uses("bar", BarDataSrc::new(2, logger.clone()));
 
-                if let Err(_) = data.txn(sample_logic) {
+                if let Err(_) = data.run(hoge_logic) {
                     panic!();
                 }
             }
@@ -422,20 +451,115 @@ mod tests_of_data_acc {
                     "BarDataSrc::create_data_src 2",
                     "BarDataConn::new 2",
                     "BarDataConn::set_text 2",
-                    "FooDataConn::get_text 1",
-                    "BarDataConn::set_text 2",
-                    "FooDataConn::pre_commit 1",
-                    "BarDataConn::pre_commit 2",
-                    "FooDataConn::commit 1",
-                    "BarDataConn::commit 2",
-                    "FooDataConn::post_commit 1",
-                    "BarDataConn::post_commit 2",
                     "BarDataConn.text = hello",
                     "BarDataConn::close 2",
                     "BarDataConn::drop 2",
                     "FooDataConn::close 1",
                     "FooDataConn::drop 1",
-                    "BarDataSrc.text = hello", // because committed
+                    "BarDataSrc.text = ", // because not committed
+                    "BarDataSrc::close 2",
+                    "BarDataSrc::drop 2",
+                    "FooDataSrc::close 1",
+                    "FooDataSrc::drop 1",
+                ],
+            );
+        }
+    }
+
+    mod test_start {
+        use super::*;
+        use override_macro::{overridable, override_with};
+
+        #[overridable(mod = test_start)]
+        trait HogeData {
+            fn process(&mut self) -> errs::Result<()>;
+        }
+
+        #[overridable(mod = test_start)]
+        trait FugaData {
+            fn get_value(&mut self) -> errs::Result<String>;
+            fn set_value(&mut self, v: &str) -> errs::Result<()>;
+        }
+
+        fn hoge_logic(data: &mut impl HogeData) -> errs::Result<()> {
+            data.process()?;
+            Ok(())
+        }
+
+        fn fuga_logic(data: &mut impl FugaData) -> errs::Result<()> {
+            let v = data.get_value()?;
+            let _ = data.set_value(&v);
+            Ok(())
+        }
+
+        #[overridable(mod = test_start)]
+        trait FooDataAcc: DataAcc {
+            fn get_value(&mut self) -> errs::Result<String> {
+                let conn = self.get_data_conn::<FooDataConn>("foo")?;
+                Ok(conn.get_text())
+            }
+        }
+        impl FooDataAcc for DataHub {}
+
+        #[overridable(mod = test_start)]
+        trait BarDataAcc: DataAcc {
+            fn set_value(&mut self, text: &str) -> errs::Result<()> {
+                let conn = self.get_data_conn::<BarDataConn>("bar")?;
+                conn.set_text(text);
+                Ok(())
+            }
+        }
+        impl BarDataAcc for DataHub {}
+
+        #[overridable(mod = test_start)]
+        trait BazDataAcc: DataAcc {
+            fn process(&mut self) -> errs::Result<()> {
+                self.start().run(fuga_logic).end()?;
+                Ok(())
+            }
+        }
+        impl BazDataAcc for DataHub {}
+
+        #[override_with(test_start::FooDataAcc, test_start::BarDataAcc, test_start::BazDataAcc)]
+        impl test_start::HogeData for DataHub {}
+
+        #[override_with(test_start::FooDataAcc, test_start::BarDataAcc, test_start::BazDataAcc)]
+        impl test_start::FugaData for DataHub {}
+
+        #[test]
+        fn test() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            {
+                let mut data = DataHub::new();
+
+                data.uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
+                data.uses("bar", BarDataSrc::new(2, logger.clone()));
+
+                if let Err(_) = data.start().run(hoge_logic).end() {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "FooDataSrc::new 1",
+                    "BarDataSrc::new 2",
+                    "FooDataSrc::setup 1",
+                    "BarDataSrc::setup 2",
+                    "FooDataSrc::create_data_src 1",
+                    "FooDataConn::new 1",
+                    "FooDataConn::get_text 1",
+                    "BarDataSrc::create_data_src 2",
+                    "BarDataConn::new 2",
+                    "BarDataConn::set_text 2",
+                    "BarDataConn.text = hello",
+                    "BarDataConn::close 2",
+                    "BarDataConn::drop 2",
+                    "FooDataConn::close 1",
+                    "FooDataConn::drop 1",
+                    "BarDataSrc.text = ", // because not committed
                     "BarDataSrc::close 2",
                     "BarDataSrc::drop 2",
                     "FooDataSrc::close 1",
