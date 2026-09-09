@@ -295,224 +295,9 @@ macro_rules! _logic {
 #[cfg(test)]
 mod tests_of_data_hub {
     use super::*;
-    use crate::tokio::{AsyncGroup, DataConnError, DataSrcError};
-    use crate::TxnFailureReport;
+    use crate::tokio::_test_commons::*;
+    use crate::tokio::{DataConnError, DataSrcError};
     use std::sync::Mutex;
-
-    #[derive(Clone, Copy, PartialEq)]
-    enum Failure {
-        None,
-        FailToPreCommit,
-        FailToCommit,
-        FailToPostCommit,
-        FailToRollback,
-        FailToSetup,
-        FailToCreateDataConn,
-    }
-
-    struct MyDataConn {
-        id: i8,
-        failure: Failure,
-        committed: bool,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl MyDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, failure: Failure) -> Self {
-            logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataConn::new {}", id));
-            Self {
-                id,
-                failure,
-                committed: false,
-                logger,
-            }
-        }
-    }
-    impl Drop for MyDataConn {
-        fn drop(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataConn::drop {}", self.id));
-        }
-    }
-    impl DataConn for MyDataConn {
-        async fn pre_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.failure == Failure::FailToPreCommit {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::pre_commit_async {} failed", self.id));
-                Err(errs::Err::new("pre commit error"))
-            } else {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::pre_commit_async {}", self.id));
-                Ok(())
-            }
-        }
-        async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.failure == Failure::FailToCommit {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::commit_async {} failed", self.id));
-                Err(errs::Err::new("commit error"))
-            } else {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::commit_async {}", self.id));
-                self.committed = true;
-                Ok(())
-            }
-        }
-        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.failure == Failure::FailToPostCommit {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::post_commit_async {} failed", self.id));
-                Err(errs::Err::new("post commit error"))
-            } else {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::post_commit_async {}", self.id));
-                Ok(())
-            }
-        }
-        fn is_committed(&self) -> bool {
-            self.committed
-        }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.failure == Failure::FailToRollback {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::rollback_async {} failed", self.id));
-                Ok(())
-            } else {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataConn::rollback_async {}", self.id));
-                Err(errs::Err::new("rollback error"))
-            }
-        }
-        async fn on_txn_failure_async(
-            &mut self,
-            _ag: &mut AsyncGroup,
-            _reports: Arc<[TxnFailureReport]>,
-        ) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataConn::on_txn_failure_async {}", self.id));
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataConn::close {}", self.id));
-        }
-    }
-
-    struct MyDataSrc {
-        id: i8,
-        failure: Failure,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl MyDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, failure: Failure) -> Self {
-            logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataSrc::new {}", id));
-            Self {
-                id,
-                failure,
-                logger,
-            }
-        }
-    }
-    impl Drop for MyDataSrc {
-        fn drop(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataSrc::drop {}", self.id));
-        }
-    }
-    impl DataSrc<MyDataConn> for MyDataSrc {
-        async fn setup_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.failure == Failure::FailToSetup {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataSrc::setup_async {} failed", self.id));
-                Err(errs::Err::new("setup error".to_string()))
-            } else {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataSrc::setup_async {}", self.id));
-                Ok(())
-            }
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("MyDataSrc::close {}", self.id));
-        }
-        async fn create_data_conn_async(&mut self) -> errs::Result<Box<MyDataConn>> {
-            if self.failure == Failure::FailToCreateDataConn {
-                self.logger.lock().unwrap().push(format!(
-                    "MyDataSrc::create_data_conn_async {} failed",
-                    self.id
-                ));
-                return Err(errs::Err::new("eeee".to_string()));
-            }
-            {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("MyDataSrc::create_data_conn_async {}", self.id));
-            }
-            let conn = MyDataConn::new(self.id, self.logger.clone(), self.failure);
-            Ok(Box::new(conn))
-        }
-    }
-
-    struct AnotherDataConn {}
-    impl DataConn for AnotherDataConn {
-        async fn pre_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            false
-        }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        async fn on_txn_failure_async(
-            &mut self,
-            _ag: &mut AsyncGroup,
-            _reports: Arc<[TxnFailureReport]>,
-        ) {
-        }
-        fn close(&mut self) {}
-    }
 
     #[test]
     fn test_new() {
@@ -543,8 +328,8 @@ mod tests_of_data_hub {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let mut hub = DataHub::new();
-        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+        hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+        hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
         assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
         assert!(hub.local_data_src_manager.vec_ready.is_empty());
@@ -570,7 +355,7 @@ mod tests_of_data_hub {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let mut hub = DataHub::new();
-        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+        hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
 
         assert_eq!(hub.local_data_src_manager.vec_unready.len(), 1);
         assert_eq!(hub.local_data_src_manager.vec_ready.len(), 0);
@@ -590,7 +375,7 @@ mod tests_of_data_hub {
         assert_eq!(hub.data_conn_manager.index_map.len(), 0);
         assert!(hub.fixed);
 
-        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+        hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
         assert_eq!(hub.local_data_src_manager.vec_unready.len(), 0);
         assert_eq!(hub.local_data_src_manager.vec_ready.len(), 1);
@@ -606,8 +391,8 @@ mod tests_of_data_hub {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let mut hub = DataHub::new();
-        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+        hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+        hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
         assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
         assert!(hub.local_data_src_manager.vec_ready.is_empty());
@@ -643,8 +428,8 @@ mod tests_of_data_hub {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let mut hub = DataHub::new();
-        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+        hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+        hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
         assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
         assert!(hub.local_data_src_manager.vec_ready.is_empty());
@@ -674,8 +459,8 @@ mod tests_of_data_hub {
         assert_eq!(hub.data_conn_manager.index_map.len(), 0);
         assert!(!hub.fixed);
 
-        hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-        hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+        hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+        hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
         assert!(hub.begin_async().await.is_ok());
 
@@ -687,7 +472,7 @@ mod tests_of_data_hub {
         assert_eq!(hub.data_conn_manager.index_map.len(), 0);
         assert!(hub.fixed);
 
-        hub.uses("baz", MyDataSrc::new(3, logger.clone(), Failure::None));
+        hub.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::None));
 
         assert!(hub.local_data_src_manager.vec_unready.is_empty());
         assert_eq!(hub.local_data_src_manager.vec_ready.len(), 2);
@@ -769,8 +554,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             assert_eq!(hub.local_data_src_manager.vec_unready.len(), 2);
             assert_eq!(hub.local_data_src_manager.vec_ready.len(), 0);
@@ -804,14 +589,14 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -823,12 +608,9 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToSetup),
-            );
-            hub.uses("baz", MyDataSrc::new(3, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
+            hub.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::None));
 
             assert_eq!(hub.local_data_src_manager.vec_unready.len(), 3);
             assert_eq!(hub.local_data_src_manager.vec_ready.len(), 0);
@@ -844,7 +626,7 @@ mod tests_of_data_hub {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 1);
                         assert_eq!(errors[0].name, "bar".into());
-                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "setup error");
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "XXX");
                     }
                     _ => panic!(),
                 }
@@ -858,15 +640,15 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::new 3",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2 failed",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 3",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::new 3",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2 failed",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 3",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -877,8 +659,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
             assert!(hub
@@ -899,15 +681,15 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -918,8 +700,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
             if let Err(err) = hub
@@ -947,15 +729,15 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic but fail",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -966,8 +748,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
             assert!(hub
@@ -988,15 +770,15 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -1007,8 +789,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
             hub.txn_async(move |data| {
@@ -1018,8 +800,8 @@ mod tests_of_data_hub {
                         .lock()
                         .unwrap()
                         .push("execute logic".to_string());
-                    let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                    let _conn2 = data.get_data_conn_async::<MyDataConn>("bar").await?;
+                    let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                    let _conn2 = data.get_data_conn_async::<SyncDataConn>("bar").await?;
                     Ok(())
                 })
             })
@@ -1030,29 +812,29 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn_async 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit_async 1",
-                "MyDataConn::pre_commit_async 2",
-                "MyDataConn::commit_async 1",
-                "MyDataConn::commit_async 2",
-                "MyDataConn::post_commit_async 1",
-                "MyDataConn::post_commit_async 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataSrc::create_data_conn_async 2",
+                "SyncDataConn::new 2",
+                "SyncDataConn::pre_commit_async 1",
+                "SyncDataConn::pre_commit_async 2",
+                "SyncDataConn::commit_async 1",
+                "SyncDataConn::commit_async 2",
+                "SyncDataConn::post_commit_async 1",
+                "SyncDataConn::post_commit_async 2",
+                "SyncDataConn::close 2",
+                "SyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -1063,8 +845,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
             if let Err(e) = hub
@@ -1075,8 +857,8 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                        let _conn2 = data.get_data_conn_async::<MyDataConn>("bar").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                        let _conn2 = data.get_data_conn_async::<SyncDataConn>("bar").await?;
                         Err(errs::Err::new("logic error"))
                     })
                 })
@@ -1092,27 +874,29 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn_async 2",
-                "MyDataConn::new 2",
-                "MyDataConn::rollback_async 1",
-                "MyDataConn::rollback_async 2",
-                "MyDataConn::on_txn_failure_async 1",
-                "MyDataConn::on_txn_failure_async 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataSrc::create_data_conn_async 2",
+                "SyncDataConn::new 2",
+                "SyncDataConn::rollback_async 1",
+                "SyncDataConn::rollback_async 2",
+                "SyncDataConn::on_txn_failure_async 1",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "SyncDataConn::on_txn_failure_async 2",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "SyncDataConn::close 2",
+                "SyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1"
             ]
         );
     }
@@ -1123,14 +907,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToPreCommit),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToPreCommit),
-            );
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::PreCommit));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::PreCommit));
 
             let logger_clone = logger.clone();
             if let Err(e) = hub
@@ -1141,8 +919,8 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                        let _conn2 = data.get_data_conn_async::<MyDataConn>("bar").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                        let _conn2 = data.get_data_conn_async::<SyncDataConn>("bar").await?;
                         Ok(())
                     })
                 })
@@ -1153,7 +931,7 @@ mod tests_of_data_hub {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"pre commit error");
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "zzz");
                     }
                     _ => panic!("{e:?}"),
                 }
@@ -1163,28 +941,30 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn_async 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit_async 1 failed",
-                "MyDataConn::rollback_async 1",
-                "MyDataConn::rollback_async 2",
-                "MyDataConn::on_txn_failure_async 1",
-                "MyDataConn::on_txn_failure_async 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataSrc::create_data_conn_async 2",
+                "SyncDataConn::new 2",
+                "SyncDataConn::pre_commit_async 1 failed",
+                "SyncDataConn::rollback_async 1",
+                "SyncDataConn::rollback_async 2",
+                "SyncDataConn::on_txn_failure_async 1",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = 80 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "SyncDataConn::on_txn_failure_async 2",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = 80 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "SyncDataConn::close 2",
+                "SyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1"
             ]
         );
     }
@@ -1195,14 +975,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToCommit),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToCommit),
-            );
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::Commit));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Commit));
 
             let logger_clone = logger.clone();
             if let Err(e) = hub
@@ -1213,8 +987,8 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                        let _conn2 = data.get_data_conn_async::<MyDataConn>("bar").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                        let _conn2 = data.get_data_conn_async::<SyncDataConn>("bar").await?;
                         Ok(())
                     })
                 })
@@ -1225,7 +999,7 @@ mod tests_of_data_hub {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(errors[0].err.reason::<&str>().unwrap(), &"commit error");
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "ZZZ");
                     }
                     _ => panic!("{e:?}"),
                 }
@@ -1235,30 +1009,32 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn_async 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit_async 1",
-                "MyDataConn::pre_commit_async 2",
-                "MyDataConn::commit_async 1 failed",
-                "MyDataConn::rollback_async 1",
-                "MyDataConn::rollback_async 2",
-                "MyDataConn::on_txn_failure_async 1",
-                "MyDataConn::on_txn_failure_async 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataSrc::create_data_conn_async 2",
+                "SyncDataConn::new 2",
+                "SyncDataConn::pre_commit_async 1",
+                "SyncDataConn::pre_commit_async 2",
+                "SyncDataConn::commit_async 1 failed",
+                "SyncDataConn::rollback_async 1",
+                "SyncDataConn::rollback_async 2",
+                "SyncDataConn::on_txn_failure_async 1",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = 61 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "SyncDataConn::on_txn_failure_async 2",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = 61 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "SyncDataConn::close 2",
+                "SyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1"
             ]
         );
     }
@@ -1269,14 +1045,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToPostCommit),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToPostCommit),
-            );
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::PostCommit));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::PostCommit));
 
             let logger_clone = logger.clone();
             if let Err(e) = hub
@@ -1287,8 +1057,8 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                        let _conn2 = data.get_data_conn_async::<MyDataConn>("bar").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                        let _conn2 = data.get_data_conn_async::<SyncDataConn>("bar").await?;
                         Ok(())
                     })
                 })
@@ -1299,16 +1069,10 @@ mod tests_of_data_hub {
                         assert_eq!(errors.len(), 2);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(
-                            errors[0].err.reason::<&str>().unwrap(),
-                            &"post commit error"
-                        );
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "!!!");
                         assert_eq!(errors[1].index, 1);
                         assert_eq!(errors[1].name, "bar".into());
-                        assert_eq!(
-                            errors[1].err.reason::<&str>().unwrap(),
-                            &"post commit error"
-                        );
+                        assert_eq!(errors[1].err.reason::<String>().unwrap(), "!!!");
                     }
                     _ => panic!("{e:?}"),
                 }
@@ -1318,31 +1082,33 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn_async 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit_async 1",
-                "MyDataConn::pre_commit_async 2",
-                "MyDataConn::commit_async 1",
-                "MyDataConn::commit_async 2",
-                "MyDataConn::post_commit_async 1 failed",
-                "MyDataConn::post_commit_async 2 failed",
-                "MyDataConn::on_txn_failure_async 1",
-                "MyDataConn::on_txn_failure_async 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataSrc::create_data_conn_async 2",
+                "SyncDataConn::new 2",
+                "SyncDataConn::pre_commit_async 1",
+                "SyncDataConn::pre_commit_async 2",
+                "SyncDataConn::commit_async 1",
+                "SyncDataConn::commit_async 2",
+                "SyncDataConn::post_commit_async 1 failed",
+                "SyncDataConn::post_commit_async 2 failed",
+                "SyncDataConn::on_txn_failure_async 1",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 98 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 98 }), rollback: NoneByNotRolledBack }]",
+                "SyncDataConn::on_txn_failure_async 2",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 98 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 98 }), rollback: NoneByNotRolledBack }]",
+                "SyncDataConn::close 2",
+                "SyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1"
             ]
         );
     }
@@ -1353,14 +1119,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToRollback),
-            );
-            hub.uses(
-                "bar",
-                MyDataSrc::new(2, logger.clone(), Failure::FailToRollback),
-            );
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::Rollback));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Rollback));
 
             let logger_clone = logger.clone();
             if let Err(e) = hub
@@ -1371,8 +1131,8 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                        let _conn2 = data.get_data_conn_async::<MyDataConn>("bar").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                        let _conn2 = data.get_data_conn_async::<SyncDataConn>("bar").await?;
                         Err(errs::Err::new("logic error"))
                     })
                 })
@@ -1388,27 +1148,29 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn_async 2",
-                "MyDataConn::new 2",
-                "MyDataConn::rollback_async 1 failed",
-                "MyDataConn::rollback_async 2 failed",
-                "MyDataConn::on_txn_failure_async 1",
-                "MyDataConn::on_txn_failure_async 2",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataSrc::create_data_conn_async 2",
+                "SyncDataConn::new 2",
+                "SyncDataConn::rollback_async 1 failed",
+                "SyncDataConn::rollback_async 2 failed",
+                "SyncDataConn::on_txn_failure_async 1",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 120 }) }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 120 }) }]",
+                "SyncDataConn::on_txn_failure_async 2",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 120 }) }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = 120 }) }]",
+                "SyncDataConn::close 2",
+                "SyncDataConn::drop 2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1"
             ]
         );
     }
@@ -1419,8 +1181,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::with_commit_order(&["bar", "foo"]);
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
             hub.txn_async(move |data| {
@@ -1430,8 +1192,8 @@ mod tests_of_data_hub {
                         .lock()
                         .unwrap()
                         .push("execute logic".to_string());
-                    let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                    let _conn2 = data.get_data_conn_async::<MyDataConn>("bar").await?;
+                    let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                    let _conn2 = data.get_data_conn_async::<SyncDataConn>("bar").await?;
                     Ok(())
                 })
             })
@@ -1442,29 +1204,29 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataSrc::create_data_conn_async 2",
-                "MyDataConn::new 2",
-                "MyDataConn::pre_commit_async 2",
-                "MyDataConn::pre_commit_async 1",
-                "MyDataConn::commit_async 2",
-                "MyDataConn::commit_async 1",
-                "MyDataConn::post_commit_async 2",
-                "MyDataConn::post_commit_async 1",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataConn::close 2",
-                "MyDataConn::drop 2",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataSrc::create_data_conn_async 2",
+                "SyncDataConn::new 2",
+                "SyncDataConn::pre_commit_async 2",
+                "SyncDataConn::pre_commit_async 1",
+                "SyncDataConn::commit_async 2",
+                "SyncDataConn::commit_async 1",
+                "SyncDataConn::post_commit_async 2",
+                "SyncDataConn::post_commit_async 1",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataConn::close 2",
+                "SyncDataConn::drop 2",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -1475,10 +1237,7 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses(
-                "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToSetup),
-            );
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::Setup));
 
             let logger_clone = logger.clone();
 
@@ -1500,7 +1259,7 @@ mod tests_of_data_hub {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "foo".into());
-                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "setup error");
+                        assert_eq!(errors[0].err.reason::<String>().unwrap(), "XXX");
                     }
                     _ => panic!(),
                 }
@@ -1510,9 +1269,9 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::setup_async 1 failed",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::setup_async 1 failed",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -1523,7 +1282,7 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
 
@@ -1535,8 +1294,8 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
                         Ok(())
                     })
                 })
@@ -1549,18 +1308,18 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::setup_async 1",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::setup_async 1",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataConn::pre_commit_async 1",
-                "MyDataConn::commit_async 1",
-                "MyDataConn::post_commit_async 1",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataConn::pre_commit_async 1",
+                "SyncDataConn::commit_async 1",
+                "SyncDataConn::post_commit_async 1",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -1571,8 +1330,8 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
-            hub.uses("bar", MyDataSrc::new(2, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            hub.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
             let err = hub
@@ -1583,7 +1342,7 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("fxx").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("fxx").await?;
                         Ok(())
                     })
                 })
@@ -1597,10 +1356,7 @@ mod tests_of_data_hub {
                         data_conn_type,
                     } => {
                         assert_eq!(name.as_ref(), "fxx");
-                        assert_eq!(
-                            data_conn_type,
-                            &"sabi::tokio::data_hub::tests_of_data_hub::MyDataConn"
-                        );
+                        assert_eq!(data_conn_type, &"sabi::tokio::_test_commons::SyncDataConn");
                     }
                     _ => panic!(),
                 },
@@ -1611,15 +1367,15 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::new 2",
-                "MyDataSrc::setup_async 1",
-                "MyDataSrc::setup_async 2",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup_async 1",
+                "SyncDataSrc::setup_async 2",
                 "execute logic",
-                "MyDataSrc::close 2",
-                "MyDataSrc::drop 2",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -1632,7 +1388,7 @@ mod tests_of_data_hub {
 
             hub.uses(
                 "foo",
-                MyDataSrc::new(1, logger.clone(), Failure::FailToCreateDataConn),
+                SyncDataSrc::new(1, logger.clone(), Fail::CreateDataConn),
             );
 
             let logger_clone = logger.clone();
@@ -1645,7 +1401,7 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        data.get_data_conn_async::<MyDataConn>("foo").await?;
+                        data.get_data_conn_async::<SyncDataConn>("foo").await?;
                         Ok(())
                     })
                 })
@@ -1658,10 +1414,7 @@ mod tests_of_data_hub {
                     data_conn_type,
                 }) => {
                     assert_eq!(name.as_ref(), "foo");
-                    assert_eq!(
-                        data_conn_type,
-                        &"sabi::tokio::data_hub::tests_of_data_hub::MyDataConn"
-                    );
+                    assert_eq!(data_conn_type, &"sabi::tokio::_test_commons::SyncDataConn");
                 }
                 _ => panic!(),
             }
@@ -1670,12 +1423,12 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::setup_async 1",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::setup_async 1",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1 failed",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
             ]
         );
     }
@@ -1686,7 +1439,7 @@ mod tests_of_data_hub {
         {
             let mut hub = DataHub::new();
 
-            hub.uses("foo", MyDataSrc::new(1, logger.clone(), Failure::None));
+            hub.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
 
             let logger_clone = logger.clone();
 
@@ -1698,14 +1451,14 @@ mod tests_of_data_hub {
                             .lock()
                             .unwrap()
                             .push("execute logic".to_string());
-                        if let Err(e) = data.get_data_conn_async::<AnotherDataConn>("foo").await {
+                        if let Err(e) = data.get_data_conn_async::<AsyncDataConn>("foo").await {
                             match e.reason::<DataSrcError>() {
                                 Ok(DataSrcError::FailToCastDataConn { name, target_type }) => {
                                     assert_eq!(name.as_ref(), "foo");
                                     assert_eq!(
-                                target_type,
-                                &"sabi::tokio::data_hub::tests_of_data_hub::AnotherDataConn"
-                              );
+                                        target_type,
+                                        &"sabi::tokio::_test_commons::AsyncDataConn"
+                                    );
                                 }
                                 _ => panic!("{e:?}"),
                             }
@@ -1713,16 +1466,16 @@ mod tests_of_data_hub {
                             panic!();
                         }
 
-                        let _conn1 = data.get_data_conn_async::<MyDataConn>("foo").await?;
+                        let _conn1 = data.get_data_conn_async::<SyncDataConn>("foo").await?;
 
-                        if let Err(e) = data.get_data_conn_async::<AnotherDataConn>("foo").await {
+                        if let Err(e) = data.get_data_conn_async::<AsyncDataConn>("foo").await {
                             match e.reason::<DataConnError>() {
                                 Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                                     assert_eq!(name.as_ref(), "foo");
                                     assert_eq!(
-                                target_type,
-                                &"sabi::tokio::data_hub::tests_of_data_hub::AnotherDataConn"
-                              );
+                                        target_type,
+                                        &"sabi::tokio::_test_commons::AsyncDataConn"
+                                    );
                                     Err(e)
                                 }
                                 _ => panic!("{e:?}"),
@@ -1738,10 +1491,7 @@ mod tests_of_data_hub {
             match err.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                     assert_eq!(name.as_ref(), "foo");
-                    assert_eq!(
-                        target_type,
-                        &"sabi::tokio::data_hub::tests_of_data_hub::AnotherDataConn"
-                    );
+                    assert_eq!(target_type, &"sabi::tokio::_test_commons::AsyncDataConn");
                 }
                 _ => panic!("{err:?}"),
             }
@@ -1750,17 +1500,18 @@ mod tests_of_data_hub {
         assert_eq!(
             *logger.lock().unwrap(),
             &[
-                "MyDataSrc::new 1",
-                "MyDataSrc::setup_async 1",
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::setup_async 1",
                 "execute logic",
-                "MyDataSrc::create_data_conn_async 1",
-                "MyDataConn::new 1",
-                "MyDataConn::rollback_async 1",
-                "MyDataConn::on_txn_failure_async 1",
-                "MyDataConn::close 1",
-                "MyDataConn::drop 1",
-                "MyDataSrc::close 1",
-                "MyDataSrc::drop 1",
+                "SyncDataSrc::create_data_conn_async 1",
+                "SyncDataConn::new 1",
+                "SyncDataConn::rollback_async 1",
+                "SyncDataConn::on_txn_failure_async 1",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1"
             ]
         );
     }

@@ -402,212 +402,8 @@ impl Drop for DataSrcManager {
 #[cfg(test)]
 mod tests_of_data_src {
     use super::*;
+    use crate::tokio::_test_commons::*;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    struct SyncDataConn {}
-    impl SyncDataConn {
-        fn new() -> Self {
-            Self {}
-        }
-    }
-    impl DataConn for SyncDataConn {
-        async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            false
-        }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn close(&mut self) {}
-    }
-
-    struct AsyncDataConn {}
-    impl AsyncDataConn {
-        fn new() -> Self {
-            Self {}
-        }
-    }
-    impl DataConn for AsyncDataConn {
-        async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            false
-        }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn close(&mut self) {}
-    }
-
-    struct SyncDataSrc {
-        id: i8,
-        logger: Arc<Mutex<Vec<String>>>,
-        fail_to_setup: bool,
-        fail_to_create_data_conn: bool,
-    }
-    impl SyncDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail_to_setup: bool) -> Self {
-            let logger_clone = logger.clone();
-            tokio::spawn(async move {
-                logger_clone
-                    .lock()
-                    .await
-                    .push(format!("SyncDataSrc::new {}", id));
-            });
-            Self {
-                id,
-                logger: logger,
-                fail_to_setup,
-                fail_to_create_data_conn: false,
-            }
-        }
-        fn new_for_fail_to_create_data_conn(id: i8, logger: Arc<Mutex<Vec<String>>>) -> Self {
-            Self {
-                id,
-                logger: logger,
-                fail_to_setup: false,
-                fail_to_create_data_conn: true,
-            }
-        }
-    }
-    impl Drop for SyncDataSrc {
-        fn drop(&mut self) {
-            let logger = self.logger.clone();
-            let id = self.id;
-            tokio::spawn(async move {
-                logger
-                    .lock()
-                    .await
-                    .push(format!("SyncDataSrc::drop {}", id));
-            });
-        }
-    }
-    impl DataSrc<SyncDataConn> for SyncDataSrc {
-        async fn setup_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let fail = self.fail_to_setup;
-            let id = self.id;
-            let logger = self.logger.clone();
-
-            if fail {
-                logger
-                    .lock()
-                    .await
-                    .push(format!("SyncDataSrc::setup {} failed", id));
-                return Err(errs::Err::new("XXX".to_string()));
-            }
-            logger
-                .lock()
-                .await
-                .push(format!("SyncDataSrc::setup {}", id));
-            Ok(())
-        }
-        fn close(&mut self) {
-            let logger = self.logger.clone();
-            let id = self.id;
-            tokio::spawn(async move {
-                logger
-                    .lock()
-                    .await
-                    .push(format!("SyncDataSrc::close {}", id));
-            });
-        }
-        async fn create_data_conn_async(&mut self) -> errs::Result<Box<SyncDataConn>> {
-            let id = self.id;
-            let logger = self.logger.clone();
-            {
-                logger
-                    .lock()
-                    .await
-                    .push(format!("SyncDataSrc::create_data_conn {}", id));
-            }
-            if self.fail_to_create_data_conn {
-                return Err(errs::Err::new("eeee".to_string()));
-            }
-            let conn = SyncDataConn::new();
-            Ok(Box::new(conn))
-        }
-    }
-
-    struct AsyncDataSrc {
-        id: i8,
-        fail: bool,
-        logger: Arc<Mutex<Vec<String>>>,
-        wait: u64,
-    }
-    impl AsyncDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: bool, wait: u64) -> Self {
-            let logger_clone = logger.clone();
-            tokio::spawn(async move {
-                logger_clone
-                    .lock()
-                    .await
-                    .push(format!("AsyncDataSrc::new {}", id));
-            });
-            Self {
-                id,
-                fail,
-                logger,
-                wait,
-            }
-        }
-    }
-    impl Drop for AsyncDataSrc {
-        fn drop(&mut self) {
-            let logger = self.logger.clone();
-            let id = self.id;
-            tokio::spawn(async move {
-                logger
-                    .lock()
-                    .await
-                    .push(format!("AsyncDataSrc::drop {}", id));
-            });
-        }
-    }
-    impl DataSrc<AsyncDataConn> for AsyncDataSrc {
-        async fn setup_async(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
-            let logger = self.logger.clone();
-            let fail = self.fail;
-            let id = self.id;
-            let wait = self.wait;
-
-            ag.add(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
-                let mut logger = logger.lock().await;
-                if fail {
-                    logger.push(format!("AsyncDataSrc::setup {} failed to setup", id));
-                    return Err(errs::Err::new("XXX".to_string()));
-                }
-                logger.push(format!("AsyncDataSrc::setup {}", id));
-                Ok(())
-            });
-            Ok(())
-        }
-        fn close(&mut self) {
-            let logger = self.logger.clone();
-            let id = self.id;
-            tokio::spawn(async move {
-                logger
-                    .lock()
-                    .await
-                    .push(format!("AsyncDataSrc::close {}", id));
-            });
-        }
-        async fn create_data_conn_async(&mut self) -> errs::Result<Box<AsyncDataConn>> {
-            let logger = self.logger.clone();
-            {
-                logger
-                    .lock()
-                    .await
-                    .push(format!("AsyncDataSrc::create_data_conn {}", self.id));
-            }
-            let conn = AsyncDataConn::new();
-            Ok(Box::new(conn))
-        }
-    }
 
     #[tokio::test]
     async fn test_of_new() {
@@ -624,17 +420,17 @@ mod tests_of_data_src {
 
     #[tokio::test]
     async fn test_of_prepend() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut vec = Vec::<SendSyncNonNull<DataSrcContainer>>::new();
 
-            let ds = SyncDataSrc::new(1, logger.clone(), false);
+            let ds = SyncDataSrc::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("foo", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
 
-            let ds = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("bar", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
@@ -657,12 +453,12 @@ mod tests_of_data_src {
 
             let mut vec = Vec::<SendSyncNonNull<DataSrcContainer>>::new();
 
-            let ds = SyncDataSrc::new(3, logger.clone(), false);
+            let ds = SyncDataSrc::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("baz", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
 
-            let ds = AsyncDataSrc::new(4, logger.clone(), false, 0);
+            let ds = AsyncDataSrc::new(4, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("qux", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
@@ -694,25 +490,27 @@ mod tests_of_data_src {
         // Give some time for drop to be called
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::new 4".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::drop 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::new 4".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::drop 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_add() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds = SyncDataSrc::new(1, logger.clone(), false);
+            let ds = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds);
 
             assert!(manager.local);
@@ -724,7 +522,7 @@ mod tests_of_data_src {
                 "foo".into()
             );
 
-            let ds = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds);
 
             assert!(manager.local);
@@ -743,36 +541,38 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_remove() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("foo", ds1, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds2 = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("bar", ds2, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("baz", ds3, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
 
-            let ds4 = AsyncDataSrc::new(4, logger.clone(), false, 0);
+            let ds4 = AsyncDataSrc::new(4, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("qux", ds4, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
@@ -789,42 +589,44 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::new 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::close 4".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::drop 4".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::new 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::close 4".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::drop 4".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_close() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("foo", ds1, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds2 = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("bar", ds2, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("baz", ds3, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
 
-            let ds4 = AsyncDataSrc::new(4, logger.clone(), false, 0);
+            let ds4 = AsyncDataSrc::new(4, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("qux", ds4, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
@@ -838,30 +640,32 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::new 4".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::close 4".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::drop 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
-        assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::new 4".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::close 4".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::drop 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+            assert!(locked.contains(&"AsyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_setup_async_and_ok() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
             assert!(manager.local);
@@ -878,31 +682,33 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_setup_but_error() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), true);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::Setup);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), true);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::Setup);
             manager.add("bar", ds3);
 
             assert!(manager.local);
@@ -919,32 +725,34 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 2 failed".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 2 failed".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_setup_with_order_and_ok() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
             assert!(manager.local);
@@ -965,38 +773,40 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_setup_with_order_but_fail() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), true);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::Setup);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), true);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::Setup);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
-            let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+            let ds4 = SyncDataSrc::new(4, logger.clone(), Fail::None);
             manager.add("qux", ds4);
 
             assert!(manager.local);
@@ -1016,43 +826,45 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 0);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/mod.rs, line = 500 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/_test_commons.rs, line = 421 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\mod.rs, line = 500 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\_test_commons.rs, line = 421 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 1 failed".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 1 failed".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_setup_with_order_containing_duplicated_name_and_ok() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
             assert!(manager.local);
@@ -1071,38 +883,40 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_setup_with_order_containing_duplicated_name_and_ok_2() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
-            let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+            let ds4 = SyncDataSrc::new(4, logger.clone(), Fail::None);
             manager.add("qux", ds4);
 
             assert!(manager.local);
@@ -1121,39 +935,41 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_setup_with_order_buf_one_of_names_is_not_used() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
             assert!(manager.local);
@@ -1172,24 +988,26 @@ mod tests_of_data_src {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let locked = logger.lock().await;
-        assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::setup 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
-        assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        {
+            let locked = logger.lock().unwrap();
+            assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::setup_async 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+            assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+        }
     }
 
     #[tokio::test]
     async fn test_of_copy_ds_ready_to_map() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let mut errors = Vec::new();
 
         let mut index_map = HashMap::<Arc<str>, (bool, usize)>::new();
@@ -1199,7 +1017,7 @@ mod tests_of_data_src {
         assert!(index_map.is_empty());
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
         manager.add("foo", ds1);
         manager.setup_async(&mut errors).await;
         assert!(errors.is_empty());
@@ -1208,8 +1026,8 @@ mod tests_of_data_src {
         assert_eq!(index_map.get("foo").unwrap(), &(true, 0));
 
         let mut manager = DataSrcManager::new(false);
-        let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
-        let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+        let ds2 = AsyncDataSrc::new(2, logger.clone(), Fail::None);
+        let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
         manager.add("bar", ds2);
         manager.add("baz", ds3);
         manager.setup_async(&mut errors).await;
@@ -1223,11 +1041,11 @@ mod tests_of_data_src {
 
     #[tokio::test]
     async fn test_of_create_data_conn_and_ok() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let mut errors = Vec::new();
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
         manager.add("foo", ds1);
         manager.setup_async(&mut errors).await;
 
@@ -1258,10 +1076,7 @@ mod tests_of_data_src {
                     data_conn_type,
                 }) => {
                     assert_eq!(*name, "foo".into());
-                    assert_eq!(
-                        *data_conn_type,
-                        "sabi::tokio::data_src::tests_of_data_src::SyncDataConn"
-                    );
+                    assert_eq!(*data_conn_type, "sabi::tokio::_test_commons::SyncDataConn");
                 }
                 _ => panic!(),
             }
@@ -1272,11 +1087,11 @@ mod tests_of_data_src {
 
     #[tokio::test]
     async fn test_of_create_data_conn_but_fail_to_cast() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let mut errors = Vec::new();
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
         manager.add("foo", ds1);
         manager.setup_async(&mut errors).await;
 
@@ -1287,10 +1102,7 @@ mod tests_of_data_src {
             match err.reason::<DataSrcError>() {
                 Ok(DataSrcError::FailToCastDataConn { name, target_type }) => {
                     assert_eq!(*name, "foo".into());
-                    assert_eq!(
-                        *target_type,
-                        "sabi::tokio::data_src::tests_of_data_src::AsyncDataConn"
-                    );
+                    assert_eq!(*target_type, "sabi::tokio::_test_commons::AsyncDataConn");
                 }
                 _ => panic!(),
             }
@@ -1301,11 +1113,11 @@ mod tests_of_data_src {
 
     #[tokio::test]
     async fn test_of_create_data_conn_but_fail_to_create() {
-        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let mut errors = Vec::new();
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new_for_fail_to_create_data_conn(1, logger.clone());
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::CreateDataConn);
         manager.add("foo", ds1);
         manager.setup_async(&mut errors).await;
 
@@ -1319,10 +1131,7 @@ mod tests_of_data_src {
                     data_conn_type,
                 }) => {
                     assert_eq!(*name, "foo".into());
-                    assert_eq!(
-                        *data_conn_type,
-                        "sabi::tokio::data_src::tests_of_data_src::SyncDataConn"
-                    );
+                    assert_eq!(*data_conn_type, "sabi::tokio::_test_commons::SyncDataConn");
                 }
                 _ => panic!(),
             }

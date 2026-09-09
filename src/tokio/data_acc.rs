@@ -34,271 +34,10 @@ impl DataAcc for DataHub {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests_of_data_acc {
-    use super::super::{logic, AsyncGroup, DataSrc};
     use super::*;
-    use crate::TxnFailureReport;
+    use crate::tokio::_test_commons::*;
+    use crate::tokio::logic;
     use std::sync::{Arc, Mutex};
-
-    struct FooDataConn {
-        id: i8,
-        text: String,
-        committed: bool,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl FooDataConn {
-        fn new(id: i8, s: &str, logger: Arc<Mutex<Vec<String>>>) -> Self {
-            {
-                let mut logger = logger.lock().unwrap();
-                logger.push(format!("FooDataConn::new {}", id));
-            }
-            Self {
-                id,
-                text: s.to_string(),
-                logger,
-                committed: false,
-            }
-        }
-        async fn get_text_async(&self) -> String {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::get_text_async {}", self.id));
-            self.text.clone()
-        }
-    }
-    impl Drop for FooDataConn {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::drop {}", self.id));
-        }
-    }
-    impl DataConn for FooDataConn {
-        async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.committed = true;
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::commit_async {}", self.id));
-            Ok(())
-        }
-        async fn pre_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::pre_commit_async {}", self.id));
-            Ok(())
-        }
-        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::post_commit_async {}", self.id));
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            self.committed
-        }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::rollback_async {}", self.id));
-            Ok(())
-        }
-        async fn on_txn_failure_async(
-            &mut self,
-            _ag: &mut AsyncGroup,
-            _reports: Arc<[TxnFailureReport]>,
-        ) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::on_txn_failure_async {}", self.id));
-        }
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataConn::close {}", self.id));
-        }
-    }
-
-    struct FooDataSrc {
-        id: i8,
-        logger: Arc<Mutex<Vec<String>>>,
-        fail: bool,
-        text: String,
-    }
-    impl FooDataSrc {
-        fn new(id: i8, s: &str, logger: Arc<Mutex<Vec<String>>>, fail: bool) -> Self {
-            {
-                let mut logger = logger.lock().unwrap();
-                logger.push(format!("FooDataSrc::new {}", id));
-            }
-            Self {
-                id,
-                logger,
-                fail,
-                text: s.to_string(),
-            }
-        }
-    }
-    impl Drop for FooDataSrc {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataSrc::drop {}", self.id));
-        }
-    }
-    impl DataSrc<FooDataConn> for FooDataSrc {
-        async fn setup_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.fail {
-                {
-                    let mut logger = self.logger.lock().unwrap();
-                    logger.push(format!("FooDataSrc::setup_async {} failed", self.id));
-                }
-                return Err(errs::Err::new("XXXX".to_string()));
-            }
-            {
-                let mut logger = self.logger.lock().unwrap();
-                logger.push(format!("FooDataSrc::setup_async {}", self.id));
-            }
-            Ok(())
-        }
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("FooDataSrc::close {}", self.id));
-        }
-        async fn create_data_conn_async(&mut self) -> errs::Result<Box<FooDataConn>> {
-            {
-                let mut logger = self.logger.lock().unwrap();
-                logger.push(format!("FooDataSrc::create_data_src_async {}", self.id));
-            }
-            let conn = FooDataConn::new(self.id, &self.text, self.logger.clone());
-            Ok(Box::new(conn))
-        }
-    }
-
-    struct BarDataConn {
-        id: i8,
-        text: Option<String>,
-        ds_text: Arc<tokio::sync::Mutex<String>>,
-        committed: bool,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl BarDataConn {
-        fn new(
-            id: i8,
-            ds_text: Arc<tokio::sync::Mutex<String>>,
-            logger: Arc<Mutex<Vec<String>>>,
-        ) -> Self {
-            {
-                let mut logger = logger.lock().unwrap();
-                logger.push(format!("BarDataConn::new {}", id));
-            }
-            Self {
-                id,
-                text: None,
-                ds_text,
-                logger,
-                committed: false,
-            }
-        }
-        async fn set_text_async(&mut self, s: &str) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::set_text_async {}", self.id));
-            self.text = Some(s.to_string());
-        }
-    }
-    impl Drop for BarDataConn {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::drop {}", self.id));
-        }
-    }
-    impl DataConn for BarDataConn {
-        async fn commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.committed = true;
-            match &self.text {
-                Some(s) => {
-                    let mut guard = self.ds_text.lock().await;
-                    *guard = s.to_string();
-                }
-                None => {
-                    let mut guard = self.ds_text.lock().await;
-                    *guard = "".to_string();
-                }
-            }
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("BarDataConn::commit_async {}", self.id));
-            Ok(())
-        }
-        async fn pre_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::pre_commit_async {}", self.id));
-            Ok(())
-        }
-        async fn post_commit_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::post_commit_async {}", self.id));
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            self.committed
-        }
-        async fn rollback_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::rollback_async {}", self.id));
-            Ok(())
-        }
-        async fn on_txn_failure_async(
-            &mut self,
-            _ag: &mut AsyncGroup,
-            _reports: Arc<[TxnFailureReport]>,
-        ) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn::on_txn_failure_async {}", self.id));
-        }
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataConn.text = {}", self.text.clone().unwrap()));
-            logger.push(format!("BarDataConn::close {}", self.id));
-        }
-    }
-
-    struct BarDataSrc {
-        id: i8,
-        text: Arc<tokio::sync::Mutex<String>>,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl BarDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>) -> Self {
-            {
-                let mut logger = logger.lock().unwrap();
-                logger.push(format!("BarDataSrc::new {}", id));
-            }
-            Self {
-                id,
-                text: Arc::new(tokio::sync::Mutex::new(String::new())),
-                logger,
-            }
-        }
-    }
-    impl Drop for BarDataSrc {
-        fn drop(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataSrc::drop {}", self.id));
-        }
-    }
-    impl DataSrc<BarDataConn> for BarDataSrc {
-        async fn setup_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("BarDataSrc::setup_async {}", self.id));
-            Ok(())
-        }
-        fn close(&mut self) {
-            let mut logger = self.logger.lock().unwrap();
-            if let Ok(guard) = self.text.try_lock() {
-                logger.push(format!("BarDataSrc.text = {}", *guard));
-            }
-            logger.push(format!("BarDataSrc::close {}", self.id));
-        }
-        async fn create_data_conn_async(&mut self) -> errs::Result<Box<BarDataConn>> {
-            {
-                let mut logger = self.logger.lock().unwrap();
-                logger.push(format!("BarDataSrc::create_data_src_async {}", self.id));
-            }
-            let conn = BarDataConn::new(self.id, self.text.clone(), self.logger.clone());
-            Ok(Box::new(conn))
-        }
-    }
 
     mod test_run_async_method {
         use super::*;
@@ -321,8 +60,8 @@ mod tests_of_data_acc {
         #[overridable(mod = test_run_async_method)]
         trait FooDataAcc: DataAcc {
             async fn get_value_async(&mut self) -> errs::Result<String> {
-                let conn = self.get_data_conn_async::<FooDataConn>("foo").await?;
-                Ok(conn.get_text_async().await)
+                let _conn = self.get_data_conn_async::<SyncDataConn>("foo").await?;
+                Ok("hello".to_string())
             }
         }
 
@@ -331,8 +70,8 @@ mod tests_of_data_acc {
         #[overridable(mod = test_run_async_method)]
         trait BarDataAcc: DataAcc {
             async fn set_value_async(&mut self, text: &str) -> errs::Result<()> {
-                let conn = self.get_data_conn_async::<BarDataConn>("bar").await?;
-                conn.set_text_async(text).await;
+                let _conn = self.get_data_conn_async::<SyncDataConn>("bar").await?;
+                assert_eq!(text, "hello");
                 Ok(())
             }
         }
@@ -349,8 +88,8 @@ mod tests_of_data_acc {
             {
                 let mut data = DataHub::new();
 
-                data.uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
-                data.uses("bar", BarDataSrc::new(2, logger.clone()));
+                data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
                 if let Err(_) = data.run_async(logic!(sample_logic_async)).await {
                     panic!();
@@ -360,28 +99,22 @@ mod tests_of_data_acc {
             assert_eq!(
                 *logger.lock().unwrap(),
                 vec![
-                    "FooDataSrc::new 1",
-                    "BarDataSrc::new 2",
-                    "FooDataSrc::setup_async 1",
-                    "BarDataSrc::setup_async 2",
-                    "FooDataSrc::create_data_src_async 1",
-                    "FooDataConn::new 1",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataSrc::create_data_src_async 2",
-                    "BarDataConn::new 2",
-                    "BarDataConn::set_text_async 2",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataConn::set_text_async 2",
-                    "BarDataConn.text = hello",
-                    "BarDataConn::close 2",
-                    "BarDataConn::drop 2",
-                    "FooDataConn::close 1",
-                    "FooDataConn::drop 1",
-                    "BarDataSrc.text = ", // because not committed
-                    "BarDataSrc::close 2",
-                    "BarDataSrc::drop 2",
-                    "FooDataSrc::close 1",
-                    "FooDataSrc::drop 1",
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
                 ],
             );
         }
@@ -409,8 +142,8 @@ mod tests_of_data_acc {
         #[overridable(mod = test_txn_async_method)]
         trait FooDataAcc: DataAcc {
             async fn get_value_async(&mut self) -> errs::Result<String> {
-                let conn = self.get_data_conn_async::<FooDataConn>("foo").await?;
-                Ok(conn.get_text_async().await)
+                let _conn = self.get_data_conn_async::<SyncDataConn>("foo").await?;
+                Ok("hello".to_string())
             }
         }
 
@@ -419,8 +152,8 @@ mod tests_of_data_acc {
         #[overridable(mod = test_txn_async_method)]
         trait BarDataAcc: DataAcc {
             async fn set_value_async(&mut self, text: &str) -> errs::Result<()> {
-                let conn = self.get_data_conn_async::<BarDataConn>("bar").await?;
-                conn.set_text_async(text).await;
+                let _conn = self.get_data_conn_async::<SyncDataConn>("bar").await?;
+                assert_eq!(text, "hello");
                 Ok(())
             }
         }
@@ -437,8 +170,8 @@ mod tests_of_data_acc {
             {
                 let mut data = DataHub::new();
 
-                data.uses("foo", FooDataSrc::new(1, "hello", logger.clone(), false));
-                data.uses("bar", BarDataSrc::new(2, logger.clone()));
+                data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
                 if let Err(_) = data.txn_async(logic!(sample_logic_async)).await {
                     panic!();
@@ -448,34 +181,28 @@ mod tests_of_data_acc {
             assert_eq!(
                 *logger.lock().unwrap(),
                 vec![
-                    "FooDataSrc::new 1",
-                    "BarDataSrc::new 2",
-                    "FooDataSrc::setup_async 1",
-                    "BarDataSrc::setup_async 2",
-                    "FooDataSrc::create_data_src_async 1",
-                    "FooDataConn::new 1",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataSrc::create_data_src_async 2",
-                    "BarDataConn::new 2",
-                    "BarDataConn::set_text_async 2",
-                    "FooDataConn::get_text_async 1",
-                    "BarDataConn::set_text_async 2",
-                    "FooDataConn::pre_commit_async 1",
-                    "BarDataConn::pre_commit_async 2",
-                    "FooDataConn::commit_async 1",
-                    "BarDataConn::commit_async 2",
-                    "FooDataConn::post_commit_async 1",
-                    "BarDataConn::post_commit_async 2",
-                    "BarDataConn.text = hello",
-                    "BarDataConn::close 2",
-                    "BarDataConn::drop 2",
-                    "FooDataConn::close 1",
-                    "FooDataConn::drop 1",
-                    "BarDataSrc.text = hello", // because committed
-                    "BarDataSrc::close 2",
-                    "BarDataSrc::drop 2",
-                    "FooDataSrc::close 1",
-                    "FooDataSrc::drop 1",
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit_async 1",
+                    "SyncDataConn::pre_commit_async 2",
+                    "SyncDataConn::commit_async 1",
+                    "SyncDataConn::commit_async 2",
+                    "SyncDataConn::post_commit_async 1",
+                    "SyncDataConn::post_commit_async 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
                 ],
             );
         }

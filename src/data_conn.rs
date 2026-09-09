@@ -443,336 +443,9 @@ impl Drop for DataConnManager {
 #[cfg(test)]
 mod tests_of_data_conn {
     use super::*;
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    };
-    use std::{ptr, thread, time};
-
-    const BASE_LINE: u32 = line!();
-
-    #[derive(PartialEq, Copy, Clone)]
-    enum Fail {
-        Not,
-        Commit,
-        PreCommit,
-        PostCommit,
-        Rollback,
-        PreCommitBecomeCommitted,
-    }
-
-    struct SyncDataConn {
-        id: i8,
-        committed: bool,
-        fail: Fail,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl SyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: Fail) -> Self {
-            logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataConn::new {}", id));
-            Self {
-                id,
-                committed: false,
-                fail,
-                logger,
-            }
-        }
-    }
-    impl Drop for SyncDataConn {
-        fn drop(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataConn::drop {}", self.id));
-        }
-    }
-    impl DataConn for SyncDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.fail == Fail::Commit {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("SyncDataConn::commit {} failed", self.id));
-                return Err(errs::Err::new("ZZZ".to_string()));
-            }
-            self.committed = true;
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataConn::commit {}", self.id));
-            Ok(())
-        }
-        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.fail == Fail::PreCommit {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("SyncDataConn::pre_commit {} failed", self.id));
-                return Err(errs::Err::new("zzz".to_string()));
-            }
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataConn::pre_commit {}", self.id));
-            if self.fail == Fail::PreCommitBecomeCommitted {
-                self.committed = true;
-            }
-            Ok(())
-        }
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.fail == Fail::PostCommit {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("SyncDataConn::post_commit {} failed", self.id));
-                return Err(errs::Err::new("!!!".to_string()));
-            }
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataConn::post_commit {}", self.id));
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            self.committed
-        }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.fail == Fail::Rollback {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("SyncDataConn::rollback {} failed", self.id));
-                return Err(errs::Err::new("???".to_string()));
-            }
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataConn::rollback {}", self.id));
-            Ok(())
-        }
-        fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("SyncDataConn::on_txn_failure {}", self.id));
-            logger.push(format!("TxnFailureReports={:?}", reports));
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataConn::close {}", self.id));
-        }
-    }
-
-    struct AsyncDataConn {
-        id: i8,
-        committed: Arc<AtomicBool>,
-        fail: Fail,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl AsyncDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: Fail) -> Self {
-            logger
-                .lock()
-                .unwrap()
-                .push(format!("AsyncDataConn::new {}", id));
-            Self {
-                id,
-                committed: Arc::new(AtomicBool::new(false)),
-                fail,
-                logger,
-            }
-        }
-    }
-    impl Drop for AsyncDataConn {
-        fn drop(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("AsyncDataConn::drop {}", self.id));
-        }
-    }
-    impl DataConn for AsyncDataConn {
-        fn commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
-            let fail = self.fail;
-            let logger = self.logger.clone();
-            let id = self.id;
-            let committed = self.committed.clone();
-            ag.add(move || {
-                thread::sleep(time::Duration::from_millis(100));
-                if fail == Fail::Commit {
-                    logger
-                        .lock()
-                        .unwrap()
-                        .push(format!("AsyncDataConn::commit {} failed", id));
-                    return Err(errs::Err::new("YYY".to_string()));
-                }
-                committed.store(true, Ordering::Release);
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn::commit {}", id));
-                Ok(())
-            });
-            Ok(())
-        }
-        fn pre_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
-            let fail = self.fail;
-            let logger = self.logger.clone();
-            let id = self.id;
-            let committed = self.committed.clone();
-            ag.add(move || {
-                thread::sleep(time::Duration::from_millis(100));
-                if fail == Fail::PreCommit {
-                    logger
-                        .lock()
-                        .unwrap()
-                        .push(format!("AsyncDataConn::pre_commit {} failed", id));
-                    return Err(errs::Err::new("yyy".to_string()));
-                }
-                if fail == Fail::PreCommitBecomeCommitted {
-                    committed.store(true, Ordering::Release);
-                }
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn::pre_commit {}", id));
-                Ok(())
-            });
-            Ok(())
-        }
-        fn post_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
-            let logger = self.logger.clone();
-            let id = self.id;
-            let fail = self.fail;
-            ag.add(move || {
-                thread::sleep(time::Duration::from_millis(100));
-                if fail == Fail::PostCommit {
-                    logger
-                        .lock()
-                        .unwrap()
-                        .push(format!("AsyncDataConn::post_commit {} failed", id));
-                    return Err(errs::Err::new("!!!".to_string()));
-                }
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn::post_commit {}", id));
-                Ok(())
-            });
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            self.committed.load(Ordering::Acquire)
-        }
-        fn rollback(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
-            let logger = self.logger.clone();
-            let fail = self.fail;
-            let id = self.id;
-            ag.add(move || {
-                thread::sleep(time::Duration::from_millis(100));
-                if fail == Fail::Rollback {
-                    logger
-                        .lock()
-                        .unwrap()
-                        .push(format!("AsyncDataConn::rollback {} failed", id));
-                    return Err(errs::Err::new("???".to_string()));
-                }
-                logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataConn::rollback {}", id));
-                Ok(())
-            });
-            Ok(())
-        }
-        fn on_txn_failure(&mut self, ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {
-            let reports_log = format!("TxnFailureReports={:?}", reports);
-            let logger = self.logger.clone();
-            let id = self.id;
-            ag.add(move || {
-                thread::sleep(time::Duration::from_millis(100));
-                let mut logger = logger.lock().unwrap();
-                logger.push(format!("AsyncDataConn::on_txn_failure {}", id));
-                logger.push(reports_log);
-                Ok(())
-            });
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("AsyncDataConn::close {}", self.id));
-        }
-    }
-
-    struct NoCommitDataConn {
-        id: i8,
-        logger: Arc<Mutex<Vec<String>>>,
-    }
-    impl NoCommitDataConn {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>) -> Self {
-            logger
-                .lock()
-                .unwrap()
-                .push(format!("NoCommitDataConn::new {}", id));
-            Self { id, logger }
-        }
-    }
-    impl Drop for NoCommitDataConn {
-        fn drop(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("NoCommitDataConn::drop {}", self.id));
-        }
-    }
-    impl DataConn for NoCommitDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("NoCommitDataConn::commit {}", self.id));
-            Ok(())
-        }
-        fn pre_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("NoCommitDataConn::pre_commit {}", self.id));
-            Ok(())
-        }
-        fn post_commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("NoCommitDataConn::post_commit {}", self.id));
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            false
-        }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("NoCommitDataConn::rollback {}", self.id));
-            Ok(())
-        }
-        fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {
-            let mut logger = self.logger.lock().unwrap();
-            logger.push(format!("NoCommitDataConn::on_txn_failure {}", self.id));
-            logger.push(format!("TxnFailureReports={:?}", reports));
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("NoCommitDataConn::close {}", self.id));
-        }
-    }
+    use crate::_test_commons::*;
+    use std::ptr;
+    use std::sync::{Arc, Mutex};
 
     mod tests_of_data_conn_manager {
         use super::*;
@@ -806,7 +479,7 @@ mod tests_of_data_conn {
             assert!(manager.vec.is_empty());
             assert!(manager.index_map.is_empty());
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -815,7 +488,7 @@ mod tests_of_data_conn {
             assert_eq!(manager.index_map.len(), 1);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 0);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -834,7 +507,7 @@ mod tests_of_data_conn {
             assert!(manager.vec.is_empty());
             assert!(manager.index_map.is_empty());
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr0 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr0);
@@ -844,7 +517,7 @@ mod tests_of_data_conn {
             assert_eq!(*manager.index_map.get("foo").unwrap(), 0);
             assert_eq!(manager.vec[0].clone().unwrap().non_null_ptr, nnptr0);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
             let nnptr1 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr1);
@@ -869,7 +542,7 @@ mod tests_of_data_conn {
             assert_eq!(*manager.index_map.get("bar").unwrap(), 0);
             assert_eq!(*manager.index_map.get("baz").unwrap(), 1);
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -878,7 +551,7 @@ mod tests_of_data_conn {
             assert_eq!(manager.index_map.len(), 3);
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -888,7 +561,7 @@ mod tests_of_data_conn {
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
             assert_eq!(*manager.index_map.get("bar").unwrap(), 0);
 
-            let conn = SyncDataConn::new(3, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("qux", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -911,7 +584,7 @@ mod tests_of_data_conn {
             assert!(manager.vec[2].is_none());
             assert_eq!(manager.index_map.len(), 3);
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr0 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr0);
@@ -921,7 +594,7 @@ mod tests_of_data_conn {
             assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
             assert_eq!(manager.vec[2].clone().unwrap().non_null_ptr, nnptr0);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
             let nnptr1 = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr1);
@@ -945,13 +618,13 @@ mod tests_of_data_conn {
 
             let mut manager = DataConnManager::new();
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
             manager.add(ssnnptr);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -978,19 +651,19 @@ mod tests_of_data_conn {
 
             let mut manager = DataConnManager::with_commit_order(&["baz", "qux", "foo"]);
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
             manager.add(ssnnptr);
 
-            let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
             manager.add(ssnnptr);
 
-            let conn = SyncDataConn::new(3, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("baz", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1026,13 +699,13 @@ mod tests_of_data_conn {
 
             let mut manager = DataConnManager::new();
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
             manager.add(ssnnptr);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1040,7 +713,10 @@ mod tests_of_data_conn {
 
             let ssnnptr = manager.find_by_name("foo").unwrap();
             if let Ok(typed_ssnnptr) = DataConnManager::to_typed_ptr::<SyncDataConn>(&ssnnptr) {
-                assert_eq!(any::type_name_of_val(&typed_ssnnptr), "*mut sabi::DataConnContainer<sabi::data_conn::tests_of_data_conn::SyncDataConn>");
+                assert_eq!(
+                    any::type_name_of_val(&typed_ssnnptr),
+                    "*mut sabi::DataConnContainer<sabi::_test_commons::SyncDataConn>"
+                );
                 assert_eq!(unsafe { (*typed_ssnnptr).name.clone() }, "foo".into());
             } else {
                 panic!();
@@ -1048,7 +724,10 @@ mod tests_of_data_conn {
 
             let ssnnptr = manager.find_by_name("bar").unwrap();
             if let Ok(typed_ssnnptr) = DataConnManager::to_typed_ptr::<AsyncDataConn>(&ssnnptr) {
-                assert_eq!(any::type_name_of_val(&typed_ssnnptr), "*mut sabi::DataConnContainer<sabi::data_conn::tests_of_data_conn::AsyncDataConn>");
+                assert_eq!(
+                    any::type_name_of_val(&typed_ssnnptr),
+                    "*mut sabi::DataConnContainer<sabi::_test_commons::AsyncDataConn>"
+                );
                 assert_eq!(unsafe { (*typed_ssnnptr).name.clone() }, "bar".into());
             } else {
                 panic!();
@@ -1061,13 +740,13 @@ mod tests_of_data_conn {
 
             let mut manager = DataConnManager::new();
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
             manager.add(ssnnptr);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1078,10 +757,7 @@ mod tests_of_data_conn {
                 match err.reason::<DataConnError>() {
                     Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                         assert_eq!(name.as_ref(), "foo");
-                        assert_eq!(
-                            *target_type,
-                            "sabi::data_conn::tests_of_data_conn::AsyncDataConn"
-                        );
+                        assert_eq!(*target_type, "sabi::_test_commons::AsyncDataConn");
                     }
                     _ => panic!(),
                 }
@@ -1094,10 +770,7 @@ mod tests_of_data_conn {
                 match err.reason::<DataConnError>() {
                     Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                         assert_eq!(name.as_ref(), "bar");
-                        assert_eq!(
-                            *target_type,
-                            "sabi::data_conn::tests_of_data_conn::SyncDataConn"
-                        );
+                        assert_eq!(*target_type, "sabi::_test_commons::SyncDataConn");
                     }
                     _ => panic!(),
                 }
@@ -1115,13 +788,13 @@ mod tests_of_data_conn {
             let vec = manager.new_failure_reports();
             assert_eq!(vec.len(), 0);
 
-            let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+            let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
             manager.add(ssnnptr);
 
-            let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+            let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
             let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
             let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1132,17 +805,11 @@ mod tests_of_data_conn {
 
             let report = &vec[0];
             assert_eq!(report.data_conn_name, "foo".into());
-            assert_eq!(
-                report.data_conn_type,
-                "sabi::data_conn::tests_of_data_conn::SyncDataConn"
-            );
+            assert_eq!(report.data_conn_type, "sabi::_test_commons::SyncDataConn");
 
             let report = &vec[1];
             assert_eq!(report.data_conn_name, "bar".into());
-            assert_eq!(
-                report.data_conn_type,
-                "sabi::data_conn::tests_of_data_conn::AsyncDataConn"
-            );
+            assert_eq!(report.data_conn_type, "sabi::_test_commons::AsyncDataConn");
         }
 
         #[test]
@@ -1152,13 +819,13 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
                 manager.add(ssnnptr);
 
-                let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+                let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1181,9 +848,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 1",
                     "AsyncDataConn::post_commit 2",
                     "SyncDataConn::on_txn_failure 1",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                     "AsyncDataConn::on_txn_failure 2",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1199,19 +866,19 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::with_commit_order(&["bar", "baz", "foo"]);
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
                 manager.add(ssnnptr);
 
-                let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+                let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("bar".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
                 manager.add(ssnnptr);
 
-                let conn = SyncDataConn::new(3, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(3, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("qux", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1238,11 +905,11 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 3",
                     "AsyncDataConn::post_commit 2", // because of async
                     "SyncDataConn::on_txn_failure 1",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                     "SyncDataConn::on_txn_failure 3",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                     "AsyncDataConn::on_txn_failure 2",
-                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                    "TxnFailureReports=[TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"qux\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                     "SyncDataConn::close 3",
                     "SyncDataConn::drop 3",
                     "SyncDataConn::close 1",
@@ -1301,9 +968,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 75),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 75),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1320,9 +987,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 75),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 75),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1383,9 +1050,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203, 75),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203, 75),
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
@@ -1403,9 +1070,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203, 75),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181, BASE_LINE + 62),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203, 75),
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
@@ -1421,7 +1088,7 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1463,9 +1130,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1483,9 +1150,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 181),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 203),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1544,9 +1211,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 59),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 59),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1565,9 +1232,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 59),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 47),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 59),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1589,7 +1256,7 @@ mod tests_of_data_conn {
                 let ssnnptr = SendSyncNonNull::new(nnptr);
                 manager.add(ssnnptr);
 
-                let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(2, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1626,9 +1293,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit 1 failed",
                     "AsyncDataConn::rollback 1",
                     "SyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 179),
                     "AsyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 179),
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
                     "AsyncDataConn::close 1",
@@ -1647,9 +1314,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit 1 failed",
                     "AsyncDataConn::rollback 1",
                     "SyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 179),
                     "AsyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 179),
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
                     "AsyncDataConn::close 1",
@@ -1665,7 +1332,7 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1708,9 +1375,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit 2 failed",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1729,9 +1396,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit 2 failed",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1794,9 +1461,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 1 failed",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 93, 228),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 93, 228),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1816,9 +1483,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 1 failed",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 93, 228),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 79, BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 93, 228),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1881,9 +1548,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 1 failed",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228, 93),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228, 93),
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
@@ -1903,9 +1570,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 1 failed",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228, 93),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205, BASE_LINE + 79),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228, 93),
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
                     "AsyncDataConn::close 2",
@@ -1921,7 +1588,7 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -1965,9 +1632,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 1",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1987,9 +1654,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit 1",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 228),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -2005,7 +1672,7 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -2059,11 +1726,11 @@ mod tests_of_data_conn {
                     "NoCommitDataConn::post_commit 3",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 228),
                     "NoCommitDataConn::on_txn_failure 3",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 228),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 228),
                     "NoCommitDataConn::close 3",
                     "NoCommitDataConn::drop 3",
                     "AsyncDataConn::close 2",
@@ -2089,11 +1756,11 @@ mod tests_of_data_conn {
                     "NoCommitDataConn::post_commit 3",
                     "AsyncDataConn::post_commit 2 failed",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 228),
                     "NoCommitDataConn::on_txn_failure 3",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 228),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", BASE_LINE + 205),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 228),
                     "NoCommitDataConn::close 3",
                     "NoCommitDataConn::drop 3",
                     "AsyncDataConn::close 2",
@@ -2111,13 +1778,13 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
                 manager.add(ssnnptr);
 
-                let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+                let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -2135,9 +1802,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 1",
                     "AsyncDataConn::rollback 2",
                     "SyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
                     "AsyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -2153,13 +1820,13 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = AsyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = AsyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo".to_string(), Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
                 manager.add(ssnnptr);
 
-                let conn = SyncDataConn::new(2, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(2, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -2177,9 +1844,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback 2",
                     "AsyncDataConn::rollback 1",
                     "SyncDataConn::on_txn_failure 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
                     "AsyncDataConn::on_txn_failure 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]"),
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
                     "AsyncDataConn::close 1",
@@ -2195,7 +1862,7 @@ mod tests_of_data_conn {
             {
                 let mut manager = DataConnManager::new();
 
-                let conn = SyncDataConn::new(1, logger.clone(), Fail::Not);
+                let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("foo", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -2218,9 +1885,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1",
                 "AsyncDataConn::rollback 2 failed",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = {} }}) }}]", 254),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = {} }}) }}]", 254),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2233,9 +1900,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1",
                 "AsyncDataConn::rollback 2 failed",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = {} }}) }}]", 254),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = {} }}) }}]", 254),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2256,7 +1923,7 @@ mod tests_of_data_conn {
                 let ssnnptr = SendSyncNonNull::new(nnptr);
                 manager.add(ssnnptr);
 
-                let conn = AsyncDataConn::new(2, logger.clone(), Fail::Not);
+                let conn = AsyncDataConn::new(2, logger.clone(), Fail::None);
                 let boxed = Box::new(DataConnContainer::new("bar", Box::new(conn)));
                 let nnptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataConnContainer>();
                 let ssnnptr = SendSyncNonNull::new(nnptr);
@@ -2273,9 +1940,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1 failed",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 112),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 112),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2288,9 +1955,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1 failed",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 112),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", BASE_LINE + 96),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 112),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2344,9 +2011,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1",
                 "AsyncDataConn::rollback 2 failed",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = {} }}) }}]", 59, 254),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = {} }}) }}]", 59, 254),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2362,9 +2029,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback 1",
                 "AsyncDataConn::rollback 2 failed",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = {} }}) }}]", 59, 254),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\data_conn.rs, line = {} }}) }}]", BASE_LINE + 47, BASE_LINE + 229),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = {} }}) }}]", 59, 254),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2418,9 +2085,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit 2 failed",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2436,9 +2103,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit 2 failed",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2478,9 +2145,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::post_commit 1",
                 "AsyncDataConn::post_commit 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]"),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]"),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]"),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]"),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2533,9 +2200,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit 2 failed",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2550,9 +2217,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit 2 failed",
                 "AsyncDataConn::rollback 2",
                 "SyncDataConn::on_txn_failure 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::on_txn_failure 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::tests_of_data_conn::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\data_conn.rs, line = {} }}), rollback: NoneByRolledBack }}]", BASE_LINE + 158),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 179),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
