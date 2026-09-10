@@ -16,6 +16,10 @@ mod data_conn;
 mod data_hub;
 mod data_src;
 
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_commons;
+
 use crate::{ErrEntry, SendSyncNonNull, TxnFailureReport};
 
 use std::any;
@@ -26,9 +30,10 @@ use std::sync::Arc;
 
 pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
+pub use data_src::DataSrcError;
+
 pub use data_src::{
     create_static_data_src_container, setup_async, setup_with_order_async, uses, uses_async,
-    DataSrcError,
 };
 
 /// A convenience macro to easily convert an asynchronous function into a `Pin<Box<dyn Future>>`
@@ -119,6 +124,7 @@ pub trait DataConn {
     /// # Returns
     ///
     /// A `Result` indicating success or failure of the pre-commit operation.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn pre_commit_async(
         &mut self,
         ag: &mut AsyncGroup,
@@ -137,6 +143,7 @@ pub trait DataConn {
     /// # Returns
     ///
     /// A `Result` indicating success or failure of the post-commit operation.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn post_commit_async(
         &mut self,
         ag: &mut AsyncGroup,

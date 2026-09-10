@@ -91,6 +91,14 @@ mod unit_tests {
     use TxnFailureRecovery::*;
     use TxnFailureRollback::*;
 
+    #[test]
+    fn test_new() {
+        let report = TxnFailureReport::new("foo".into(), "A::B::C");
+        assert!(!report.is_cause_of_failure());
+        assert_eq!(report.recovery_for_commit(), InvestigateBecauseImpossible);
+        assert_eq!(report.recovery_for_rollback(), InvestigateBecauseImpossible);
+    }
+
     // impossible case
     #[test]
     fn test_cause_is_none_by_uncommitted_and_rollback_is_none_by_not_rolled_back() {

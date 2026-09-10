@@ -208,6 +208,7 @@ where
 }
 
 impl StaticDataSrcRegistration {
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub const fn new(factory: fn() -> StaticDataSrcContainer) -> Self {
         Self { factory }
     }

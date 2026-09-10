@@ -385,181 +385,8 @@ impl Drop for DataSrcManager {
 #[cfg(test)]
 mod tests_of_data_src {
     use super::*;
+    use crate::_test_commons::*;
     use std::sync::{Arc, Mutex};
-
-    struct SyncDataConn {}
-    impl SyncDataConn {
-        fn new() -> Self {
-            Self {}
-        }
-    }
-    impl DataConn for SyncDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            false
-        }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn close(&mut self) {}
-    }
-
-    struct AsyncDataConn {}
-    impl AsyncDataConn {
-        fn new() -> Self {
-            Self {}
-        }
-    }
-    impl DataConn for AsyncDataConn {
-        fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn is_committed(&self) -> bool {
-            false
-        }
-        fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            Ok(())
-        }
-        fn close(&mut self) {}
-    }
-
-    struct SyncDataSrc {
-        id: i8,
-        logger: Arc<Mutex<Vec<String>>>,
-        fail_to_setup: bool,
-        fail_to_create_data_conn: bool,
-    }
-    impl SyncDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail_to_setup: bool) -> Self {
-            logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataSrc::new {}", id));
-            Self {
-                id,
-                logger: logger,
-                fail_to_setup,
-                fail_to_create_data_conn: false,
-            }
-        }
-        fn new_for_fail_to_create_data_conn(id: i8, logger: Arc<Mutex<Vec<String>>>) -> Self {
-            Self {
-                id,
-                logger: logger,
-                fail_to_setup: false,
-                fail_to_create_data_conn: true,
-            }
-        }
-    }
-    impl Drop for SyncDataSrc {
-        fn drop(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataSrc::drop {}", self.id));
-        }
-    }
-    impl DataSrc<SyncDataConn> for SyncDataSrc {
-        fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-            if self.fail_to_setup {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("SyncDataSrc::setup {} failed", self.id));
-                return Err(errs::Err::new("XXX".to_string()));
-            }
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataSrc::setup {}", self.id));
-            Ok(())
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("SyncDataSrc::close {}", self.id));
-        }
-        fn create_data_conn(&mut self) -> errs::Result<Box<SyncDataConn>> {
-            {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("SyncDataSrc::create_data_conn {}", self.id));
-            }
-            if self.fail_to_create_data_conn {
-                return Err(errs::Err::new("eeee".to_string()));
-            }
-            let conn = SyncDataConn::new();
-            Ok(Box::new(conn))
-        }
-    }
-
-    struct AsyncDataSrc {
-        id: i8,
-        fail: bool,
-        logger: Arc<Mutex<Vec<String>>>,
-        wait: u64,
-    }
-    impl AsyncDataSrc {
-        fn new(id: i8, logger: Arc<Mutex<Vec<String>>>, fail: bool, wait: u64) -> Self {
-            logger
-                .lock()
-                .unwrap()
-                .push(format!("AsyncDataSrc::new {}", id));
-            Self {
-                id,
-                fail,
-                logger,
-                wait,
-            }
-        }
-    }
-    impl Drop for AsyncDataSrc {
-        fn drop(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("AsyncDataSrc::drop {}", self.id));
-        }
-    }
-    impl DataSrc<AsyncDataConn> for AsyncDataSrc {
-        fn setup(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
-            let logger = self.logger.clone();
-            let fail = self.fail;
-            let id = self.id;
-            let wait = self.wait;
-            ag.add(move || {
-                std::thread::sleep(std::time::Duration::from_millis(wait));
-                let mut logger = logger.lock().unwrap();
-                if fail {
-                    logger.push(format!("AsyncDataSrc::setup {} failed to setup", id));
-                    return Err(errs::Err::new("XXX".to_string()));
-                }
-                logger.push(format!("AsyncDataSrc::setup {}", id));
-                Ok(())
-            });
-            Ok(())
-        }
-        fn close(&mut self) {
-            self.logger
-                .lock()
-                .unwrap()
-                .push(format!("AsyncDataSrc::close {}", self.id));
-        }
-        fn create_data_conn(&mut self) -> errs::Result<Box<AsyncDataConn>> {
-            {
-                self.logger
-                    .lock()
-                    .unwrap()
-                    .push(format!("AsyncDataSrc::create_data_conn {}", self.id));
-            }
-            let conn = AsyncDataConn::new();
-            Ok(Box::new(conn))
-        }
-    }
 
     #[test]
     fn test_of_new() {
@@ -581,12 +408,12 @@ mod tests_of_data_src {
         {
             let mut vec = Vec::<SendSyncNonNull<DataSrcContainer>>::new();
 
-            let ds = SyncDataSrc::new(1, logger.clone(), false);
+            let ds = SyncDataSrc::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("foo", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
 
-            let ds = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("bar", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
@@ -609,12 +436,12 @@ mod tests_of_data_src {
 
             let mut vec = Vec::<SendSyncNonNull<DataSrcContainer>>::new();
 
-            let ds = SyncDataSrc::new(3, logger.clone(), false);
+            let ds = SyncDataSrc::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("baz", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
 
-            let ds = AsyncDataSrc::new(4, logger.clone(), false, 0);
+            let ds = AsyncDataSrc::new(4, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("qux", ds, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             vec.push(SendSyncNonNull::new(ptr));
@@ -665,7 +492,7 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds = SyncDataSrc::new(1, logger.clone(), false);
+            let ds = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds);
 
             assert!(manager.local);
@@ -677,7 +504,7 @@ mod tests_of_data_src {
                 "foo".into()
             );
 
-            let ds = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds);
 
             assert!(manager.local);
@@ -712,22 +539,22 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("foo", ds1, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds2 = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("bar", ds2, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("baz", ds3, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
 
-            let ds4 = AsyncDataSrc::new(4, logger.clone(), false, 0);
+            let ds4 = AsyncDataSrc::new(4, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("qux", ds4, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
@@ -766,22 +593,22 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("foo", ds1, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
+            let ds2 = AsyncDataSrc::new(2, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("bar", ds2, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_unready.push(SendSyncNonNull::new(ptr));
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("baz", ds3, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
 
-            let ds4 = AsyncDataSrc::new(4, logger.clone(), false, 0);
+            let ds4 = AsyncDataSrc::new(4, logger.clone(), Fail::None);
             let boxed = Box::new(DataSrcContainer::new("qux", ds4, true));
             let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
             manager.vec_ready.push(SendSyncNonNull::new(ptr));
@@ -841,10 +668,10 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
             assert!(manager.local);
@@ -881,13 +708,13 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), true);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::Setup);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), true);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::Setup);
             manager.add("bar", ds3);
 
             assert!(manager.local);
@@ -905,9 +732,9 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 1);
             assert_eq!(errors[0].name, "bar".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 471 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/_test_commons.rs, line = 397 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 471 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\_test_commons.rs, line = 397 }");
         }
 
         assert_eq!(
@@ -957,13 +784,13 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
             assert!(manager.local);
@@ -1006,16 +833,16 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), true);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::Setup);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), true);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::Setup);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
-            let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+            let ds4 = SyncDataSrc::new(4, logger.clone(), Fail::None);
             manager.add("qux", ds4);
 
             assert!(manager.local);
@@ -1033,9 +860,9 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 0);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/mod.rs, line = 471 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/_test_commons.rs, line = 397 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\mod.rs, line = 471 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\_test_commons.rs, line = 397 }");
         }
 
         assert_eq!(
@@ -1065,13 +892,13 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
             assert!(manager.local);
@@ -1112,16 +939,16 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
-            let ds4 = SyncDataSrc::new(4, logger.clone(), false);
+            let ds4 = SyncDataSrc::new(4, logger.clone(), Fail::None);
             manager.add("qux", ds4);
 
             assert!(manager.local);
@@ -1166,13 +993,13 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
-            let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+            let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
             manager.add("baz", ds3);
 
             assert!(manager.local);
@@ -1213,10 +1040,10 @@ mod tests_of_data_src {
         {
             let mut manager = DataSrcManager::new(true);
 
-            let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+            let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
             manager.add("foo", ds1);
 
-            let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+            let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
             manager.add("bar", ds2);
 
             assert!(manager.local);
@@ -1246,7 +1073,7 @@ mod tests_of_data_src {
         assert!(index_map.is_empty());
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
         manager.add("foo", ds1);
         manager.setup(&mut errors);
         assert!(errors.is_empty());
@@ -1255,8 +1082,8 @@ mod tests_of_data_src {
         assert_eq!(index_map.get("foo").unwrap(), &(true, 0));
 
         let mut manager = DataSrcManager::new(false);
-        let ds2 = AsyncDataSrc::new(2, logger.clone(), false, 0);
-        let ds3 = SyncDataSrc::new(3, logger.clone(), false);
+        let ds2 = AsyncDataSrc::new(2, logger.clone(), Fail::None);
+        let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
         manager.add("bar", ds2);
         manager.add("baz", ds3);
         manager.setup(&mut errors);
@@ -1275,10 +1102,10 @@ mod tests_of_data_src {
 
         let mut manager = DataSrcManager::new(true);
 
-        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
         manager.add("foo", ds1);
 
-        let ds2 = SyncDataSrc::new(2, logger.clone(), false);
+        let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::None);
         manager.add("bar", ds2);
 
         manager.setup(&mut errors);
@@ -1307,7 +1134,7 @@ mod tests_of_data_src {
         let mut errors = Vec::new();
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
         manager.add("foo", ds1);
         manager.setup(&mut errors);
 
@@ -1332,10 +1159,7 @@ mod tests_of_data_src {
                     data_conn_type,
                 }) => {
                     assert_eq!(*name, "foo".into());
-                    assert_eq!(
-                        *data_conn_type,
-                        "sabi::data_src::tests_of_data_src::SyncDataConn"
-                    );
+                    assert_eq!(*data_conn_type, "sabi::_test_commons::SyncDataConn");
                 }
                 _ => panic!(),
             }
@@ -1350,7 +1174,7 @@ mod tests_of_data_src {
         let mut errors = Vec::new();
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new(1, logger.clone(), false);
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
         manager.add("foo", ds1);
         manager.setup(&mut errors);
 
@@ -1358,10 +1182,7 @@ mod tests_of_data_src {
             match err.reason::<DataSrcError>() {
                 Ok(DataSrcError::FailToCastDataConn { name, target_type }) => {
                     assert_eq!(*name, "foo".into());
-                    assert_eq!(
-                        *target_type,
-                        "sabi::data_src::tests_of_data_src::AsyncDataConn"
-                    );
+                    assert_eq!(*target_type, "sabi::_test_commons::AsyncDataConn");
                 }
                 _ => panic!(),
             }
@@ -1376,7 +1197,7 @@ mod tests_of_data_src {
         let mut errors = Vec::new();
 
         let mut manager = DataSrcManager::new(true);
-        let ds1 = SyncDataSrc::new_for_fail_to_create_data_conn(1, logger.clone());
+        let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::CreateDataConn);
         manager.add("foo", ds1);
         manager.setup(&mut errors);
 
@@ -1387,10 +1208,7 @@ mod tests_of_data_src {
                     data_conn_type,
                 }) => {
                     assert_eq!(*name, "foo".into());
-                    assert_eq!(
-                        *data_conn_type,
-                        "sabi::data_src::tests_of_data_src::SyncDataConn"
-                    );
+                    assert_eq!(*data_conn_type, "sabi::_test_commons::SyncDataConn");
                 }
                 _ => panic!(),
             }

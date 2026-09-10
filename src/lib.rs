@@ -37,6 +37,10 @@ mod data_src;
 mod non_null;
 mod txn_failure;
 
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_commons;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, cell, marker, ptr, thread};
@@ -44,7 +48,9 @@ use std::{any, cell, marker, ptr, thread};
 pub use async_group::AsyncGroupError;
 pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
-pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses, DataSrcError};
+pub use data_src::DataSrcError;
+
+pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses};
 
 #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 #[cfg(feature = "tokio")]
@@ -121,6 +127,7 @@ pub trait DataConn {
     /// # Returns
     ///
     /// * `errs::Result<()>`: `Ok(())` if pre-commit is successful, or an [`errs::Err`] if it fails.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn pre_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
     }
@@ -141,6 +148,7 @@ pub trait DataConn {
     ///
     /// * `errs::Result<()>`: `Ok(())` if post-commit tasks succeed, or an [`errs::Err`] if they
     ///   fail.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn post_commit(&mut self, ag: &mut AsyncGroup) -> errs::Result<()> {
         Ok(())
     }
