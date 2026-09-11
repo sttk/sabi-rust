@@ -41,10 +41,6 @@ mod txn_failure;
 #[cfg(test)]
 mod _test_commons;
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::{any, cell, marker, ptr, thread};
-
 pub use async_group::AsyncGroupError;
 pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
@@ -55,6 +51,10 @@ pub use data_src::{create_static_data_src_container, setup, setup_with_order, us
 #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 #[cfg(feature = "tokio")]
 pub mod tokio;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::{any, cell, marker, ptr, thread};
 
 /// Represents an entry containing an error, along with its context.
 ///
@@ -371,6 +371,35 @@ pub trait DataAcc {
     ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
     ///   [`DataConn`] cannot be cast to the specified type `C`.
     fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> errs::Result<&mut C>;
+
+    fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub) -> errs::Result<()>;
+
+    fn start(&mut self) -> Runner<'_>;
+}
+
+enum RunnerErrAt {
+    Begin { err: errs::Err },
+    Run { errors: Vec<ErrEntry> },
+    Block { errors: Vec<ErrEntry> },
+}
+
+pub struct Runner<'a> {
+    hub: &'a mut DataHub,
+    err: RunnerErrAt,
+    index: usize,
+    nested: bool,
+}
+
+pub struct TxnDataHub {
+    hub: DataHub,
+}
+
+pub struct Txn<'a> {
+    hub: &'a mut DataHub,
+    err: RunnerErrAt,
+    index: usize,
 }
 
 #[doc(hidden)]
