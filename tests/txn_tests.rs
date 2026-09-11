@@ -1,18 +1,22 @@
 #[cfg(test)]
 mod txn_tests {
     use sabi::{AsyncGroup, DataConn, DataSrc};
-    use std::sync::Arc;
+    use std::collections::HashMap;
+    use std::sync::{Arc, LazyLock, RwLock};
+
+    static STORE: LazyLock<Arc<RwLock<HashMap<&'static str, String>>>> =
+        LazyLock::new(|| Arc::new(RwLock::new(HashMap::new())));
 
     mod data_src {
         use super::*;
 
         pub struct FooDataSrc {
-            pub text: Arc<String>,
+            key: &'static str,
         }
 
         impl FooDataSrc {
-            pub fn new(text: Arc<String>) -> Self {
-                Self { text }
+            pub fn new(key: &'static str) -> Self {
+                Self { key }
             }
         }
 
@@ -22,38 +26,37 @@ mod txn_tests {
             }
             fn close(&mut self) {}
             fn create_data_conn(&mut self) -> errs::Result<Box<FooDataConn>> {
-                Ok(Box::new(FooDataConn::new(self.text.clone())))
+                Ok(Box::new(FooDataConn::new(self.key)))
             }
         }
 
         pub struct FooDataConn {
-            text: Arc<String>,
-            temp: String,
+            key: &'static str,
+            value: String,
             committed: bool,
         }
 
         impl FooDataConn {
-            fn new(text: Arc<String>) -> Self {
+            fn new(key: &'static str) -> Self {
                 Self {
-                    text: text.clone(),
-                    temp: text.to_string(),
+                    key,
+                    value: "".to_string(),
                     committed: false,
                 }
             }
 
-            pub fn get_text(&self) -> String {
-                self.temp.clone()
+            pub fn get_text(&self) -> Option<String> {
+                STORE.read().unwrap().get(self.key).cloned()
             }
 
-            pub fn set_text(&mut self, s: String) {
-                self.temp = s;
+            pub fn set_text<S: AsRef<str>>(&mut self, value: S) {
+                self.value = value.as_ref().to_string();
             }
         }
 
         impl DataConn for FooDataConn {
             fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-                *Arc::make_mut(&mut self.text) = self.temp.clone();
-                println!("commit text: {}", self.text.clone());
+                STORE.write().unwrap().insert(self.key, self.value.clone());
                 self.committed = true;
                 Ok(())
             }
@@ -61,68 +64,6 @@ mod txn_tests {
                 self.committed
             }
             fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-                self.temp = self.text.to_string();
-                Ok(())
-            }
-            fn close(&mut self) {}
-        }
-
-        pub struct BarDataSrc {
-            pub num: Arc<u32>,
-        }
-
-        impl BarDataSrc {
-            pub fn new(num: Arc<u32>) -> Self {
-                Self { num }
-            }
-        }
-
-        impl DataSrc<BarDataConn> for BarDataSrc {
-            fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-                Ok(())
-            }
-            fn close(&mut self) {}
-            fn create_data_conn(&mut self) -> errs::Result<Box<BarDataConn>> {
-                Ok(Box::new(BarDataConn::new(self.num.clone())))
-            }
-        }
-
-        pub struct BarDataConn {
-            num: Arc<u32>,
-            tmp: u32,
-            committed: bool,
-        }
-
-        impl BarDataConn {
-            fn new(num: Arc<u32>) -> Self {
-                Self {
-                    num: num.clone(),
-                    tmp: *num,
-                    committed: false,
-                }
-            }
-
-            pub fn get_num(&self) -> u32 {
-                self.tmp
-            }
-
-            pub fn set_num(&mut self, n: u32) {
-                self.tmp = n;
-            }
-        }
-
-        impl DataConn for BarDataConn {
-            fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-                *Arc::make_mut(&mut self.num) = self.tmp.clone();
-                println!("commit num: {}", self.num.clone());
-                self.committed = true;
-                Ok(())
-            }
-            fn is_committed(&self) -> bool {
-                self.committed
-            }
-            fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
-                self.tmp = *self.num;
                 Ok(())
             }
             fn close(&mut self) {}
@@ -133,20 +74,15 @@ mod txn_tests {
         use override_macro::overridable;
 
         #[overridable]
-        pub trait MyData {
+        pub trait HogeData {
             fn get_text(&mut self) -> errs::Result<String>;
             fn set_text(&mut self, text: String) -> errs::Result<()>;
-            fn get_num(&mut self) -> errs::Result<u32>;
-            fn set_num(&mut self, num: u32) -> errs::Result<()>;
         }
 
-        pub fn my_logic(data: &mut impl MyData) -> errs::Result<()> {
+        pub fn hoge_logic(data: &mut impl HogeData) -> errs::Result<()> {
             let mut text = data.get_text()?;
             text = text.to_uppercase();
             data.set_text(text)?;
-            let mut num = data.get_num()?;
-            num += 100;
-            data.set_num(num)?;
             Ok(())
         }
     }
@@ -155,18 +91,13 @@ mod txn_tests {
         use override_macro::overridable;
         use sabi::DataAcc;
 
-        use super::data_src::{BarDataConn, FooDataConn};
+        use super::data_src::FooDataConn;
 
         #[overridable]
         pub trait GettingDataAcc: DataAcc {
             fn get_text(&mut self) -> errs::Result<String> {
                 let conn = self.get_data_conn::<FooDataConn>("foo")?;
-                Ok(conn.get_text())
-            }
-
-            fn get_num(&mut self) -> errs::Result<u32> {
-                let conn = self.get_data_conn::<BarDataConn>("bar")?;
-                Ok(conn.get_num())
+                Ok(conn.get_text().unwrap())
             }
         }
 
@@ -174,62 +105,108 @@ mod txn_tests {
         pub trait SettingDataAcc: DataAcc {
             fn set_text(&mut self, text: String) -> errs::Result<()> {
                 let conn = self.get_data_conn::<FooDataConn>("foo")?;
-                println!("set text: {}", text.clone());
                 conn.set_text(text);
-                Ok(())
-            }
-
-            fn set_num(&mut self, num: u32) -> errs::Result<()> {
-                let conn = self.get_data_conn::<BarDataConn>("bar")?;
-                println!("set num: {}", num.clone());
-                conn.set_num(num);
                 Ok(())
             }
         }
     }
 
-    mod hub {
+    mod data_hub {
         use override_macro::override_with;
         use sabi::DataHub;
 
         use super::data_access_layer::{GettingDataAcc, SettingDataAcc};
-        use super::logic_layer::MyData;
+        use super::logic_layer::HogeData;
 
         impl GettingDataAcc for DataHub {}
         impl SettingDataAcc for DataHub {}
 
         #[override_with(GettingDataAcc, SettingDataAcc)]
-        impl MyData for DataHub {}
+        impl HogeData for DataHub {}
     }
 
     mod app {
+        use super::data_src::FooDataSrc;
+        use super::logic_layer::hoge_logic;
+        use super::*;
         use sabi::DataHub;
-        use std::sync::Arc;
-
-        use super::data_src::{BarDataSrc, FooDataSrc};
-        use super::logic_layer::my_logic;
 
         #[test]
         fn test() {
-            let text = Arc::new("hello".to_string());
-            let num = Arc::new(23);
-
-            let foo_ds = FooDataSrc::new(text.clone());
-            let bar_ds = BarDataSrc::new(num.clone());
-
-            assert!(sabi::uses("foo", foo_ds).is_ok());
-
-            let _auto_shutdown = sabi::setup().unwrap();
-
-            let mut data = DataHub::new();
-            data.uses("bar", bar_ds);
-
-            if let Err(e) = data.txn(my_logic) {
-                panic!("{e:?}");
+            {
+                STORE.write().unwrap().insert("key", "hello".to_string());
             }
 
-            assert_eq!(*text, "hello");
-            assert_eq!(*num, 23);
+            assert!(sabi::uses("foo", FooDataSrc::new("key")).is_ok());
+            let _auto_shutdown = sabi::setup().unwrap();
+
+            test_data_hub_run();
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "hello");
+            }
+
+            {
+                STORE.write().unwrap().insert("key", "world".to_string());
+            }
+
+            test_runner();
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "world");
+            }
+
+            {
+                STORE.write().unwrap().insert("key", "hello".to_string());
+            }
+
+            test_data_hub_txn();
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "HELLO");
+            }
+
+            {
+                STORE.write().unwrap().insert("key", "world".to_string());
+            }
+
+            test_txn();
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "WORLD");
+            }
+        }
+
+        fn test_data_hub_run() {
+            let mut hub = DataHub::new().for_txn();
+            if let Err(err) = hub.run(hoge_logic) {
+                panic!("{err:?}");
+            }
+        }
+
+        fn test_runner() {
+            let mut hub = DataHub::new().for_txn();
+            if let Err(err) = hub.start().run(hoge_logic).end() {
+                panic!("{err:?}");
+            }
+        }
+
+        fn test_data_hub_txn() {
+            let mut hub = DataHub::new().for_txn();
+            if let Err(err) = hub.txn(hoge_logic) {
+                panic!("{err:?}");
+            }
+        }
+
+        fn test_txn() {
+            let mut hub = DataHub::new().for_txn();
+            if let Err(err) = hub.begin_txn().run(hoge_logic).end_txn() {
+                panic!("{err:?}");
+            }
         }
     }
 }

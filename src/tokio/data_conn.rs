@@ -15,7 +15,7 @@ use std::{any, mem};
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
-    /// An error indicating that one or more data connections failed during the pre-commit process.
+    /// Represents errors that can occur during data connection operations.
     FailToPreCommitDataConn {
         /// A vector of errors, each containing the name of the data connection and the error itself.
         errors: Vec<ErrEntry>,
@@ -37,7 +37,6 @@ pub enum DataConnError {
     FailToCastDataConn {
         /// The name of the data connection that failed to cast.
         name: Arc<str>,
-
         /// The string representation of the target type to which the connection could not be cast.
         target_type: &'static str,
     },

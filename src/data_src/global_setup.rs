@@ -52,9 +52,9 @@ impl Drop for AutoShutdown {
 ///
 /// # Returns
 ///
-/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an [`errs::Err`] if
-///   the global data source manager is in an invalid state or if [`setup`] or [`setup_with_order`]
-///   has already been called.
+/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an `errs::Err`
+///   if the global data source manager is in an invalid state or if [`setup`] or
+///   [`setup_with_order`] has already been called.
 pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C>,
@@ -92,9 +92,9 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
 /// opening global connections, or performing initial configurations necessary
 /// for creating session-specific connections.
 ///
-/// If any data source fails to set up, this function returns an [`errs::Err`] with
+/// If any data source fails to set up, this function returns an `errs::Err` with
 /// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
-/// of the failed data sources and their corresponding [`errs::Err`] objects. In such a case,
+/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
 /// all global data sources that were successfully set up are also closed.
 ///
 /// If all data source setups are successful, the [`Result::Ok`] which contains an
@@ -110,7 +110,7 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
 /// # Returns
 ///
 /// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
-///   set up successfully, or an [`errs::Err`] if any setup fails.
+///   set up successfully, or an `errs::Err` if any setup fails.
 pub fn setup() -> errs::Result<AutoShutdown> {
     let mut errors = Vec::new();
     let em = &mut errors;
@@ -145,9 +145,9 @@ pub fn setup() -> errs::Result<AutoShutdown> {
 /// opening global connections, or performing initial configurations necessary
 /// for creating session-specific connections.
 ///
-/// If any data source fails to set up, this function returns an [`errs::Err`] with
+/// If any data source fails to set up, this function returns an `errs::Err` with
 /// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
-/// of the failed data sources and their corresponding [`errs::Err`] objects. In such a case,
+/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
 /// all global data sources that were successfully set up are also closed.
 ///
 /// If all data source setups are successful, the [`Result::Ok`] which contains an
@@ -167,7 +167,7 @@ pub fn setup() -> errs::Result<AutoShutdown> {
 /// # Returns
 ///
 /// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
-///   set up successfully, or an [`errs::Err`] if any setup fails.
+///   set up successfully, or an `errs::Err` if any setup fails.
 pub fn setup_with_order(names: &[&str]) -> errs::Result<AutoShutdown> {
     let mut errors = Vec::new();
     let em = &mut errors;
