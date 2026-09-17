@@ -82,7 +82,7 @@ impl TxnDataHub {
     ///
     /// # Returns
     ///
-    /// * `Runner`: The struct which execute logic functions using method chaining.
+    /// * `Runner`: The struct that executes logic functions using method chaining.
     pub fn start(&mut self) -> Runner<'_> {
         self.hub.start()
     }
@@ -135,7 +135,7 @@ impl TxnDataHub {
     ///
     /// # Returns
     ///
-    /// * `Txn`: The struct which execute logic functions using method chaining.
+    /// * `Txn`: The struct that executes logic functions using method chaining.
     pub fn begin_txn(&mut self) -> Txn<'_> {
         Txn::new(self)
     }
@@ -228,7 +228,7 @@ impl<'a> Txn<'a> {
         }
     }
 
-    /// Blocks subsequent logics if the logic function fails.
+    /// Blocks subsequent logic functions if the logic function fails.
     ///
     /// Executes a logic function if no previous logic function has failed.
     ///
@@ -273,7 +273,7 @@ impl<'a> Txn<'a> {
     /// The transaction is committed if all logic functions succeed. Otherwise, it is rolled back.
     ///
     /// If one or more logic functions failed, their errors are returned as
-    /// a [`DataHubError::FailToRunLogics`] error.
+    /// a [`DataHubError::FailToRunLogic`] error.
     ///
     /// # Returns
     ///
@@ -297,14 +297,14 @@ impl<'a> Txn<'a> {
                 } else {
                     self.hub.rollback(reports);
                     self.hub.end();
-                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
                 }
             }
             RunnerErrAt::Block { errors } => {
                 let reports = self.hub.new_failure_reports();
                 self.hub.rollback(reports);
                 self.hub.end();
-                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
             }
         }
     }
@@ -977,7 +977,7 @@ mod tests_of_txn_data_hub {
 
                 if let Err(err) = data.start().run(fuga_logic).end() {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Runner#run(logic-0)".into());
@@ -1025,7 +1025,7 @@ mod tests_of_txn_data_hub {
 
                 if let Err(err) = data.start().run(hoge_logic).end() {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Runner#run(logic-0)".into());
@@ -1165,7 +1165,7 @@ mod tests_of_txn_data_hub {
 
                 if let Err(err) = data.begin_txn().run(fuga_logic).end_txn() {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Txn#run(logic-0)".into());
@@ -1219,7 +1219,7 @@ mod tests_of_txn_data_hub {
 
                 if let Err(err) = data.begin_txn().run(hoge_logic).end_txn() {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Txn#run(logic-0)".into());
@@ -1460,7 +1460,7 @@ mod tests_of_txn_data_hub {
                     .end()
                 {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Runner#run(logic-0)".into());
@@ -1520,7 +1520,7 @@ mod tests_of_txn_data_hub {
                     .end()
                 {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Runner#run_force(logic-0)".into());
@@ -1580,7 +1580,7 @@ mod tests_of_txn_data_hub {
                     .end()
                 {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Runner#run_or_block(logic-0)".into());
@@ -1733,7 +1733,7 @@ mod tests_of_txn_data_hub {
                     .end_txn()
                 {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Txn#run(logic-0)".into());
@@ -1799,7 +1799,7 @@ mod tests_of_txn_data_hub {
                     .end_txn()
                 {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Txn#run_force(logic-0)".into());
@@ -1865,7 +1865,7 @@ mod tests_of_txn_data_hub {
                     .end_txn()
                 {
                     match err.reason::<DataHubError>() {
-                        Ok(DataHubError::FailToRunLogics { errors }) => {
+                        Ok(DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 0);
                             assert_eq!(errors[0].name, "Txn#run_or_block(logic-0)".into());
@@ -2264,7 +2264,7 @@ mod tests_of_txn_data_hub {
                     .end_txn()
                 {
                     match err.reason::<crate::DataHubError>() {
-                        Ok(crate::DataHubError::FailToRunLogics { errors }) => {
+                        Ok(crate::DataHubError::FailToRunLogic { errors }) => {
                             assert_eq!(errors.len(), 1);
                             assert_eq!(errors[0].index, 1);
                             assert_eq!(errors[0].name, "Txn#run_force(logic-1)".into());

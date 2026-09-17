@@ -423,7 +423,7 @@ pub trait DataAcc {
     ///
     /// # Returns
     ///
-    /// * `Runner`: The struct which execute logic functions using method chaining.
+    /// * `Runner`: The struct that executes logic functions using method chaining.
     fn start(&mut self) -> Runner<'_>;
 }
 

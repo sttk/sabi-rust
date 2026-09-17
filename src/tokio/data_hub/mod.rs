@@ -35,7 +35,7 @@ pub enum DataHubError {
     },
 
     /// Indicates that one or more logic functions failed to execute.
-    FailToRunLogics {
+    FailToRunLogic {
         /// Errors returned by the failed logic functions.
         errors: Vec<ErrEntry>,
     },
@@ -274,7 +274,7 @@ impl DataHub {
     ///
     /// # Returns
     ///
-    /// * `Runner`: The struct which execute logic functions using method chaining.
+    /// * `Runner`: The struct that executes logic functions using method chaining.
     pub async fn start_async(&mut self) -> Runner<'_> {
         Runner::new_async(self, false).await
     }
@@ -373,7 +373,7 @@ impl<'a> Runner<'a> {
         }
     }
 
-    /// Blocks subsequent logics if the logic function fails.
+    /// Blocks subsequent logic functions if the logic function fails.
     ///
     /// Executes a logic function if no previous logic function has failed.
     ///
@@ -416,7 +416,7 @@ impl<'a> Runner<'a> {
     /// Ends the runner session and returns the execution result.
     ///
     /// If one or more logic functions failed, their errors are returned as
-    /// a [`DataHubError::FailToRunLogics`] error.
+    /// a [`DataHubError::FailToRunLogic`] error.
     /// # Returns
     ///
     /// * `errs::Result<()>`: The result of the logic function's execution,
@@ -432,11 +432,11 @@ impl<'a> Runner<'a> {
                 if errors.is_empty() {
                     Ok(())
                 } else {
-                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
                 }
             }
             RunnerErrAt::Block { errors } => {
-                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
             }
         }
     }
@@ -1161,7 +1161,7 @@ mod tests_of_data_hub {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogics { errors }) => {
+                    Ok(DataHubError::FailToRunLogic { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "Runner#run_async(logic-0)".into());
@@ -1256,7 +1256,7 @@ mod tests_of_data_hub {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogics { errors }) => {
+                    Ok(DataHubError::FailToRunLogic { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "Runner#run_or_block_async(logic-0)".into());
@@ -1350,7 +1350,7 @@ mod tests_of_data_hub {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogics { errors }) => {
+                    Ok(DataHubError::FailToRunLogic { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "Runner#run_force_async(logic-0)".into());

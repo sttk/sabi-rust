@@ -467,7 +467,7 @@ pub trait DataAcc {
     ///
     /// # Returns
     ///
-    /// * `Runner`: The struct which execute logic functions using method chaining.
+    /// * `Runner`: The struct that executes logic functions using method chaining.
     #[allow(async_fn_in_trait)]
     async fn start_async(&mut self) -> Runner<'_>;
 }
