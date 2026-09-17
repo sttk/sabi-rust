@@ -401,9 +401,6 @@ pub struct AutoShutdown {}
 /// It facilitates data access by providing [`DataConn`] objects, created from
 /// both global data sources (registered via the global [`uses!`] macro) and
 /// session-local data sources (registered via [`DataHub::uses`] method).
-///
-/// The [`DataHub`] is capable of performing aggregated transactional operations
-/// on all [`DataConn`] objects created from its registered [`DataSrc`] instances.
 pub struct DataHub {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,

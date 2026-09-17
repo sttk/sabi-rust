@@ -182,28 +182,28 @@ mod txn_tests {
         }
 
         fn test_data_hub_run() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub.run(hoge_logic) {
                 panic!("{err:?}");
             }
         }
 
         fn test_runner() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub.start().run(hoge_logic).end() {
                 panic!("{err:?}");
             }
         }
 
         fn test_data_hub_txn() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub.txn(hoge_logic) {
                 panic!("{err:?}");
             }
         }
 
         fn test_txn() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub.begin_txn().run(hoge_logic).end_txn() {
                 panic!("{err:?}");
             }

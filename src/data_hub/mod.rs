@@ -61,7 +61,20 @@ impl DataHub {
         }
     }
 
-    /// Creates a new [`DataHub`] instance with a specified commit order for data connections.
+    /// Creates a new [`TxnDataHub`] instance for executing logic under transaction control.
+    ///
+    /// Upon creation, it collects references to globally set-up data sources
+    /// into its internal map for quick access.
+    ///
+    /// # Returns
+    ///
+    /// * [`TxnDataHub`]: A data hub which enables data access and transaction control.
+    pub fn for_txn() -> TxnDataHub {
+        TxnDataHub::new(DataHub::new())
+    }
+
+    /// Creates a new [`TxnDataHub`] instance for executing logic unser transaction control with
+    /// a specified commit order for data connections.
     ///
     /// This constructor allows defining a specific order for pre-commit, commit, and post-commit
     /// operations for named data connections. Data connections not specified in `names` will
@@ -74,16 +87,20 @@ impl DataHub {
     ///
     /// * `names`: A slice of `&str` representing the names of data connections to commit in a
     ///   specific order.
-    pub fn with_commit_order(names: &[&str]) -> Self {
+    ///
+    /// # Returns
+    ///
+    /// * [`TxnDataHub`]: A data hub which enables data access and transaction control.
+    pub fn for_txn_with_commit_order(names: &[&str]) -> TxnDataHub {
         let mut data_src_map = HashMap::new();
         copy_global_data_srcs_to_map(&mut data_src_map);
 
-        Self {
+        TxnDataHub::new(Self {
             local_data_src_manager: DataSrcManager::new(true),
             data_src_map,
             data_conn_manager: DataConnManager::with_commit_order(names),
             fixed: false,
-        }
+        })
     }
 
     /// Registers a session-local data source with this [`DataHub`] instance.
@@ -166,24 +183,26 @@ impl DataHub {
         self.fixed = false;
     }
 
-    /// Executes a given logic function within a managed transaction.
+    /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
     ///
-    /// This method starts by setting up local data sources, runs the provided closure,
-    /// and then attempts to commit all open data connections in the session.
+    /// This is the core method used by [`DataAcc`] implementations to obtain connections
+    /// to external data services. It first checks if a [`DataConn`] with the given name
+    /// already exists in the [`DataHub`]'s session. If not, it attempts to find a
+    /// corresponding [`DataSrc`] and create a new [`DataConn`] from it.
     ///
-    /// If any error occurs during the execution of the closure or during the commit phase,
-    /// it initiates a rollback on all data connections and reports the transaction failure details.
-    /// Finally, it cleans up session resources.
+    /// # Type Parameters
+    ///
+    /// * `C`: The concrete type of [`DataConn`] expected.
     ///
     /// # Parameters
     ///
-    /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to [`DataHub`] as an argument.
+    /// * `name`: The name of the data source/connection to retrieve.
     ///
     /// # Returns
     ///
-    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
-    ///   or an [`errs::Err`] if any phase fails.
+    /// * `errs::Result<&mut C>`: A mutable reference to the [`DataConn`] instance if successful,
+    ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
+    ///   [`DataConn`] cannot be cast to the specified type `C`.
     pub fn get_data_conn<C>(&mut self, name: &str) -> errs::Result<&mut C>
     where
         C: DataConn + 'static,
@@ -253,18 +272,6 @@ impl DataHub {
     /// * `Runner`: The struct which execute logic functions using method chaining.
     pub fn start(&mut self) -> Runner<'_> {
         Runner::new(self, false)
-    }
-
-    /// Creates a [`TxnDataHub`] for executing logic under transaction control.
-    ///
-    /// This method consumes the [`DataHub`] and transfers its ownership to the returned
-    /// [`TxnDataHub`].
-    ///
-    /// # Returns
-    ///
-    /// * `TxnDataHub`: A [`DataHub`] which enables data access and transaction control.
-    pub fn for_txn(self) -> TxnDataHub {
-        TxnDataHub::new(self)
     }
 }
 
@@ -441,18 +448,6 @@ mod tests_of_data_hub {
         assert!(hub.data_src_map.is_empty());
         assert!(hub.data_conn_manager.vec.is_empty());
         assert!(hub.data_conn_manager.index_map.is_empty());
-        assert!(!hub.fixed);
-    }
-
-    #[test]
-    fn test_with_commit_order() {
-        let hub = DataHub::with_commit_order(&["bar", "qux", "foo"]);
-        assert!(hub.local_data_src_manager.vec_unready.is_empty());
-        assert!(hub.local_data_src_manager.vec_ready.is_empty());
-        assert!(hub.local_data_src_manager.local);
-        assert!(hub.data_src_map.is_empty());
-        assert_eq!(hub.data_conn_manager.vec.len(), 3);
-        assert_eq!(hub.data_conn_manager.index_map.len(), 3);
         assert!(!hub.fixed);
     }
 

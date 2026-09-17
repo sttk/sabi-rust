@@ -89,7 +89,7 @@ where
 ///
 /// * `name` - The name to associate with this data source.
 /// * `ds` - The data source instance, which must implement [`DataSrc`] and have a `'static`
-///     lifetime.
+///   lifetime.
 ///
 /// # Type Parameters
 ///

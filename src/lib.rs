@@ -40,11 +40,12 @@
 //! [`run_or_block`][Runner::run_or_block] are skipped. Finally, calling [`end`][Runner::end]
 //! returns the result containing all errors that occurred during execution.
 //!
-//! In addition, [`DataHub::for_txn`] creates a [`TxnDataHub`] instance that can execute logic
-//! functions under transaction control. [`TxnDataHub::run`] and [`TxnDataHub::start`] work in the
-//! same way as the corresponding methods of [`DataHub`]. [`TxnDataHub::txn`] executes a logic
-//! function and attempts to commit if it succeeds. If the logic or the commit fails, it performs a
-//! rollback. [`TxnDataHub::begin_txn`] creates a [`Txn`] instance that can execute multiple logic
+//! In addition, [`DataHub::for_txn`] and [`DataHub::for_txn_with_commit_order`] creates a
+//! [`TxnDataHub`] instance that can execute logic functions under transaction control.
+//! [`TxnDataHub::run`] and [`TxnDataHub::start`] work in the same way as the corresponding methods
+//! of [`DataHub`]. [`TxnDataHub::txn`] executes a logic function and attempts to commit if it
+//! succeeds. If the logic or the commit fails, it performs a rollback.
+//! [`TxnDataHub::begin_txn`] creates a [`Txn`] instance that can execute multiple logic
 //! functions using method chaining and then perform a commit or rollback with [`Txn::end_txn`].
 //! Like [`Runner`], [`Txn`] provides [`run`][Txn::run], [`run_force`][Txn::run_force], and
 //! [`run_or_block`][Txn::run_or_block], and their execution conditions are the same as those of
@@ -362,9 +363,6 @@ pub struct AutoShutdown {}
 /// It facilitates data access by providing [`DataConn`] objects, created from
 /// both global data sources (registered via the global [`uses!`] macro) and
 /// session-local data sources (registered via [`DataHub::uses`] method).
-///
-/// The [`DataHub`] is capable of performing aggregated transactional operations
-/// on all [`DataConn`] objects created from its registered [`DataSrc`] instances.
 pub struct DataHub {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
