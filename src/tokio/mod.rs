@@ -24,7 +24,7 @@
 //! functions if it fails. Calling [`Runner::end`] returns the result of the
 //! execution.
 //!
-//! [`DataHub::for_txn`] and [`DataHub::for_txn_with_commit_order`] creates a [`TxnDataHub`] that
+//! [`DataHub::for_txn`] and [`DataHub::for_txn_with_commit_order`] create a [`TxnDataHub`] that
 //! provides the same asynchronous logic execution capabilities under transaction control.
 //! [`TxnDataHub::txn_async`] executes a logic function and attempts to commit
 //! if it succeeds. If the logic or commit fails, it performs a rollback.

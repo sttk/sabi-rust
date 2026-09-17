@@ -40,7 +40,7 @@
 //! [`run_or_block`][Runner::run_or_block] are skipped. Finally, calling [`end`][Runner::end]
 //! returns the result containing all errors that occurred during execution.
 //!
-//! In addition, [`DataHub::for_txn`] and [`DataHub::for_txn_with_commit_order`] creates a
+//! In addition, [`DataHub::for_txn`] and [`DataHub::for_txn_with_commit_order`] create a
 //! [`TxnDataHub`] instance that can execute logic functions under transaction control.
 //! [`TxnDataHub::run`] and [`TxnDataHub::start`] work in the same way as the corresponding methods
 //! of [`DataHub`]. [`TxnDataHub::txn`] executes a logic function and attempts to commit if it
