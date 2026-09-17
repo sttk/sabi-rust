@@ -765,7 +765,7 @@ mod tests_of_txn_data_hub {
         }
 
         #[test]
-        fn test_begin_txn_with_commir_order() {
+        fn test_begin_txn_with_commit_order() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {

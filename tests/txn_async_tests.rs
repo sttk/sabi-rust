@@ -139,7 +139,7 @@ mod txn_async_tests {
             }
 
             assert!(sabi::tokio::uses("foo", FooDataSrc::new("key")).is_ok());
-            let _autho_shutdown = sabi::tokio::setup_async().await.unwrap();
+            let _auto_shutdown = sabi::tokio::setup_async().await.unwrap();
 
             test_data_hub_run_async().await;
 
