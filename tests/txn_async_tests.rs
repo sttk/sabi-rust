@@ -183,14 +183,14 @@ mod txn_async_tests {
         }
 
         async fn test_data_hub_run_async() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub.run_async(logic!(hoge_logic_async)).await {
                 panic!("{err:?}");
             }
         }
 
         async fn test_runner_async() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub
                 .start_async()
                 .await
@@ -203,14 +203,14 @@ mod txn_async_tests {
         }
 
         async fn test_data_hub_txn_async() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub.txn_async(logic!(hoge_logic_async)).await {
                 panic!("{err:?}");
             }
         }
 
         async fn test_txn_async() {
-            let mut hub = DataHub::new().for_txn();
+            let mut hub = DataHub::for_txn();
             if let Err(err) = hub
                 .begin_txn_async()
                 .await

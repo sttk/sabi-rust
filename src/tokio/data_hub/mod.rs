@@ -59,26 +59,42 @@ impl DataHub {
         }
     }
 
-    /// Creates a new `DataHub` instance with a specified commit order for data connections.
+    /// Creates a [`TxnDataHub`] instance for executing logic under transaction control.
+    ///
+    /// Upon creation, it collects references to globally set-up data sources
+    /// into its internal map for quick access.
+    ///
+    /// # Returns
+    ///
+    /// * `TxnDataHub`: A [`DataHub`] which enables data access and transaction control.
+    pub fn for_txn() -> TxnDataHub {
+        TxnDataHub::new(DataHub::new())
+    }
+
+    /// Creates a new `DataHub` instance for executing logic under transaction control with a
+    /// specified commit order for data connections.
     ///
     /// This allows defining the order in which data connections will be committed. Connections
     /// not specified in `names` will be committed after the specified ones, in an undefined order.
     /// Global data sources are copied into this instance.
     ///
+    /// Upon creation, it collects references to globally set-up data sources
+    /// into its internal map for quick access.
+    ///
     /// # Parameters
     ///
     /// * `names` - An array of string slices specifying the desired commit order by data connection
     ///   name.
-    pub fn with_commit_order(names: &[&str]) -> Self {
+    pub fn for_txn_with_commit_order(names: &[&str]) -> TxnDataHub {
         let mut data_src_map = HashMap::new();
         copy_global_data_srcs_to_map(&mut data_src_map);
 
-        Self {
+        TxnDataHub::new(Self {
             local_data_src_manager: DataSrcManager::new(true),
             data_src_map,
             data_conn_manager: DataConnManager::with_commit_order(names),
             fixed: false,
-        }
+        })
     }
 
     /// Registers a local data source with the `DataHub`.
@@ -221,8 +237,7 @@ impl DataHub {
     /// Executes an asynchronous logic function with the `DataHub` and handles setup and cleanup.
     ///
     /// This method sets up local data sources, runs the provided `logic_fn`, and then
-    /// cleans up all data connections and sources. It does *not* automatically commit
-    /// or rollback any transactions.
+    /// cleans up all data connections and sources.
     ///
     /// # Parameters
     ///
@@ -262,18 +277,6 @@ impl DataHub {
     /// * `Runner`: The struct which execute logic functions using method chaining.
     pub async fn start_async(&mut self) -> Runner<'_> {
         Runner::new_async(self, false).await
-    }
-
-    /// Creates a [`TxnDataHub`] for executing logic under transaction control.
-    ///
-    /// This method consumes the [`DataHub`] and transfers its ownership to the returned
-    /// [`TxnDataHub`].
-    ///
-    /// # Returns
-    ///
-    /// * `TxnDataHub`: A [`DataHub`] which enables data access and transaction control.
-    pub fn for_txn(self) -> TxnDataHub {
-        TxnDataHub::new(self)
     }
 }
 
@@ -468,18 +471,6 @@ mod tests_of_data_hub {
         assert!(hub.data_src_map.is_empty());
         assert!(hub.data_conn_manager.vec.is_empty());
         assert!(hub.data_conn_manager.index_map.is_empty());
-        assert!(!hub.fixed);
-    }
-
-    #[test]
-    fn test_with_commit_order() {
-        let hub = DataHub::with_commit_order(&["bar", "qux", "foo"]);
-        assert!(hub.local_data_src_manager.vec_unready.is_empty());
-        assert!(hub.local_data_src_manager.vec_ready.is_empty());
-        assert!(hub.local_data_src_manager.local);
-        assert!(hub.data_src_map.is_empty());
-        assert_eq!(hub.data_conn_manager.vec.len(), 3);
-        assert_eq!(hub.data_conn_manager.index_map.len(), 3);
         assert!(!hub.fixed);
     }
 

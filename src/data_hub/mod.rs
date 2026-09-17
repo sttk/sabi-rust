@@ -73,7 +73,7 @@ impl DataHub {
         TxnDataHub::new(DataHub::new())
     }
 
-    /// Creates a new [`TxnDataHub`] instance for executing logic unser transaction control with
+    /// Creates a new [`TxnDataHub`] instance for executing logic under transaction control with
     /// a specified commit order for data connections.
     ///
     /// This constructor allows defining a specific order for pre-commit, commit, and post-commit

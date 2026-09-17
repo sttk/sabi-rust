@@ -331,7 +331,7 @@ mod tests_of_txn_data_hub {
     #[test]
     fn test_disuses() {
         let logger = Arc::new(Mutex::new(Vec::new()));
-        let mut data = DataHub::new().for_txn();
+        let mut data = DataHub::for_txn();
         data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
         data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
@@ -415,7 +415,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -449,11 +449,11 @@ mod tests_of_txn_data_hub {
         }
 
         #[tokio::test]
-        async fn test_run_with_nested_run() {
+        async fn test_run_async_with_nested_run() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -487,11 +487,11 @@ mod tests_of_txn_data_hub {
         }
 
         #[tokio::test]
-        async fn test_start() {
+        async fn test_start_async() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -531,11 +531,11 @@ mod tests_of_txn_data_hub {
         }
 
         #[tokio::test]
-        async fn test_start_with_nested_run() {
+        async fn test_start_async_with_nested_run() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -575,11 +575,11 @@ mod tests_of_txn_data_hub {
         }
 
         #[tokio::test]
-        async fn test_txn() {
+        async fn test_txn_async() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -619,11 +619,55 @@ mod tests_of_txn_data_hub {
         }
 
         #[tokio::test]
-        async fn test_txn_with_nested_run() {
+        async fn test_txn_async_with_commit_order() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn_with_commit_order(&["bar", "foo"]);
+
+                data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+
+                if let Err(_) = data.txn_async(logic!(fuga_logic_async)).await {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit_async 2",
+                    "SyncDataConn::pre_commit_async 1",
+                    "SyncDataConn::commit_async 2",
+                    "SyncDataConn::commit_async 1",
+                    "SyncDataConn::post_commit_async 2",
+                    "SyncDataConn::post_commit_async 1",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn test_txn_async_with_nested_run() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            {
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -663,11 +707,55 @@ mod tests_of_txn_data_hub {
         }
 
         #[tokio::test]
-        async fn test_begin_txn() {
+        async fn test_txn_async_with_nested_run_with_commit_order() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn_with_commit_order(&["bar", "foo"]);
+
+                data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+
+                if let Err(_) = data.txn_async(logic!(hoge_logic_async)).await {
+                    panic!();
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit_async 2",
+                    "SyncDataConn::pre_commit_async 1",
+                    "SyncDataConn::commit_async 2",
+                    "SyncDataConn::commit_async 1",
+                    "SyncDataConn::post_commit_async 2",
+                    "SyncDataConn::post_commit_async 1",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn test_begin_txn_async() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            {
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -714,11 +802,62 @@ mod tests_of_txn_data_hub {
         }
 
         #[tokio::test]
-        async fn test_begin_txn_with_nested_run() {
+        async fn test_begin_txn_async_with_commit_order() {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn_with_commit_order(&["bar", "foo"]);
+
+                data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+
+                if let Err(err) = data
+                    .begin_txn_async()
+                    .await
+                    .run_async(logic!(fuga_logic_async))
+                    .await
+                    .end_txn_async()
+                    .await
+                {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit_async 2",
+                    "SyncDataConn::pre_commit_async 1",
+                    "SyncDataConn::commit_async 2",
+                    "SyncDataConn::commit_async 1",
+                    "SyncDataConn::post_commit_async 2",
+                    "SyncDataConn::post_commit_async 1",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn test_begin_txn_async_with_nested_run() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            {
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -756,6 +895,57 @@ mod tests_of_txn_data_hub {
                     "SyncDataConn::drop 2",
                     "SyncDataConn::close 1",
                     "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ],
+            );
+        }
+
+        #[tokio::test]
+        async fn test_begin_txn_async_with_nested_run_with_commit_order() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            {
+                let mut data = DataHub::for_txn_with_commit_order(&["bar", "foo"]);
+
+                data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+
+                if let Err(err) = data
+                    .begin_txn_async()
+                    .await
+                    .run_async(logic!(hoge_logic_async))
+                    .await
+                    .end_txn_async()
+                    .await
+                {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit_async 2",
+                    "SyncDataConn::pre_commit_async 1",
+                    "SyncDataConn::commit_async 2",
+                    "SyncDataConn::commit_async 1",
+                    "SyncDataConn::post_commit_async 2",
+                    "SyncDataConn::post_commit_async 1",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
                     "SyncDataSrc::close 2",
                     "SyncDataSrc::drop 2",
                     "SyncDataSrc::close 1",
@@ -838,7 +1028,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -892,7 +1082,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -946,7 +1136,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -992,7 +1182,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1038,7 +1228,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1099,7 +1289,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1259,7 +1449,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1310,7 +1500,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
@@ -1359,7 +1549,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1424,7 +1614,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1489,7 +1679,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1549,7 +1739,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1607,7 +1797,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
@@ -1657,7 +1847,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1729,7 +1919,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1801,7 +1991,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
@@ -1865,7 +2055,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
@@ -1904,7 +2094,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Commit));
@@ -2010,7 +2200,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::PreCommit));
@@ -2114,7 +2304,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::PostCommit));
@@ -2222,7 +2412,7 @@ mod tests_of_txn_data_hub {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut data = DataHub::new().for_txn();
+                let mut data = DataHub::for_txn();
 
                 data.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::Rollback));
                 data.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
