@@ -332,7 +332,8 @@ impl<'a> Runner<'a> {
 
     /// Executes a logic function regardless of previous logic function errors.
     ///
-    /// However, previous [`run_or_block`][Runner::run_or_block] failed, this execution is skipped.
+    /// However, if a previous [`run_or_block`][Runner::run_or_block] failed, this execution is
+    /// skipped.
     ///
     /// If the logic function fails, its error is collected, but subsequent calls to
     /// [`run`][Runner::run] and [`run_or_block`][Runner::run_or_block] are skipped.

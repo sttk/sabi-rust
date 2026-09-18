@@ -196,7 +196,8 @@ impl<'a> Txn<'a> {
 
     /// Executes a logic function regardless of previous logic function errors.
     ///
-    /// However, previous [`run_or_block`][Runner::run_or_block] failed, this execution is skipped.
+    /// However, if a previous [`run_or_block`][Runner::run_or_block] failed, this execution is
+    /// skipped.
     ///
     /// If the logic function fails, its error is collected, but subsequent calls to
     /// [`run`][Txn::run] and [`run_or_block`][Txn::run_or_block] are skipped.
