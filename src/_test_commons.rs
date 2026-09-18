@@ -22,7 +22,7 @@ pub(crate) struct SyncDataConn {
     id: i8,
     committed: bool,
     fail: Fail,
-    logger: Arc<Mutex<Vec<String>>>,
+    pub(crate) logger: Arc<Mutex<Vec<String>>>,
 }
 
 impl SyncDataConn {
@@ -136,7 +136,7 @@ pub(crate) struct AsyncDataConn {
     id: i8,
     committed: Arc<AtomicBool>,
     fail: Fail,
-    logger: Arc<Mutex<Vec<String>>>,
+    pub(crate) logger: Arc<Mutex<Vec<String>>>,
 }
 
 impl AsyncDataConn {
@@ -285,7 +285,7 @@ impl DataConn for AsyncDataConn {
 
 pub(crate) struct NoCommitDataConn {
     id: i8,
-    logger: Arc<Mutex<Vec<String>>>,
+    pub(crate) logger: Arc<Mutex<Vec<String>>>,
 }
 
 impl NoCommitDataConn {

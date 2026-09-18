@@ -37,7 +37,6 @@ pub enum DataConnError {
     FailToCastDataConn {
         /// The name of the data connection that failed to cast.
         name: Arc<str>,
-
         /// The string representation of the target type to which the connection could not be cast.
         target_type: &'static str,
     },

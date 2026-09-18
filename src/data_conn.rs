@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, mem};
 
-/// An enum type representing the reasons for errors that can occur within `DataConn` operations.
+/// The enum type representing the reasons for errors that can occur within `DataConn` operations.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
@@ -43,7 +43,6 @@ pub enum DataConnError {
     FailToCastDataConn {
         /// The name of the data connection that failed to cast.
         name: Arc<str>,
-
         /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
     },

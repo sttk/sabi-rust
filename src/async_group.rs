@@ -474,9 +474,9 @@ mod tests_of_async_group {
             assert_eq!(errors[0].index, 123);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = {} }}", BASE_LINE - 30));
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = {} }}", BASE_LINE - 30));
         }
 
         #[test]
@@ -497,9 +497,9 @@ mod tests_of_async_group {
             assert_eq!(errors[0].index, 123);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = {} }}", BASE_LINE - 30));
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = {} }}", BASE_LINE - 30));
         }
 
         #[test]
@@ -520,9 +520,9 @@ mod tests_of_async_group {
             assert_eq!(errors[0].index, 123);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = {} }}", BASE_LINE - 30));
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = {} }}", BASE_LINE - 30));
         }
 
         #[test]
@@ -543,9 +543,9 @@ mod tests_of_async_group {
             assert_eq!(errors[0].index, 123);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src/async_group.rs, line = {} }}", BASE_LINE - 30));
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"panic\"), file = src\\async_group.rs, line = {} }}", BASE_LINE - 30));
         }
 
         #[test]
@@ -566,9 +566,9 @@ mod tests_of_async_group {
             assert_eq!(errors[0].index, 123);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"Unknown panic payload\"), file = src/async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"Unknown panic payload\"), file = src/async_group.rs, line = {} }}", BASE_LINE - 30));
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"Unknown panic payload\"), file = src\\async_group.rs, line = 78 }");
+            assert_eq!(format!("{:?}", errors[0].err), format!("errs::Err {{ reason = sabi::async_group::AsyncGroupError ThreadPanicked(\"Unknown panic payload\"), file = src\\async_group.rs, line = {} }}", BASE_LINE - 30));
         }
     }
 

@@ -48,7 +48,6 @@ pub enum DataSrcError {
     FailToCastDataConn {
         /// The name of the data source that failed to provide the correct connection type.
         name: Arc<str>,
-
         /// The string representation of the target data connection type that was requested.
         target_type: &'static str,
     },
@@ -57,7 +56,6 @@ pub enum DataSrcError {
     FailToCreateDataConn {
         /// The name of the data source that failed to create a data connection.
         name: Arc<str>,
-
         /// The string representation of the data connection type that was requested.
         data_conn_type: &'static str,
     },
@@ -66,7 +64,6 @@ pub enum DataSrcError {
     NotFoundDataSrcToCreateDataConn {
         /// The name of the data source that was not found.
         name: Arc<str>,
-
         /// The string representation of the data connection type that was requested.
         data_conn_type: &'static str,
     },
