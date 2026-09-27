@@ -2,43 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-//! Provides Tokio-based asynchronous APIs for the sabi framework.
-//!
-//! It provides asynchronous versions of the core data-access components,
-//! including [`DataSrc`], [`DataConn`], [`DataAcc`], and [`DataHub`].
-//!
-//! [`DataHub`] manages data sources and data connections for a session and
-//! provides methods for executing asynchronous logic functions.
-//! [`DataHub::run_async`] executes a single logic function, while
-//! [`DataHub::start_async`] creates a [`Runner`] that can execute multiple
-//! logic functions using method chaining.
-//!
-//! [`Runner`] provides three execution methods:
-//! [`run_async`][Runner::run_async], [`run_force_async`][Runner::run_force_async],
-//! and [`run_or_block_async`][Runner::run_or_block_async].
-//! [`run_async`][Runner::run_async] executes a logic function only if no
-//! error has occurred in previous calls, while
-//! [`run_force_async`][Runner::run_force_async] executes it regardless of
-//! previous errors. [`run_or_block_async`][Runner::run_or_block_async] also
-//! executes only if no error has occurred, but blocks subsequent logic
-//! functions if it fails. Calling [`Runner::end`] returns the result of the
-//! execution.
-//!
-//! [`DataHub::for_txn`] and [`DataHub::for_txn_with_commit_order`] create a [`TxnDataHub`] that
-//! provides the same asynchronous logic execution capabilities under transaction control.
-//! [`TxnDataHub::txn_async`] executes a logic function and attempts to commit
-//! if it succeeds. If the logic or commit fails, it performs a rollback.
-//! [`TxnDataHub::begin_txn_async`] creates a [`Txn`] that can execute
-//! multiple logic functions using method chaining and then commit or roll
-//! back the transaction with [`Txn::end_txn_async`].
-//!
-//! [`AsyncGroup`] is used to manage asynchronous tasks associated with data
-//! source setup and data connection transaction processing. It allows
-//! asynchronous setup, commit, rollback, and related operations to be
-//! performed concurrently on the Tokio runtime.
-
 mod async_group;
-mod data_acc;
 mod data_conn;
 mod data_hub;
 mod data_src;
@@ -51,11 +15,12 @@ pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
 pub use data_src::DataSrcError;
 
-use crate::{ErrEntry, SendSyncNonNull, TxnFailureReport};
+use crate::{ErrEntry, LogicErrAt, SendSyncNonNull, TxnFailureReport};
 
 use std::any;
 use std::collections::HashMap;
 use std::future::Future;
+use std::marker;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -401,7 +366,12 @@ pub struct AutoShutdown {}
 /// It facilitates data access by providing [`DataConn`] objects, created from
 /// both global data sources (registered via the global [`uses!`] macro) and
 /// session-local data sources (registered via [`DataHub::uses`] method).
-pub struct DataHub {
+pub struct DataHub<T> {
+    run: DataRun,
+    _phantom: marker::PhantomData<T>,
+}
+
+struct DataRun {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
     data_conn_manager: DataConnManager,
@@ -415,6 +385,8 @@ pub struct DataHub {
 /// the `override_macro` crate) on [`DataHub`], allowing application logic to
 /// interact with data services through an abstract interface.
 pub trait DataAcc {
+    type D: any::Any;
+
     /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
     ///
     /// This is the core method used by [`DataAcc`] implementations to obtain connections
@@ -457,54 +429,37 @@ pub trait DataAcc {
     #[allow(async_fn_in_trait)]
     async fn run_async<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
-        for<'b> F:
-            FnMut(&'b mut DataHub) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>;
+        for<'b> F: FnMut(
+            &'b mut DataHub<Self::D>,
+        ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>;
 
-    /// Creates a [`Runner`] for executing multiple logic functions.
+    /// Creates a [`LogicRun`] for executing multiple logic functions.
     ///
-    /// The returned [`Runner`] can execute logic functions using method chaining and collect
+    /// The returned [`LogicRun`] can execute logic functions using method chaining and collect
     /// errors from their execution.
     ///
     /// # Returns
     ///
-    /// * `Runner`: The struct that executes logic functions using method chaining.
+    /// * `LogicRun`: The struct that executes logic functions using method chaining.
     #[allow(async_fn_in_trait)]
-    async fn start_async(&mut self) -> Runner<'_>;
+    async fn start_async(&mut self) -> LogicRun<'_, Self::D>;
 }
 
-enum RunnerErrAt {
-    Begin { err: errs::Err },
-    Run { errors: Vec<ErrEntry> },
-    Block { errors: Vec<ErrEntry> },
-}
-
-/// Executes multiple logic functions using method chaining.
-///
-/// A [`Runner`] executes logic functions with a [`DataHub`] and collects errors that occur during
-/// execution. It manages the data hub session until [`Runner::end`] is called.
-pub struct Runner<'a> {
-    hub: &'a mut DataHub,
-    err: RunnerErrAt,
+pub struct LogicRun<'a, T> {
+    hub: &'a mut DataHub<T>,
+    err: LogicErrAt,
     index: usize,
     nested: bool,
 }
 
-/// Provides data access and transaction control for a [`DataHub`].
-///
-/// A [`TxnDataHub`] owns a [`DataHub`] and allows logic functions to be executed either normally
-/// or under transaction control.
-pub struct TxnDataHub {
-    hub: DataHub,
+pub struct LogicTxn<'a, T> {
+    hub: &'a mut DataHub<T>,
+    err: LogicErrAt,
+    index: usize,
 }
 
-/// Executes multiple logic functions within a transaction using method chaining.
-///
-/// A [`Txn`] begins a transaction when it is created and keeps the transaction active until
-/// [`Txn::end_txn_async`] is called.
-pub struct Txn<'a> {
-    hub: &'a mut DataHub,
-    err: RunnerErrAt,
-    index: usize,
+pub struct LogicRunner<T> {
+    hub: DataHub<T>,
 }
 
 #[doc(hidden)]

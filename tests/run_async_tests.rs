@@ -74,12 +74,12 @@ mod run_async_tests {
         use override_macro::overridable;
 
         #[overridable]
-        pub trait HogeData {
+        pub trait MyData {
             async fn get_text_async(&mut self) -> errs::Result<String>;
             async fn set_text_async(&mut self, text: String) -> errs::Result<()>;
         }
 
-        pub async fn hoge_logic_async(data: &mut impl HogeData) -> errs::Result<()> {
+        pub async fn my_logic_async(data: &mut impl MyData) -> errs::Result<()> {
             let mut text = data.get_text_async().await?;
             text = text.to_uppercase();
             data.set_text_async(text).await?;
@@ -111,36 +111,52 @@ mod run_async_tests {
         }
     }
 
+    struct HogeScope;
+    struct FugaScope;
+
     mod data_hub {
+        use super::*;
         use override_macro::override_with;
         use sabi::tokio::DataHub;
 
         use super::data_access_layer::{GettingDataAcc, SettingDataAcc};
-        use super::logic_layer::HogeData;
+        use super::logic_layer::MyData;
 
-        impl GettingDataAcc for DataHub {}
-        impl SettingDataAcc for DataHub {}
+        impl GettingDataAcc for DataHub<HogeScope> {}
+        impl SettingDataAcc for DataHub<HogeScope> {}
 
         #[override_with(GettingDataAcc, SettingDataAcc)]
-        impl HogeData for DataHub {}
+        impl MyData for DataHub<HogeScope> {}
+
+        impl GettingDataAcc for DataHub<FugaScope> {}
+        impl SettingDataAcc for DataHub<FugaScope> {}
+
+        #[override_with(GettingDataAcc, SettingDataAcc)]
+        impl MyData for DataHub<FugaScope> {}
     }
 
     mod app {
         use super::data_src::FooDataSrc;
-        use super::logic_layer::hoge_logic_async;
+        use super::logic_layer::my_logic_async;
         use super::*;
-        use sabi::tokio::{logic, DataHub};
+        use sabi::tokio::{logic, DataHub, LogicRunner};
+
+        sabi::tokio::uses!("foo", FooDataSrc::new("key"));
 
         #[tokio::test]
         async fn test_async() {
+            let _autho_shutdown = sabi::tokio::setup_async().await.unwrap();
+
+            test_async_with_hoge_scope().await;
+            test_async_with_fuga_scope().await;
+        }
+
+        async fn test_async_with_hoge_scope() {
             {
                 STORE.write().unwrap().insert("key", "hello".to_string());
             }
 
-            assert!(sabi::tokio::uses("foo", FooDataSrc::new("key")).is_ok());
-            let _autho_shutdown = sabi::tokio::setup_async().await.unwrap();
-
-            test_data_hub_run_async().await;
+            test_data_hub_run_async_with_hoge_scope().await;
 
             {
                 let text = STORE.read().unwrap().get("key").unwrap().to_string();
@@ -151,7 +167,7 @@ mod run_async_tests {
                 STORE.write().unwrap().insert("key", "world".to_string());
             }
 
-            test_runner_async().await;
+            test_runner_async_with_hoge_scope().await;
 
             {
                 let text = STORE.read().unwrap().get("key").unwrap().to_string();
@@ -159,19 +175,63 @@ mod run_async_tests {
             }
         }
 
-        async fn test_data_hub_run_async() {
-            let mut hub = DataHub::new();
-            if let Err(err) = hub.run_async(logic!(hoge_logic_async)).await {
+        async fn test_async_with_fuga_scope() {
+            {
+                STORE.write().unwrap().insert("key", "hello".to_string());
+            }
+
+            test_data_hub_run_async_with_fuga_scope().await;
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "HELLO");
+            }
+
+            {
+                STORE.write().unwrap().insert("key", "world".to_string());
+            }
+
+            test_runner_async_with_fuga_scope().await;
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "WORLD");
+            }
+        }
+
+        async fn test_data_hub_run_async_with_hoge_scope() {
+            let mut runner = LogicRunner::new(DataHub::<HogeScope>::new());
+            if let Err(err) = runner.run_async(logic!(my_logic_async)).await {
                 panic!("{err:?}");
             }
         }
 
-        async fn test_runner_async() {
-            let mut hub = DataHub::new();
-            if let Err(err) = hub
+        async fn test_runner_async_with_hoge_scope() {
+            let mut runner = LogicRunner::new(DataHub::<HogeScope>::new());
+            if let Err(err) = runner
                 .start_async()
                 .await
-                .run_async(logic!(hoge_logic_async))
+                .run_async(logic!(my_logic_async))
+                .await
+                .end()
+            {
+                panic!("{err:?}");
+            }
+        }
+
+        async fn test_data_hub_run_async_with_fuga_scope() {
+            let mut runner = LogicRunner::new(DataHub::<FugaScope>::new());
+            if let Err(err) = runner.run_async(logic!(my_logic_async)).await {
+                panic!("{err:?}");
+            }
+        }
+
+        async fn test_runner_async_with_fuga_scope() {
+            let mut runner = LogicRunner::new(DataHub::<FugaScope>::new());
+            if let Err(err) = runner
+                .start_async()
+                .await
+                .run_async(logic!(my_logic_async))
                 .await
                 .end()
             {
