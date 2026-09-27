@@ -22,49 +22,32 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, mem, ptr};
 
-/// Represents errors that can occur during data source operations.
 #[derive(Debug)]
 pub enum DataSrcError {
-    /// An error indicating a failure to register a global data source.
-    /// This can happen if the global data source manager is in an invalid state.
     FailToRegisterGlobalDataSrc {
-        /// The name of the data source that failed to register.
         name: Arc<str>,
     },
 
-    /// An error indicating that one or more global data sources failed during their setup process.
     FailToSetupGlobalDataSrcs {
-        /// A vector of errors, each containing the name of the data source and the error itself.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that a global data source setup is currently in progress.
     DuringSetupGlobalDataSrcs,
 
-    /// An error indicating that global data sources have already been set up.
     AlreadySetupGlobalDataSrcs,
 
-    /// An error indicating that a data connection could not be cast to the target type.
     FailToCastDataConn {
-        /// The name of the data source that failed to provide the correct connection type.
         name: Arc<str>,
-        /// The string representation of the target data connection type that was requested.
         target_type: &'static str,
     },
 
-    /// An error indicating that a data connection could not be created by its data source.
     FailToCreateDataConn {
-        /// The name of the data source that failed to create a data connection.
         name: Arc<str>,
-        /// The string representation of the data connection type that was requested.
         data_conn_type: &'static str,
     },
 
-    /// An error indicating that no data source was found for the requested data connection.
     NotFoundDataSrcToCreateDataConn {
-        /// The name of the data source that was not found.
         name: Arc<str>,
-        /// The string representation of the data connection type that was requested.
         data_conn_type: &'static str,
     },
 }

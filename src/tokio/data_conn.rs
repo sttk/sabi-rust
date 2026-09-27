@@ -2,7 +2,9 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::{AsyncGroup, DataConn, DataConnContainer, DataConnManager, ErrEntry, SendSyncNonNull};
+use crate::tokio::{
+    AsyncGroup, DataConn, DataConnContainer, DataConnManager, ErrEntry, SendSyncNonNull,
+};
 use crate::{TxnFailureCause, TxnFailureReport, TxnFailureRollback};
 
 use std::collections::HashMap;
@@ -11,33 +13,23 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, mem};
 
-/// Represents errors that can occur during data connection operations.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
-    /// An error indicating that one or more data connections failed during the pre-commit process.
     FailToPreCommitDataConn {
-        /// A vector of errors, each containing the name of the data connection and the error itself.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that one or more data connections failed during the commit process.
     FailToCommitDataConn {
-        /// A vector of errors, each containing the name of the data connection and the error itself.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that one or more data connections failed during the post-commit process.
     FailToPostCommitDataConn {
-        /// A vector of errors, each containing the name of the data connection and the error itself.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that a data connection could not be cast to the target type.
     FailToCastDataConn {
-        /// The name of the data connection that failed to cast.
         name: Arc<str>,
-        /// The string representation of the target type to which the connection could not be cast.
         target_type: &'static str,
     },
 }
