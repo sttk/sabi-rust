@@ -11,39 +11,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, mem};
 
-/// The enum type representing the reasons for errors that can occur within `DataConn` operations.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
-    /// Indicates a failure during the pre-commit process of one or more [`DataConn`] instances
-    /// involved in a transaction.
-    /// Contains a vector of data connection names and their corresponding errors.
     FailToPreCommitDataConn {
-        /// The vector contains errors that occurred in each [`DataConn`] object.
         errors: Vec<ErrEntry>,
     },
 
-    /// Indicates a failure during the commit process of one or more [`DataConn`] instances
-    /// involved in a transaction.
-    /// Contains a vector of data connection names and their corresponding errors.
     FailToCommitDataConn {
-        /// The vector contains errors that occurred in each [`DataConn`] object.
         errors: Vec<ErrEntry>,
     },
 
-    /// Indicates a failure during the post-commit process of one or more [`DataConn`] instances
-    /// involved in a transaction.
-    /// Contains a vector of data connection names and their corresponding errors.
     FailToPostCommitDataConn {
-        /// The vector contains errors that occurred in each [`DataConn`] object.
         errors: Vec<ErrEntry>,
     },
 
-    /// Indicates a failure to cast a retrieved [`DataConn`] to the expected type.
     FailToCastDataConn {
-        /// The name of the data connection that failed to cast.
         name: Arc<str>,
-        /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
     },
 }

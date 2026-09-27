@@ -2,7 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::{AsyncGroup, ErrEntry};
+use crate::tokio::{AsyncGroup, ErrEntry};
 
 use futures::future;
 use std::future::Future;
@@ -17,14 +17,6 @@ impl AsyncGroup {
         }
     }
 
-    /// Adds a future to the AsyncGroup to be executed concurrently.
-    ///
-    /// The provided future will be polled along with others in this group.
-    ///
-    /// # Parameters
-    ///
-    /// * `future` - The future to add. It must implement `Future<Output = errs::Result<()>>`,
-    ///              `Send`, and have a `'static` lifetime.
     #[allow(clippy::doc_overindented_list_items)]
     pub fn add<Fut>(&mut self, future: Fut)
     where

@@ -16,7 +16,6 @@ impl TxnFailureReport {
         }
     }
 
-    /// Returns `true` if this connection was a cause of the transaction failure.
     pub fn is_cause_of_failure(&self) -> bool {
         !matches!(
             self.cause,
@@ -24,7 +23,6 @@ impl TxnFailureReport {
         )
     }
 
-    /// Determines the suggested recovery action for this connection to achieve a successful commit.
     pub fn recovery_for_commit(&self) -> TxnFailureRecovery {
         use TxnFailureCause::*;
         use TxnFailureRecovery::*;
@@ -53,7 +51,6 @@ impl TxnFailureReport {
         }
     }
 
-    /// Determines the suggested recovery action to achieve a rolled-back state for this connection.
     pub fn recovery_for_rollback(&self) -> TxnFailureRecovery {
         use TxnFailureCause::*;
         use TxnFailureRecovery::*;

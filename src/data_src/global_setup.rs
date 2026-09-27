@@ -9,9 +9,6 @@ use crate::{
     SendSyncNonNull, StaticDataSrcContainer, StaticDataSrcRegistration,
 };
 
-#[allow(unused)] // for rustdoc
-use crate::DataHub;
-
 use setup_read_cleanup::{PhasedCell, PhasedError, PhasedErrorKind};
 
 use std::collections::HashMap;
@@ -35,26 +32,6 @@ impl Drop for AutoShutdown {
     }
 }
 
-/// Registers a global data source dynamically at runtime.
-///
-/// This function associates a given [`DataSrc`] implementation with a unique name.
-/// This name will later be used to retrieve session-specific [`DataConn`] instances
-/// from this data source.
-///
-/// Global data sources added via this function can be set up via [`setup`] or [`setup_with_order`].
-///
-/// If `setup` or `setup_with_order` has already been called, this function will return an `errs::Err`.
-///
-/// # Parameters
-///
-/// * `name`: The unique name for the data source.
-/// * `ds`: The [`DataSrc`] instance to register.
-///
-/// # Returns
-///
-/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an `errs::Err`
-///   if the global data source manager is in an invalid state or if [`setup`] or
-///   [`setup_with_order`] has already been called.
 pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C>,
@@ -86,31 +63,6 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
     dsm.prepend(static_vec);
 }
 
-/// Executes the setup process for all globally registered data sources.
-///
-/// This setup typically involves tasks such as creating connection pools,
-/// opening global connections, or performing initial configurations necessary
-/// for creating session-specific connections.
-///
-/// If any data source fails to set up, this function returns an `errs::Err` with
-/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
-/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
-/// all global data sources that were successfully set up are also closed.
-///
-/// If all data source setups are successful, the [`Result::Ok`] which contains an
-/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
-/// data sources when it's dropped.
-/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
-/// automatically cleaned up when the return value goes out of scope.
-///
-/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
-/// variable using `let _ = ...`.
-/// If you do, the inner object is dropped immediately at that point.
-///
-/// # Returns
-///
-/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
-///   set up successfully, or an `errs::Err` if any setup fails.
 pub fn setup() -> errs::Result<AutoShutdown> {
     let mut errors = Vec::new();
     let em = &mut errors;
@@ -134,40 +86,6 @@ pub fn setup() -> errs::Result<AutoShutdown> {
     }
 }
 
-/// Executes the setup process for all globally registered data sources, allowing for a specified
-/// order of setup for a subset of data sources.
-///
-/// This function is similar to [`setup`], but it allows defining a specific order for the setup
-/// of certain data sources identified by their names. Data sources not specified in `names` will
-/// be set up after the named ones, in their order of acquisition.
-///
-/// This setup typically involves tasks such as creating connection pools,
-/// opening global connections, or performing initial configurations necessary
-/// for creating session-specific connections.
-///
-/// If any data source fails to set up, this function returns an `errs::Err` with
-/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
-/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
-/// all global data sources that were successfully set up are also closed.
-///
-/// If all data source setups are successful, the [`Result::Ok`] which contains an
-/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
-/// data sources when it's dropped.
-/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
-/// automatically cleaned up when the return value goes out of scope.
-///
-/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
-/// variable using `let _ = ...`.
-/// If you do, the inner object is dropped immediately at that point.
-///
-/// # Parameters
-///
-/// * `names`: A slice of `&str` representing the names of data sources to set up in a specific order.
-///
-/// # Returns
-///
-/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
-///   set up successfully, or an `errs::Err` if any setup fails.
 pub fn setup_with_order(names: &[&str]) -> errs::Result<AutoShutdown> {
     let mut errors = Vec::new();
     let em = &mut errors;
@@ -215,45 +133,6 @@ impl StaticDataSrcRegistration {
 }
 inventory::collect!(StaticDataSrcRegistration);
 
-/// Registers a global data source that can be used throughout the application.
-///
-/// This macro associates a given [`DataSrc`] implementation with a unique name.
-/// This name will later be used to retrieve session-specific [`DataConn`] instances
-/// from this data source.
-///
-/// Global data sources are set up once via the [`setup`] function and are available
-/// to all [`DataHub`] instances.
-///
-/// # Parameters
-///
-/// * `name`: The unique name for the data source.
-/// * `ds`: The [`DataSrc`] instance to register.
-///
-/// # Examples
-///
-/// ```ignore
-/// use sabi::{DataSrc, DataConn, AsyncGroup, uses};
-/// use errs::Err;
-///
-/// struct MyDataSrc;
-/// impl DataSrc<MyDataConn> for MyDataSrc {
-///     fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
-///     fn close(&mut self) {}
-///     fn create_data_conn(&mut self) -> errs::Result<Box<MyDataConn>> {
-///         Ok(Box::new(MyDataConn))
-///     }
-/// }
-///
-/// struct MyDataConn;
-/// impl DataConn for MyDataConn {
-///     fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
-///     fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
-///     fn is_committed(&self) -> bool { false }
-///     fn close(&mut self) {}
-/// }
-///
-/// uses!("my_data_src", MyDataSrc);
-/// ```
 #[macro_export]
 macro_rules! uses {
     ($name:tt, $data_src:expr) => {

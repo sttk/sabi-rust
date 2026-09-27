@@ -18,51 +18,32 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, mem, ptr};
 
-/// The enum type representing the reasons for errors that can occur within [`DataSrc`] operations.
 #[derive(Debug)]
 pub enum DataSrcError {
-    /// Indicates a failure to register a global data source.
-    /// This can happen if the global data source manager is in an invalid state.
     FailToRegisterGlobalDataSrc {
-        /// The name of the data source that failed to register.
         name: Arc<str>,
     },
 
-    /// Indicates a failure during the setup process of one or more global data sources.
-    /// Contains a vector of data source names and their corresponding errors.
     FailToSetupGlobalDataSrcs {
-        /// The vector contains errors that occurred in each [`DataSrc`] object.
         errors: Vec<ErrEntry>,
     },
 
-    /// Indicates that a setup process for global data sources is currently ongoing.
     DuringSetupGlobalDataSrcs,
 
-    /// Indicates that global data sources have already been set up.
     AlreadySetupGlobalDataSrcs,
 
-    /// Indicates a failure to cast a retrieved [`DataConn`] to the expected type.
     FailToCastDataConn {
-        /// The name of the data connection that failed to cast.
         name: Arc<str>,
-        /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
     },
 
-    /// Indicates a failure to create a [`DataConn`] object from its [`DataSrc`].
     FailToCreateDataConn {
-        /// The name of the data source that failed to be created.
         name: Arc<str>,
-        /// The type name of the [`DataConn`] that failed to be created.
         data_conn_type: &'static str,
     },
 
-    /// Indicates that no [`DataSrc`] was found to create a [`DataConn`] for the specified name
-    /// and type.
     NotFoundDataSrcToCreateDataConn {
-        /// The name of the data source that could not be found.
         name: Arc<str>,
-        /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
     },
 }

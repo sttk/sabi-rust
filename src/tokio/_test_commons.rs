@@ -1,4 +1,4 @@
-use super::{AsyncGroup, DataConn, DataSrc};
+use crate::tokio::{AsyncGroup, DataConn, DataSrc};
 use crate::TxnFailureReport;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
