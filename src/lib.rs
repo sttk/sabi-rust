@@ -253,6 +253,6 @@ enum LogicErrAt {
     Block { errors: Vec<ErrEntry> },
 }
 
-pub struct LogicData<T> {
+pub struct LogicRunner<T> {
     hub: DataHub<T>,
 }
