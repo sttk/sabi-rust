@@ -42,7 +42,7 @@ pub enum DataSrcError {
         data_conn_type: &'static str,
     },
 
-    NotFoundDataSrcToCreateDataConn {
+    NoDataSrcToCreateDataConn {
         name: Arc<str>,
         data_conn_type: &'static str,
     },
@@ -343,12 +343,10 @@ impl DataSrcManager {
                 }
             }
         } else {
-            Err(errs::Err::new(
-                DataSrcError::NotFoundDataSrcToCreateDataConn {
-                    name: name.as_ref().into(),
-                    data_conn_type: any::type_name::<C>(),
-                },
-            ))
+            Err(errs::Err::new(DataSrcError::NoDataSrcToCreateDataConn {
+                name: name.as_ref().into(),
+                data_conn_type: any::type_name::<C>(),
+            }))
         }
     }
 }
@@ -1132,7 +1130,7 @@ mod tests_of_data_src {
 
         if let Err(err) = manager.create_data_conn::<SyncDataConn>(0, "foo") {
             match err.reason::<DataSrcError>() {
-                Ok(DataSrcError::NotFoundDataSrcToCreateDataConn {
+                Ok(DataSrcError::NoDataSrcToCreateDataConn {
                     name,
                     data_conn_type,
                 }) => {
