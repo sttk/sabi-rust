@@ -359,6 +359,16 @@ pub(crate) struct DataSrcManager {
 /// (`let _ = ...`), because an anonymous variable is dropped immediately at that point.
 pub struct AutoShutdown {}
 
+#[doc(hidden)]
+pub struct StaticDataSrcContainer {
+    pub(crate) ssnnptr: SendSyncNonNull<DataSrcContainer>,
+}
+
+#[doc(hidden)]
+pub struct StaticDataSrcRegistration {
+    pub(crate) factory: fn() -> StaticDataSrcContainer,
+}
+
 /// The struct that acts as a central hub for data input/output operations, integrating
 /// multiple *Data* traits (which are passed to business logic functions as their arguments) with
 /// [`DataAcc`] traits (which implement default data I/O methods for external services).
@@ -460,14 +470,4 @@ pub struct LogicTxn<'a, T> {
 
 pub struct LogicRunner<T> {
     hub: DataHub<T>,
-}
-
-#[doc(hidden)]
-pub struct StaticDataSrcContainer {
-    pub(crate) ssnnptr: SendSyncNonNull<DataSrcContainer>,
-}
-
-#[doc(hidden)]
-pub struct StaticDataSrcRegistration {
-    pub(crate) factory: fn() -> StaticDataSrcContainer,
 }

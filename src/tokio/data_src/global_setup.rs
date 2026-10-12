@@ -2,14 +2,9 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::DataSrcError;
-
-#[allow(unused)] // for rustdoc
-use super::super::AsyncGroup;
-
-use super::super::{
-    AutoShutdown, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcManager,
-    StaticDataSrcContainer, StaticDataSrcRegistration,
+use crate::tokio::{
+    AutoShutdown, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcError,
+    DataSrcManager, StaticDataSrcContainer, StaticDataSrcRegistration,
 };
 
 use crate::SendSyncNonNull;

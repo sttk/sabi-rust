@@ -59,6 +59,78 @@ pub struct AsyncGroup {
     _name: Arc<str>,
 }
 
+struct SendSyncNonNull<T: Send + Sync> {
+    non_null_ptr: ptr::NonNull<T>,
+    _phantom: marker::PhantomData<cell::Cell<T>>,
+}
+
+/// Represents the cause of a transaction failure for a specific data connection.
+#[derive(Debug)]
+pub enum TxnFailureCause {
+    /// No failure occurred, and the transaction was successfully committed.
+    NoneByCommitted,
+    /// No failure occurred, but the transaction was not committed (e.g., because
+    /// another connection in the transaction failed before this one could commit).
+    NoneByUncommitted,
+    /// The logic execution or pre-commit phase of the data connection failed.
+    LogicFailure(errs::Err),
+    /// The commit phase of the data connection failed.
+    CommitFailure(errs::Err),
+    /// The post-commit phase of the data connection failed.
+    PostCommitFailure(errs::Err),
+}
+
+/// Represents the rollback status of a data connection in a failed transaction.
+#[derive(Debug)]
+pub enum TxnFailureRollback {
+    /// The rollback was executed and succeeded.
+    NoneByRolledBack,
+    /// Rollback was not executed or not applicable (e.g., because the connection
+    /// was already committed).
+    NoneByNotRolledBack,
+    /// The rollback was executed but failed.
+    RollbackFailure(errs::Err),
+}
+
+/// Represents the suggested recovery action for a data connection after a transaction failure.
+#[derive(Debug, PartialEq)]
+pub enum TxnFailureRecovery {
+    /// No recovery action is required.
+    NoActionRequired,
+    /// The transaction was successfully rolled back.
+    /// The transaction can be rerun a logic and committed again.
+    RerunLogicAndCommit,
+    /// The transaction failed to run a logic or pre commit.
+    /// After resolving the cause, the transaction can be rerun a logic and commit again.
+    ResolveCauseThenRerunLogicAndCommit,
+    /// The transaction failed to run post commit.
+    /// After resolving the cause, the transaction can be rerun post commit again.
+    ResolveCauseThenRerunPostCommit,
+    /// The rollback failed and it may be in an inconsistent state.
+    /// Resolve the cause and inconsistent state.
+    ResolveCauseAndInconsistency,
+    /// It is in impossile case under normal conditions.
+    /// Investigation of the cause is required.
+    InvestigateBecauseImpossible,
+    /// The transaction was successfully committed.
+    /// It is required to rollback manually.
+    ManualRollbackRequired,
+}
+
+/// A report detailing the transaction failure cause and rollback status
+/// for a specific data connection.
+#[derive(Debug)]
+pub struct TxnFailureReport {
+    /// The name of the data connection.
+    pub data_conn_name: Arc<str>,
+    /// The type name of the data connection.
+    pub data_conn_type: &'static str,
+    /// The cause of the transaction failure.
+    pub cause: TxnFailureCause,
+    /// The rollback status of the data connection.
+    pub rollback: TxnFailureRollback,
+}
+
 /// The trait that abstracts a connection per session to an external data service,
 /// such as a database, file system, or messaging service.
 ///
@@ -302,6 +374,16 @@ struct DataSrcManager {
 /// (`let _ = ...`), because an anonymous variable is dropped immediately at that point.
 pub struct AutoShutdown {}
 
+#[doc(hidden)]
+pub struct StaticDataSrcContainer {
+    ssnnptr: SendSyncNonNull<DataSrcContainer>,
+}
+
+#[doc(hidden)]
+pub struct StaticDataSrcRegistration {
+    factory: fn() -> StaticDataSrcContainer,
+}
+
 /// The struct that acts as a central hub for data input/output operations, integrating
 /// multiple *Data* traits (which are passed to business logic functions as their arguments) with
 /// [`DataAcc`] traits (which implement default data I/O methods for external services).
@@ -401,86 +483,4 @@ pub struct LogicTxn<'a, T> {
 
 pub struct LogicRunner<T> {
     hub: DataHub<T>,
-}
-
-#[doc(hidden)]
-pub struct StaticDataSrcContainer {
-    ssnnptr: SendSyncNonNull<DataSrcContainer>,
-}
-
-#[doc(hidden)]
-pub struct StaticDataSrcRegistration {
-    factory: fn() -> StaticDataSrcContainer,
-}
-
-struct SendSyncNonNull<T: Send + Sync> {
-    non_null_ptr: ptr::NonNull<T>,
-    _phantom: marker::PhantomData<cell::Cell<T>>,
-}
-
-/// Represents the cause of a transaction failure for a specific data connection.
-#[derive(Debug)]
-pub enum TxnFailureCause {
-    /// No failure occurred, and the transaction was successfully committed.
-    NoneByCommitted,
-    /// No failure occurred, but the transaction was not committed (e.g., because
-    /// another connection in the transaction failed before this one could commit).
-    NoneByUncommitted,
-    /// The logic execution or pre-commit phase of the data connection failed.
-    LogicFailure(errs::Err),
-    /// The commit phase of the data connection failed.
-    CommitFailure(errs::Err),
-    /// The post-commit phase of the data connection failed.
-    PostCommitFailure(errs::Err),
-}
-
-/// Represents the rollback status of a data connection in a failed transaction.
-#[derive(Debug)]
-pub enum TxnFailureRollback {
-    /// The rollback was executed and succeeded.
-    NoneByRolledBack,
-    /// Rollback was not executed or not applicable (e.g., because the connection
-    /// was already committed).
-    NoneByNotRolledBack,
-    /// The rollback was executed but failed.
-    RollbackFailure(errs::Err),
-}
-
-/// Represents the suggested recovery action for a data connection after a transaction failure.
-#[derive(Debug, PartialEq)]
-pub enum TxnFailureRecovery {
-    /// No recovery action is required.
-    NoActionRequired,
-    /// The transaction was successfully rolled back.
-    /// The transaction can be rerun a logic and committed again.
-    RerunLogicAndCommit,
-    /// The transaction failed to run a logic or pre commit.
-    /// After resolving the cause, the transaction can be rerun a logic and commit again.
-    ResolveCauseThenRerunLogicAndCommit,
-    /// The transaction failed to run post commit.
-    /// After resolving the cause, the transaction can be rerun post commit again.
-    ResolveCauseThenRerunPostCommit,
-    /// The rollback failed and it may be in an inconsistent state.
-    /// Resolve the cause and inconsistent state.
-    ResolveCauseAndInconsistency,
-    /// It is in impossile case under normal conditions.
-    /// Investigation of the cause is required.
-    InvestigateBecauseImpossible,
-    /// The transaction was successfully committed.
-    /// It is required to rollback manually.
-    ManualRollbackRequired,
-}
-
-/// A report detailing the transaction failure cause and rollback status
-/// for a specific data connection.
-#[derive(Debug)]
-pub struct TxnFailureReport {
-    /// The name of the data connection.
-    pub data_conn_name: Arc<str>,
-    /// The type name of the data connection.
-    pub data_conn_type: &'static str,
-    /// The cause of the transaction failure.
-    pub cause: TxnFailureCause,
-    /// The rollback status of the data connection.
-    pub rollback: TxnFailureRollback,
 }
