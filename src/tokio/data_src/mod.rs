@@ -61,7 +61,7 @@ pub enum DataSrcError {
     },
 
     /// An error indicating that no data source was found for the requested data connection.
-    NotFoundDataSrcToCreateDataConn {
+    NoDataSrcToCreateDataConn {
         /// The name of the data source that was not found.
         name: Arc<str>,
         /// The string representation of the data connection type that was requested.
@@ -379,12 +379,10 @@ impl DataSrcManager {
                 }
             }
         } else {
-            Err(errs::Err::new(
-                DataSrcError::NotFoundDataSrcToCreateDataConn {
-                    name: name.as_ref().into(),
-                    data_conn_type: any::type_name::<C>(),
-                },
-            ))
+            Err(errs::Err::new(DataSrcError::NoDataSrcToCreateDataConn {
+                name: name.as_ref().into(),
+                data_conn_type: any::type_name::<C>(),
+            }))
         }
     }
 }
