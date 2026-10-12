@@ -2,7 +2,9 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::{AsyncGroup, DataConn, DataConnContainer, DataConnManager, ErrEntry, SendSyncNonNull};
+use crate::tokio::{
+    AsyncGroup, DataConn, DataConnContainer, DataConnManager, ErrEntry, SendSyncNonNull,
+};
 use crate::{TxnFailureCause, TxnFailureReport, TxnFailureRollback};
 
 use std::collections::HashMap;

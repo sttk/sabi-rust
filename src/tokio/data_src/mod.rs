@@ -1066,7 +1066,7 @@ mod tests_of_data_src {
             .await
         {
             match err.reason::<DataSrcError>() {
-                Ok(DataSrcError::NotFoundDataSrcToCreateDataConn {
+                Ok(DataSrcError::NoDataSrcToCreateDataConn {
                     name,
                     data_conn_type,
                 }) => {
