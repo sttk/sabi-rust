@@ -2,65 +2,11 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-//! This crate provides a small framework for Rust designed to separate application logic from
-//! data access.
-//!
-//! In this framework, a logic function takes only a logic-specific data access trait as its
-//! argument, and all data access methods required by the logic are defined in this trait.
-//!
-//! On the other hand, concrete implementations of data access methods are provided as default
-//! methods of traits derived from [`DataAcc`], and these traits are often grouped by data service
-//! or other units of responsibility.
-//!
-//! [`DataHub`] bridges these two parts.
-//!
-//! The [`DataHub`] implements all, or the [`DataAcc`]-derived traits required for each session, as
-//! well as the data access traits used by the logic. Then, using the
-//! [override_macro](https://github.com/sttk/override_macro-rust) crate, the
-//! implementations of the methods in the data access traits used by the logic are “overridden” so
-//! that they call the default methods of the [`DataAcc`]-derived traits with the same signatures.
-//!
-//! Rust does not have native method overriding, but this macro provides method calls similar to
-//! overriding, allowing logic to access data through small, dedicated interfaces.
-//!
-//! In addition, [`DataHub`] provides methods for executing logic functions.
-//!
-//! [`DataHub::run`] passes itself to a logic function and executes it. Because the argument type of
-//! the logic function is declared as a logic-specific data access trait, the logic can see only
-//! the methods defined by this trait, rather than all of the functionality provided by [`DataHub`].
-//!
-//! [`DataHub::start`] creates a [`Runner`] instance that can execute multiple logic functions using
-//! method chaining. [`Runner`] provides three execution methods: [`run`][Runner::run],
-//! [`run_force`][Runner::run_force], and [`run_or_block`][Runner::run_or_block].
-//! [`run`][Runner::run] executes the logic only if no error has occurred in previous calls, while
-//! [`run_force`][Runner::run_force] always executes the logic regardless of whether a previous
-//! error has occurred. [`run_or_block`][Runner::run_or_block], like [`run`][Runner::run], executes
-//! the logic only if no error has occurred, but if an error occurs during its execution,
-//! subsequent calls to [`run`][Runner::run], [`run_force`][Runner::run_force], and
-//! [`run_or_block`][Runner::run_or_block] are skipped. Finally, calling [`end`][Runner::end]
-//! returns the result containing all errors that occurred during execution.
-//!
-//! In addition, [`DataHub::for_txn`] and [`DataHub::for_txn_with_commit_order`] create a
-//! [`TxnDataHub`] instance that can execute logic functions under transaction control.
-//! [`TxnDataHub::run`] and [`TxnDataHub::start`] work in the same way as the corresponding methods
-//! of [`DataHub`]. [`TxnDataHub::txn`] executes a logic function and attempts to commit if it
-//! succeeds. If the logic or the commit fails, it performs a rollback.
-//! [`TxnDataHub::begin_txn`] creates a [`Txn`] instance that can execute multiple logic
-//! functions using method chaining and then perform a commit or rollback with [`Txn::end_txn`].
-//! Like [`Runner`], [`Txn`] provides [`run`][Txn::run], [`run_force`][Txn::run_force], and
-//! [`run_or_block`][Txn::run_or_block], and their execution conditions are the same as those of
-//! [`Runner`].
-//!
-//! This framework is designed to naturally lead to structures that follow the SOLID principles,
-//! enabling the development of Rust applications that are easy for both humans and AI to implement
-//! and understand.
-
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(unused_features)]
 
 mod async_group;
-mod data_acc;
 mod data_conn;
 mod data_hub;
 mod data_src;
@@ -363,7 +309,12 @@ pub struct AutoShutdown {}
 /// It facilitates data access by providing [`DataConn`] objects, created from
 /// both global data sources (registered via the global [`uses!`] macro) and
 /// session-local data sources (registered via [`DataHub::uses`] method).
-pub struct DataHub {
+pub struct DataHub<T> {
+    run: DataRun,
+    _phantom: marker::PhantomData<T>,
+}
+
+struct DataRun {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
     data_conn_manager: DataConnManager,
@@ -377,6 +328,8 @@ pub struct DataHub {
 /// the `override_macro` crate) on [`DataHub`], allowing application logic to
 /// interact with data services through an abstract interface.
 pub trait DataAcc {
+    type D: any::Any;
+
     /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
     ///
     /// This is the core method used by [`DataAcc`] implementations to obtain connections
@@ -414,52 +367,40 @@ pub trait DataAcc {
     ///   or an error if executing `logic_fn` fails.
     fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
-        F: FnMut(&mut DataHub) -> errs::Result<()>;
+        F: FnMut(&mut DataHub<Self::D>) -> errs::Result<()>;
 
-    /// Creates a [`Runner`] for executing multiple logic functions.
+    /// Creates a [`LogicRun`] for executing multiple logic functions.
     ///
-    /// The returned [`Runner`] can execute logic functions using method chaining and collect
+    /// The returned [`LogicRun`] can execute logic functions using method chaining and collect
     /// errors from their execution.
     ///
     /// # Returns
     ///
-    /// * `Runner`: The struct that executes logic functions using method chaining.
-    fn start(&mut self) -> Runner<'_>;
+    /// * `LogicRun`: The struct that executes logic functions using method chaining.
+    fn start(&mut self) -> LogicRun<'_, Self::D>;
 }
 
-enum RunnerErrAt {
+enum LogicErrAt {
     Begin { err: errs::Err },
     Run { errors: Vec<ErrEntry> },
     Block { errors: Vec<ErrEntry> },
 }
 
-/// Executes multiple logic functions using method chaining.
-///
-/// A [`Runner`] executes logic functions with a [`DataHub`] and collects errors that occur during
-/// execution. It manages the data hub session until [`Runner::end`] is called.
-pub struct Runner<'a> {
-    hub: &'a mut DataHub,
-    err: RunnerErrAt,
+pub struct LogicRun<'a, T> {
+    hub: &'a mut DataHub<T>,
+    err: LogicErrAt,
     index: usize,
     nested: bool,
 }
 
-/// Provides a [`DataHub`] which enables data access and transaction control.
-///
-/// A [`TxnDataHub`] owns a [`DataHub`] and allows logic functions to be executed either normally
-/// or under transaction control.
-pub struct TxnDataHub {
-    hub: DataHub,
+pub struct LogicTxn<'a, T> {
+    hub: &'a mut DataHub<T>,
+    err: LogicErrAt,
+    index: usize,
 }
 
-/// Executes multiple logic functions within a transaction using method chaining.
-///
-/// A [`Txn`] begins a transaction when it is created and keeps the transaction active until
-/// [`Txn::end_txn`] is called.
-pub struct Txn<'a> {
-    hub: &'a mut DataHub,
-    err: RunnerErrAt,
-    index: usize,
+pub struct LogicRunner<T> {
+    hub: DataHub<T>,
 }
 
 #[doc(hidden)]

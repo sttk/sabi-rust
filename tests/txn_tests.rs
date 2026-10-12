@@ -74,12 +74,12 @@ mod txn_tests {
         use override_macro::overridable;
 
         #[overridable]
-        pub trait HogeData {
+        pub trait MyData {
             fn get_text(&mut self) -> errs::Result<String>;
             fn set_text(&mut self, text: String) -> errs::Result<()>;
         }
 
-        pub fn hoge_logic(data: &mut impl HogeData) -> errs::Result<()> {
+        pub fn my_logic(data: &mut impl MyData) -> errs::Result<()> {
             let mut text = data.get_text()?;
             text = text.to_uppercase();
             data.set_text(text)?;
@@ -111,58 +111,52 @@ mod txn_tests {
         }
     }
 
+    struct HogeScope;
+    struct FugaScope;
+
     mod data_hub {
+        use super::*;
         use override_macro::override_with;
         use sabi::DataHub;
 
         use super::data_access_layer::{GettingDataAcc, SettingDataAcc};
-        use super::logic_layer::HogeData;
+        use super::logic_layer::MyData;
 
-        impl GettingDataAcc for DataHub {}
-        impl SettingDataAcc for DataHub {}
+        impl GettingDataAcc for DataHub<HogeScope> {}
+        impl SettingDataAcc for DataHub<HogeScope> {}
 
         #[override_with(GettingDataAcc, SettingDataAcc)]
-        impl HogeData for DataHub {}
+        impl MyData for DataHub<HogeScope> {}
+
+        impl GettingDataAcc for DataHub<FugaScope> {}
+        impl SettingDataAcc for DataHub<FugaScope> {}
+
+        #[override_with(GettingDataAcc, SettingDataAcc)]
+        impl MyData for DataHub<FugaScope> {}
     }
 
     mod app {
         use super::data_src::FooDataSrc;
-        use super::logic_layer::hoge_logic;
+        use super::logic_layer::my_logic;
         use super::*;
-        use sabi::DataHub;
+        use sabi::{DataHub, LogicRunner};
+
+        sabi::uses!("foo", FooDataSrc::new("key"));
 
         #[test]
         fn test() {
-            {
-                STORE.write().unwrap().insert("key", "hello".to_string());
-            }
-
-            assert!(sabi::uses("foo", FooDataSrc::new("key")).is_ok());
             let _auto_shutdown = sabi::setup().unwrap();
 
-            test_data_hub_run();
+            test_with_hoge_scope();
+            test_with_fuga_scope();
+        }
 
-            {
-                let text = STORE.read().unwrap().get("key").unwrap().to_string();
-                assert_eq!(text, "hello");
-            }
-
-            {
-                STORE.write().unwrap().insert("key", "world".to_string());
-            }
-
-            test_runner();
-
-            {
-                let text = STORE.read().unwrap().get("key").unwrap().to_string();
-                assert_eq!(text, "world");
-            }
-
+        fn test_with_hoge_scope() {
             {
                 STORE.write().unwrap().insert("key", "hello".to_string());
             }
 
-            test_data_hub_txn();
+            test_data_hub_txn_with_hoge_scope();
 
             {
                 let text = STORE.read().unwrap().get("key").unwrap().to_string();
@@ -173,7 +167,7 @@ mod txn_tests {
                 STORE.write().unwrap().insert("key", "world".to_string());
             }
 
-            test_txn();
+            test_txn_with_hoge_scope();
 
             {
                 let text = STORE.read().unwrap().get("key").unwrap().to_string();
@@ -181,30 +175,54 @@ mod txn_tests {
             }
         }
 
-        fn test_data_hub_run() {
-            let mut hub = DataHub::for_txn();
-            if let Err(err) = hub.run(hoge_logic) {
+        fn test_with_fuga_scope() {
+            {
+                STORE.write().unwrap().insert("key", "hello".to_string());
+            }
+
+            test_data_hub_txn_with_fuga_scope();
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "HELLO");
+            }
+
+            {
+                STORE.write().unwrap().insert("key", "world".to_string());
+            }
+
+            test_txn_with_fuga_scope();
+
+            {
+                let text = STORE.read().unwrap().get("key").unwrap().to_string();
+                assert_eq!(text, "WORLD");
+            }
+        }
+
+        fn test_data_hub_txn_with_hoge_scope() {
+            let mut runner = LogicRunner::new(DataHub::<HogeScope>::new());
+            if let Err(err) = runner.txn(my_logic) {
                 panic!("{err:?}");
             }
         }
 
-        fn test_runner() {
-            let mut hub = DataHub::for_txn();
-            if let Err(err) = hub.start().run(hoge_logic).end() {
+        fn test_txn_with_hoge_scope() {
+            let mut runner = LogicRunner::new(DataHub::<HogeScope>::new());
+            if let Err(err) = runner.begin_txn().run(my_logic).end_txn() {
                 panic!("{err:?}");
             }
         }
 
-        fn test_data_hub_txn() {
-            let mut hub = DataHub::for_txn();
-            if let Err(err) = hub.txn(hoge_logic) {
+        fn test_data_hub_txn_with_fuga_scope() {
+            let mut runner = LogicRunner::new(DataHub::<HogeScope>::new());
+            if let Err(err) = runner.txn(my_logic) {
                 panic!("{err:?}");
             }
         }
 
-        fn test_txn() {
-            let mut hub = DataHub::for_txn();
-            if let Err(err) = hub.begin_txn().run(hoge_logic).end_txn() {
+        fn test_txn_with_fuga_scope() {
+            let mut runner = LogicRunner::new(DataHub::<HogeScope>::new());
+            if let Err(err) = runner.begin_txn().run(my_logic).end_txn() {
                 panic!("{err:?}");
             }
         }
