@@ -107,27 +107,27 @@ impl DataRun {
     }
 
     #[inline]
-    pub(crate) fn new_failure_reports(&self) -> Vec<TxnFailureReport> {
+    fn new_failure_reports(&self) -> Vec<TxnFailureReport> {
         self.data_conn_manager.new_failure_reports()
     }
 
     #[inline]
-    pub(crate) fn commit(&mut self, reports: &mut [TxnFailureReport]) -> errs::Result<()> {
+    fn commit(&mut self, reports: &mut [TxnFailureReport]) -> errs::Result<()> {
         self.data_conn_manager.commit(reports)
     }
 
     #[inline]
-    pub(crate) fn rollback(&mut self, reports: Vec<TxnFailureReport>) {
+    fn rollback(&mut self, reports: Vec<TxnFailureReport>) {
         self.data_conn_manager.rollback(reports)
     }
 
     #[inline]
-    pub(crate) fn end(&mut self) {
+    fn end(&mut self) {
         self.data_conn_manager.close();
         self.fixed = false;
     }
 
-    pub fn get_data_conn<C>(&mut self, name: &str) -> errs::Result<&mut C>
+    fn get_data_conn<C>(&mut self, name: &str) -> errs::Result<&mut C>
     where
         C: DataConn + 'static,
     {
