@@ -2,6 +2,46 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
+//! Provides Tokio-based asynchronous APIs for the sabi framework.
+//!
+//! It provides asynchronous versions of the core data-access components,
+//! including [`DataSrc`], [`DataConn`], [`DataAcc`], and [`DataHub`].
+//!
+//! [`LogicRunner`] wraps a [`DataHub`] and provides methods for configuring data sources and
+//! executing asynchronous business logic.
+//!
+//! [`LogicRunner::run_async`] passes the inner [`DataHub`] to a logic closure and executes it
+//! asynchronously. Because the argument type of the closure is declared as a logic-specific data
+//! access trait, the logic can see only the methods defined by that trait, rather than all of the
+//! functionality provided by [`DataHub`].
+//!
+//! [`LogicRunner::start_async`] creates a [`LogicRun`] builder that can execute multiple logic
+//! closures using method chaining. [`LogicRun`] provides three execution methods:
+//! [`run_async`][LogicRun::run_async], [`run_force_async`][LogicRun::run_force_async], and
+//! [`run_or_block_async`][LogicRun::run_or_block_async].
+//! [`run_async`][LogicRun::run_async] executes the logic only if no error has occurred in
+//! previous calls, while [`run_force_async`][LogicRun::run_force_async] always executes the logic
+//! regardless of whether a previous error has occurred.
+//! [`run_or_block_async`][LogicRun::run_or_block_async], like [`run_async`][LogicRun::run_async],
+//! executes the logic only if no error has occurred, but if an error occurs during its execution,
+//! subsequent calls to [`run_async`][LogicRun::run_async],
+//! [`run_force_async`][LogicRun::run_force_async], and
+//! [`run_or_block_async`][LogicRun::run_or_block_async] are skipped. Finally, calling
+//! [`end`][LogicRun::end] returns the result containing all errors that occurred during execution.
+//!
+//! [`LogicRunner::txn_async`] executes a logic closure under transaction control and attempts to
+//! commit if it succeeds. If the logic or the commit fails, it performs a rollback.
+//! [`LogicRunner::begin_txn_async`] creates a [`LogicTxn`] builder that can execute multiple
+//! logic closures using method chaining and then perform a commit or rollback with
+//! [`end_txn_async`][LogicTxn::end_txn_async]. Like [`LogicRun`], [`LogicTxn`] provides
+//! [`run_async`][LogicTxn::run_async], [`run_force_async`][LogicTxn::run_force_async], and
+//! [`run_or_block_async`][LogicTxn::run_or_block_async], and their execution conditions are the
+//! same as those of [`LogicRun`].
+//!
+//! [`AsyncGroup`] is used to manage asynchronous tasks associated with data source setup and data
+//! connection transaction processing. It allows asynchronous setup, commit, rollback, and related
+//! operations to be performed concurrently on the Tokio runtime.
+
 mod async_group;
 mod data_conn;
 mod data_hub;
@@ -66,10 +106,12 @@ pub use crate::_logic as logic;
 #[doc(inline)]
 pub use crate::_uses_for_async as uses;
 
-/// The structure that allows for the concurrent execution of multiple asynchronous tasks
-/// using green-thread and waits for all of them to complete.
+/// Manages a group of concurrent tasks executed asynchronously.
 ///
-/// Functions are added using the `add` method and are then run concurrently in separate green-threads.
+/// The structure that allows for the concurrent execution of multiple asynchronous tasks
+/// and waits for all of them to complete.
+///
+/// Functions are added using the `add` method and are then run concurrently.
 /// The `AsyncGroup` ensures that all tasks finish before proceeding,
 /// and can collect any errors that occur.
 #[allow(clippy::type_complexity)]
@@ -80,17 +122,28 @@ pub struct AsyncGroup {
     _name: Arc<str>,
 }
 
-/// The asynchronous trait for data connection implementations, providing methods for transaction
-/// management.
+/// Defines the lifecycle and transactional operations for an asynchronous data connection.
 ///
-/// Implementors of this trait represent a connection to a data source and define
-/// how to commit, rollback, and handle the lifecycle of transactions.
+/// This asynchronous trait abstracts a connection per session to an external data service, such
+/// as a database, file system, or messaging service.
+///
+/// Its primary purpose is to enable cohesive transaction operations across multiple
+/// external data services within a single transaction context. Implementations of this
+/// trait provide the concrete input/output operations for their respective data services.
+///
+/// Methods declared within this trait are designed to handle transactional logic.
+/// The [`AsyncGroup`] parameter in various methods allows for concurrent processing
+/// when commit or rollback operations are time-consuming.
 #[allow(async_fn_in_trait)]
 #[allow(unused_variables)] // rustdoc
 pub trait DataConn {
-    /// Attempts to asynchronously commit the changes made within this data connection.
+    /// Attempts to asynchronously commit the changes made within this data connection's
+    /// transaction.
     ///
-    /// This is typically the main commit process, executed after `pre_commit_async`.
+    /// This method is typically the main commit process, executed after `pre_commit_async`.
+    ///
+    /// Background work related to the commit can be added to `ag` to execute concurrently with
+    /// other connections.
     ///
     /// # Parameters
     ///
@@ -106,8 +159,13 @@ pub trait DataConn {
 
     /// Performs preparatory actions before the main commit process.
     ///
-    /// This method is called before `commit_async` and can be used for tasks like
-    /// validation or preparing data.
+    /// This method is called before `commit_async` and can be used for tasks like validation or
+    /// preparing data.
+    ///
+    /// This method provides a timing to execute unusual commit processes or update operations not
+    /// supported by transactions beforehand.
+    /// This allows other update operations to be rolled back if the operations in this method
+    /// fail.
     ///
     /// # Parameters
     ///
@@ -124,9 +182,14 @@ pub trait DataConn {
         async { Ok(()) }
     }
 
-    /// Performs actions after the main commit process, only if it succeeds.
+    /// Performs post-commit operations after all participating connections have committed.
     ///
-    /// This can be used for cleanup or post-transaction logging.
+    /// This method is executed after the transaction commit process has successfully completed
+    /// for all [`DataConn`] instances involved in the transaction.
+    ///
+    /// It provides a moment to perform follow-up actions that depend on a successful commit.
+    /// For example, after a database commit, a messaging service's [`DataConn`] might use this
+    /// method to send a "transaction completed" message.
     ///
     /// # Parameters
     ///
@@ -143,13 +206,19 @@ pub trait DataConn {
         async { Ok(()) }
     }
 
-    /// Returns whether the transaction on this connection has been successfully committed.
+    /// Returns whether this data connection has already successfully committed.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the connection has completed its commit; otherwise `false`.
     fn is_committed(&self) -> bool;
 
     /// Rolls back any changes made within this data connection's transaction.
     ///
     /// This method undoes all operations performed since the beginning of the transaction,
     /// restoring the data service to its state before the transaction began.
+    ///
+    /// Background work related to the rollback can be added to `ag`.
     ///
     /// # Parameters
     ///
@@ -163,10 +232,13 @@ pub trait DataConn {
         ag: &mut AsyncGroup,
     ) -> impl Future<Output = errs::Result<()>> + Send;
 
-    /// An asynchronous lifecycle callback invoked when a transaction fails and a rollback is executed.
+    /// Notification hook invoked after a transaction failure and rollback have occurred.
     ///
     /// This allows the data connection to handle post-failure tasks or custom logic
     /// based on the provided transaction failure reports.
+    ///
+    /// This method provides failure reports for all participating connections to allow custom
+    /// failure handling, compensation, or logging. Default implementation does nothing.
     ///
     /// # Parameters
     ///
@@ -182,9 +254,10 @@ pub trait DataConn {
         async {}
     }
 
-    /// Closes the data connection, releasing any associated resources.
+    /// Closes the connection to the external data service.
     ///
-    /// This method is always called at the end of a transaction, regardless of its outcome.
+    /// This method should release any resources held by the data connection, ensuring
+    /// a graceful shutdown of the connection.
     fn close(&mut self);
 }
 
@@ -280,7 +353,7 @@ where
     ///
     /// # Returns
     ///
-    /// * `errs::Result<()>`: `Ok(())` if the setup is successful, or an [`errs::Err`]
+    /// * `errs::Result<()>`: `Ok(())` if the setup is successful, or an `errs::Err`
     ///   if any part of the setup fails.
     async fn setup_async(&mut self, ag: &mut AsyncGroup) -> errs::Result<()>;
 
@@ -298,7 +371,7 @@ where
     /// # Returns
     ///
     /// * `errs::Result<Box<C>>`: `Ok(Box<C>)` containing the newly created [`DataConn`]
-    ///   if successful, or an [`errs::Err`] if the connection could not be created.
+    ///   if successful, or an `errs::Err` if the connection could not be created.
     async fn create_data_conn_async(&mut self) -> errs::Result<Box<C>>;
 }
 
@@ -369,13 +442,19 @@ pub struct StaticDataSrcRegistration {
     pub(crate) factory: fn() -> StaticDataSrcContainer,
 }
 
+/// The central coordinator providing access to data connections during logic execution.
+///
 /// The struct that acts as a central hub for data input/output operations, integrating
 /// multiple *Data* traits (which are passed to business logic functions as their arguments) with
 /// [`DataAcc`] traits (which implement default data I/O methods for external services).
 ///
 /// It facilitates data access by providing [`DataConn`] objects, created from
 /// both global data sources (registered via the global [`uses!`] macro) and
-/// session-local data sources (registered via [`DataHub::uses`] method).
+/// session-local data sources (registered via [`LogicRunner::uses`] method).
+///
+/// # Type Parameters
+///
+/// * `T`: A marker or context type representing the application domain.
 pub struct DataHub<T> {
     run: DataRun,
     _phantom: marker::PhantomData<T>,
@@ -388,6 +467,8 @@ struct DataRun {
     fixed: bool,
 }
 
+/// Trait for accessing data connections and executing business logic against a [`DataHub`].
+///
 /// This trait provides a mechanism to retrieve a mutable reference to a [`DataConn`] object
 /// by name, creating it if necessary.
 ///
@@ -395,6 +476,7 @@ struct DataRun {
 /// the `override_macro` crate) on [`DataHub`], allowing application logic to
 /// interact with data services through an abstract interface.
 pub trait DataAcc {
+    /// The associated domain marker type used by [`DataHub`].
     type D: any::Any;
 
     /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
@@ -415,7 +497,7 @@ pub trait DataAcc {
     /// # Returns
     ///
     /// * `errs::Result<&mut C>`: A mutable reference to the [`DataConn`] instance if successful,
-    ///   or an [`errs::Err`] if the data source is not found, or if the retrieved/created
+    ///   or an `errs::Err` if the data source is not found, or if the retrieved/created
     ///   [`DataConn`] cannot be cast to the specified type `C`.
     #[allow(async_fn_in_trait)]
     fn get_data_conn_async<C: DataConn + 'static>(
@@ -426,6 +508,10 @@ pub trait DataAcc {
     /// Executes a logic function with this data-access context.
     ///
     /// The logic function receives a mutable reference to the underlying [`DataHub`].
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The closure type, implementing `FnMut(&mut DataHub<Self::D>) -> errs::Result<()>`.
     ///
     /// # Parameters
     ///
@@ -455,6 +541,17 @@ pub trait DataAcc {
     async fn start_async(&mut self) -> LogicRun<'_, Self::D>;
 }
 
+/// Builder for chaining and executing non-transactional business logic steps on a [`DataHub`]
+/// asynchronously.
+///
+/// Created via [`DataAcc::start_async`] or [`LogicRunner::start_async`]. Provides methods like
+/// [`run_async`](LogicRun::run_async), [`run_force_async`](LogicRun::run_force_async),
+/// [`run_or_block_async`](LogicRun::run_or_block_async), and [`end`](LogicRun::end).
+///
+/// # Type Parameters
+///
+/// * `'a`: The lifetime of the mutable borrow of [`DataHub`].
+/// * `T`: The domain marker type of the `DataHub`.
 pub struct LogicRun<'a, T> {
     hub: &'a mut DataHub<T>,
     err: LogicErrAt,
@@ -462,12 +559,30 @@ pub struct LogicRun<'a, T> {
     nested: bool,
 }
 
+/// Builder for chaining and executing transactional business logic steps on a [`DataHub`]
+/// asynchronously.
+///
+/// Created via [`LogicRunner::begin_txn_async`]. Provides methods like
+/// [`run_async`](LogicTxn::run_async), [`run_force_async`](LogicTxn::run_force_async),
+/// [`run_or_block_async`](LogicTxn::run_or_block_async), and
+/// [`end_txn_async`](LogicTxn::end_txn_async).
+///
+/// # Type Parameters
+///
+/// * `'a`: The lifetime of the mutable borrow of [`DataHub`].
+/// * `T`: The domain marker type of the `DataHub`.
 pub struct LogicTxn<'a, T> {
     hub: &'a mut DataHub<T>,
     err: LogicErrAt,
     index: usize,
 }
 
+/// Configures data sources and executes business logic and transactions on an asynchronous
+/// [`DataHub`].
+///
+/// # Type Parameters
+///
+/// * `T`: The domain marker type of the underlying [`DataHub`].
 pub struct LogicRunner<T> {
     hub: DataHub<T>,
 }

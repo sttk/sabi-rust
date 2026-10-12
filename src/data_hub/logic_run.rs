@@ -29,6 +29,22 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Executes a logic closure if no previous error has occurred.
+    ///
+    /// If an error was already encountered in a preceding step, this closure is skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub fn run<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -53,6 +69,24 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Executes a logic closure regardless of prior non-blocking errors.
+    ///
+    /// This closure will be executed even if preceding calls to [`run`](LogicRun::run) or
+    /// [`run_force`](LogicRun::run_force) failed, unless a previous call to
+    /// [`run_or_block`](LogicRun::run_or_block) resulted in an error.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -75,6 +109,24 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Executes a logic closure, blocking all subsequent steps if it fails.
+    ///
+    /// If no error has occurred so far, this closure is executed. If it returns an error, all
+    /// subsequent steps (including [`run_force`](LogicRun::run_force)) will be blocked and
+    /// skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -102,6 +154,15 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Finalizes the logic execution chain and releases resources.
+    ///
+    /// This ends the execution run, closes any open data connections, and returns the result of
+    /// the execution.
+    ///
+    /// # Returns
+    ///
+    /// * `errs::Result<()>`: The result of the logic function's execution,
+    ///   or an error if executing `logic_fn` fails.
     pub fn end(self) -> errs::Result<()> {
         if !self.nested {
             self.hub.run.end();

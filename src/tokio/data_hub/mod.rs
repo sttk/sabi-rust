@@ -21,21 +21,24 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, marker, ptr};
 
-/// Represents errors that can occur within the `DataHub`.
+/// Represents the reasons for errors that can occur within [`DataHub`] operations.
 #[derive(Debug)]
 pub enum DataHubError {
-    /// An error indicating that one or more local data sources failed during their setup processes.
+    /// Indicates a failure during the setup process of one or more session-local data sources.
+    ///
+    /// Contains a vector of data source names and their corresponding errors.
     FailToSetupLocalDataSrcs {
-        /// A vector of errors, each containing the name of the data source and the error itself.
+        /// The vector contains errors that occurred in each [`DataSrc`] object.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that no suitable data source was found to create a data connection
-    /// with the specified name and type.
+    /// Indicates that no [`DataSrc`] was found to create a [`DataConn`] for the specified name
+    /// and type.
     NoDataSrcToCreateDataConn {
-        /// The name of the data connection that could not be created.
+        /// The name of the data source that could not be found.
         name: Arc<str>,
-        /// The string representation of the data connection type that was requested.
+
+        /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
     },
 

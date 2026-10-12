@@ -13,33 +13,33 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, mem};
 
-/// Represents errors that can occur during data connection operations.
+/// Represents the reasons for errors that can occur within `DataConn` operations.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
-    /// An error indicating that one or more data connections failed during the pre-commit process.
+    /// Indicates that pre-commit processing failed for one or more data connections.
     FailToPreCommitDataConn {
-        /// A vector of errors, each containing the name of the data connection and the error itself.
+        /// The vector of error entries detailing which connections failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that one or more data connections failed during the commit process.
+    /// Indicates that committing changes failed for one or more data connections.
     FailToCommitDataConn {
-        /// A vector of errors, each containing the name of the data connection and the error itself.
+        /// The vector of error entries detailing which connections failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that one or more data connections failed during the post-commit process.
+    /// Indicates that post-commit processing failed for one or more data connections.
     FailToPostCommitDataConn {
-        /// A vector of errors, each containing the name of the data connection and the error itself.
+        /// The vector of error entries detailing which connections failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that a data connection could not be cast to the target type.
+    /// Indicates that a data connection could not be downcast to the requested concrete type.
     FailToCastDataConn {
         /// The name of the data connection that failed to cast.
         name: Arc<str>,
-        /// The string representation of the target type to which the connection could not be cast.
+        /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
     },
 }

@@ -17,14 +17,19 @@ impl AsyncGroup {
         }
     }
 
-    /// Adds a future to the AsyncGroup to be executed concurrently.
+    /// Adds a future to the group to be executed concurrently.
     ///
-    /// The provided future will be polled along with others in this group.
+    /// The future is pinned and collected, to be executed concurrently when the group
+    /// is awaited.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `Fut`: The type of the future, which must be
+    ///   `Future<Output = errs::Result<()>> + Send + 'static`.
     ///
     /// # Parameters
     ///
-    /// * `future` - The future to add. It must implement `Future<Output = errs::Result<()>>`,
-    ///              `Send`, and have a `'static` lifetime.
+    /// * `future`: The asynchronous task to be executed.
     #[allow(clippy::doc_overindented_list_items)]
     pub fn add<Fut>(&mut self, future: Fut)
     where

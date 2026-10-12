@@ -32,6 +32,10 @@ impl Drop for AutoShutdown {
 
 /// Registers a global data source, making it available throughout the application.
 ///
+/// This function associates a given [`DataSrc`] implementation with a unique name.
+/// This name will later be used to retrieve session-specific [`DataConn`] instances from this
+/// data source.
+///
 /// Global data sources are managed by a singleton and can be set up once for the application's
 /// lifetime.
 /// If `setup_async` or `setup_with_order_async` has already been called, this function will return
@@ -73,6 +77,11 @@ where
 /// Registers a global data source, making it available throughout the application.
 ///
 /// This is the synchronous version of [`uses_async`].
+///
+/// This function associates a given [`DataSrc`] implementation with a unique name.
+/// This name will later be used to retrieve session-specific [`DataConn`] instances from this
+/// data source.
+///
 /// Global data sources are managed by a singleton and can be set up once for the application's
 /// lifetime.
 /// If [`setup_async`] or [`setup_with_order_async`] has already been called, this function will
@@ -128,16 +137,29 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
 
 /// Asynchronously sets up all globally registered data sources.
 ///
-/// This function sets up all data sources that have been registered via `uses_async` function or
-/// `uses!` macro. It collects any setup errors.
+/// This setup typically involves tasks such as creating connection pools,
+/// opening global connections, or performing initial configurations necessary
+/// for creating session-specific connections.
+///
+/// If any data source fails to set up, this function returns an `errs::Err` with
+/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
+/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
+/// all global data sources that were successfully set up are also closed.
+///
+/// If all data source setups are successful, the [`Result::Ok`] which contains an
+/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
+/// data sources when it's dropped.
+/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
+/// automatically cleaned up when the return value goes out of scope.
+///
+/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
+/// variable using `let _ = ...`.
+/// If you do, the inner object is dropped immediately at that point.
 ///
 /// # Returns
 ///
-/// A `Result` which is `Ok` containing an [`AutoShutdown`] guard if all data sources
-/// are set up successfully. If setup fails for any data source, it returns an `Err`
-/// with [`DataSrcError::FailToSetupGlobalDataSrcs`]. If called when data sources are
-/// already set up or in transition, it returns [`DataSrcError::AlreadySetupGlobalDataSrcs`]
-/// or [`DataSrcError::DuringSetupGlobalDataSrcs`] respectively.
+/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
+///   set up successfully, or an `errs::Err` if any setup fails.
 pub async fn setup_async() -> errs::Result<AutoShutdown> {
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_for_closure = Arc::clone(&errors);
@@ -177,17 +199,33 @@ pub async fn setup_async() -> errs::Result<AutoShutdown> {
 /// are set up. Data sources not specified in `names` will be set up after the
 /// specified ones, in an undefined order.
 ///
+/// This setup typically involves tasks such as creating connection pools,
+/// opening global connections, or performing initial configurations necessary
+/// for creating session-specific connections.
+///
+/// If any data source fails to set up, this function returns an `errs::Err` with
+/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
+/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
+/// all global data sources that were successfully set up are also closed.
+///
+/// If all data source setups are successful, the [`Result::Ok`] which contains an
+/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
+/// data sources when it's dropped.
+/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
+/// automatically cleaned up when the return value goes out of scope.
+///
+/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
+/// variable using `let _ = ...`.
+/// If you do, the inner object is dropped immediately at that point.
+///
 /// # Parameters
 ///
 /// * `names` - An array of string slices specifying the desired setup order by data source name.
 ///
 /// # Returns
 ///
-/// A `Result` which is `Ok` containing an [`AutoShutdown`] guard if all data sources
-/// are set up successfully. If setup fails for any data source, it returns an `Err`
-/// with [`DataSrcError::FailToSetupGlobalDataSrcs`]. If called when data sources are
-/// already set up or in transition, it returns [`DataSrcError::AlreadySetupGlobalDataSrcs`]
-/// or [`DataSrcError::DuringSetupGlobalDataSrcs`] respectively.
+/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
+///   set up successfully, or an `errs::Err` if any setup fails.
 pub async fn setup_with_order_async(names: &'static [&str]) -> errs::Result<AutoShutdown> {
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_for_closure = Arc::clone(&errors);
