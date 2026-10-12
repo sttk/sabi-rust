@@ -106,7 +106,7 @@ pub use crate::_logic as logic;
 #[doc(inline)]
 pub use crate::_uses_for_async as uses;
 
-/// Manages a group of concurrent tasks executed synchronously across worker threads.
+/// Manages a group of concurrent tasks executed asynchronously.
 ///
 /// The structure that allows for the concurrent execution of multiple asynchronous tasks
 /// and waits for all of them to complete.
