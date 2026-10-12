@@ -109,10 +109,9 @@ pub use crate::_uses_for_async as uses;
 /// Manages a group of concurrent tasks executed synchronously across worker threads.
 ///
 /// The structure that allows for the concurrent execution of multiple asynchronous tasks
-/// using green-thread and waits for all of them to complete.
+/// and waits for all of them to complete.
 ///
-/// Functions are added using the `add` method and are then run concurrently in separate
-/// green-threads.
+/// Functions are added using the `add` method and are then run concurrently.
 /// The `AsyncGroup` ensures that all tasks finish before proceeding,
 /// and can collect any errors that occur.
 #[allow(clippy::type_complexity)]
