@@ -22,49 +22,56 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, mem, ptr};
 
-/// Represents errors that can occur during data source operations.
+/// Represents the reasons for errors that can occur within [`DataSrc`] operations.
 #[derive(Debug)]
 pub enum DataSrcError {
-    /// An error indicating a failure to register a global data source.
+    /// Indicates a failure to register a global data source.
+    ///
     /// This can happen if the global data source manager is in an invalid state.
     FailToRegisterGlobalDataSrc {
         /// The name of the data source that failed to register.
         name: Arc<str>,
     },
 
-    /// An error indicating that one or more global data sources failed during their setup process.
+    /// Indicates a failure during the setup process of one or more global data sources.
+    ///
+    /// Contains a vector of data source names and their corresponding errors.
     FailToSetupGlobalDataSrcs {
-        /// A vector of errors, each containing the name of the data source and the error itself.
+        /// The vector contains errors that occurred in each [`DataSrc`] object.
         errors: Vec<ErrEntry>,
     },
 
-    /// An error indicating that a global data source setup is currently in progress.
+    /// Indicates that a setup process for global data sources is currently ongoing.
     DuringSetupGlobalDataSrcs,
 
-    /// An error indicating that global data sources have already been set up.
+    /// Indicates that global data sources have already been set up.
     AlreadySetupGlobalDataSrcs,
 
-    /// An error indicating that a data connection could not be cast to the target type.
+    /// Indicates a failure to cast a retrieved [`DataConn`] to the expected type.
     FailToCastDataConn {
-        /// The name of the data source that failed to provide the correct connection type.
+        /// The name of the data connection that failed to cast.
         name: Arc<str>,
-        /// The string representation of the target data connection type that was requested.
+
+        /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
     },
 
-    /// An error indicating that a data connection could not be created by its data source.
+    /// Indicates a failure to create a [`DataConn`] object from its [`DataSrc`].
     FailToCreateDataConn {
-        /// The name of the data source that failed to create a data connection.
+        /// The name of the data source that failed to be created.
         name: Arc<str>,
-        /// The string representation of the data connection type that was requested.
+
+        /// The type name of the [`DataConn`] that failed to be created.
         data_conn_type: &'static str,
     },
 
-    /// An error indicating that no data source was found for the requested data connection.
+    /// Indicates that no [`DataSrc`] was found to create a [`DataConn`] for the specified name
+    /// and type.
     NoDataSrcToCreateDataConn {
-        /// The name of the data source that was not found.
+        /// The name of the data source that could not be found.
         name: Arc<str>,
-        /// The string representation of the data connection type that was requested.
+
+        /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
     },
 }

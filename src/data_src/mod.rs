@@ -18,10 +18,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, mem, ptr};
 
-/// The enum type representing the reasons for errors that can occur within [`DataSrc`] operations.
+/// Represents the reasons for errors that can occur within [`DataSrc`] operations.
 #[derive(Debug)]
 pub enum DataSrcError {
     /// Indicates a failure to register a global data source.
+    ///
     /// This can happen if the global data source manager is in an invalid state.
     FailToRegisterGlobalDataSrc {
         /// The name of the data source that failed to register.
@@ -29,6 +30,7 @@ pub enum DataSrcError {
     },
 
     /// Indicates a failure during the setup process of one or more global data sources.
+    ///
     /// Contains a vector of data source names and their corresponding errors.
     FailToSetupGlobalDataSrcs {
         /// The vector contains errors that occurred in each [`DataSrc`] object.
@@ -45,6 +47,7 @@ pub enum DataSrcError {
     FailToCastDataConn {
         /// The name of the data connection that failed to cast.
         name: Arc<str>,
+
         /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
     },
@@ -53,6 +56,7 @@ pub enum DataSrcError {
     FailToCreateDataConn {
         /// The name of the data source that failed to be created.
         name: Arc<str>,
+
         /// The type name of the [`DataConn`] that failed to be created.
         data_conn_type: &'static str,
     },
@@ -62,6 +66,7 @@ pub enum DataSrcError {
     NoDataSrcToCreateDataConn {
         /// The name of the data source that could not be found.
         name: Arc<str>,
+
         /// The type name of the [`DataConn`] that was requested.
         data_conn_type: &'static str,
     },

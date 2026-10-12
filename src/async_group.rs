@@ -7,11 +7,12 @@ use crate::{AsyncGroup, ErrEntry};
 use std::sync::Arc;
 use std::{mem, thread};
 
-/// The enum type representing the reasons for errors that can occur within an [`AsyncGroup`].
+/// Represents the reasons for errors that can occur within an [`AsyncGroup`].
 #[derive(Debug)]
 pub enum AsyncGroupError {
-    /// Indicates that a spawned thread by [`AsyncGroup`] has panicked.
-    /// Contains the panic message if available.
+    /// Indicates that a spawned worker thread panicked during execution.
+    ///
+    /// The string payload contains the panic message or a description of the panic if available.
     ThreadPanicked(String),
 }
 

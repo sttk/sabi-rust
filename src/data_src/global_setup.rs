@@ -36,12 +36,13 @@ impl Drop for AutoShutdown {
 /// Registers a global data source dynamically at runtime.
 ///
 /// This function associates a given [`DataSrc`] implementation with a unique name.
-/// This name will later be used to retrieve session-specific [`DataConn`] instances
-/// from this data source.
+/// This name will later be used to retrieve session-specific [`DataConn`] instances from this
+/// data source.
 ///
 /// Global data sources added via this function can be set up via [`setup`] or [`setup_with_order`].
 ///
-/// If `setup` or `setup_with_order` has already been called, this function will return an `errs::Err`.
+/// If `setup` or `setup_with_order` has already been called, this function will return an
+/// `errs::Err`.
 ///
 /// # Parameters
 ///
@@ -160,7 +161,8 @@ pub fn setup() -> errs::Result<AutoShutdown> {
 ///
 /// # Parameters
 ///
-/// * `names`: A slice of `&str` representing the names of data sources to set up in a specific order.
+/// * `names`: A slice of `&str` representing the names of data sources to set up in a specific
+///   order.
 ///
 /// # Returns
 ///

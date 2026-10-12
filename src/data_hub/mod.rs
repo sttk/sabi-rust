@@ -189,6 +189,11 @@ impl<T: 'static> DataAcc for DataHub<T> {
 }
 
 impl<T: 'static> DataHub<T> {
+    /// Creates a new `DataHub` instance with default commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub`] initialized with available global data sources.
     #[allow(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
@@ -198,6 +203,19 @@ impl<T: 'static> DataHub<T> {
         }
     }
 
+    /// Creates a new `DataHub` instance configured with an explicit commit order for data
+    /// connections.
+    ///
+    /// When a transaction commits, data connections with names listed in `names` are committed
+    /// in the specified sequence. Connections not listed are committed after them.
+    ///
+    /// # Parameters
+    ///
+    /// * `names`: A slice of data connection names defining the commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub`] configured with the specified commit order.
     #[inline]
     pub fn with_commit_order(names: &[&str]) -> Self {
         Self {
