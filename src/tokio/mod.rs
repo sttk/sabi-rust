@@ -5,7 +5,7 @@
 //! Provides Tokio-based asynchronous APIs for the sabi framework.
 //!
 //! It provides asynchronous versions of the core data-access components,
-//! including [`DataSrc`], [`DataConn`], [`DataAcc`], [`DataHub`], and etc.
+//! including [`DataSrc`], [`DataConn`], [`DataAcc`], and [`DataHub`].
 //!
 //! [`LogicRunner`] wraps a [`DataHub`] and provides methods for configuring data sources and
 //! executing asynchronous business logic.
