@@ -27,6 +27,21 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a transactional logic closure asynchronously if no previous error has occurred.
+    ///
+    /// If an error was already encountered in a preceding step, this closure is skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the asynchronous closure returning a pinned future.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The transactional business logic closure to execute asynchronously.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub async fn run_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(
@@ -53,6 +68,25 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a transactional logic closure asynchronously regardless of prior non-blocking
+    /// errors.
+    ///
+    /// This closure will be executed even if preceding calls to
+    /// [`run_async`](LogicTxn::run_async) or [`run_force_async`](LogicTxn::run_force_async)
+    /// failed, unless a previous call to [`run_or_block_async`](LogicTxn::run_or_block_async)
+    /// resulted in an error.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the asynchronous closure returning a pinned future.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The transactional business logic closure to execute asynchronously.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub async fn run_force_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(
@@ -77,6 +111,24 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a transactional logic closure asynchronously, blocking all subsequent steps if it
+    /// fails.
+    ///
+    /// If no error has occurred so far, this closure is executed. If it returns an error, all
+    /// subsequent steps (including [`run_force_async`](LogicTxn::run_force_async)) will be
+    /// blocked and skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the asynchronous closure returning a pinned future.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The transactional business logic closure to execute asynchronously.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub async fn run_or_block_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(
@@ -106,6 +158,29 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Concludes the transaction asynchronously, committing participating data connections or
+    /// rolling them back.
+    ///
+    /// If all executed logic closures succeeded without error, this commits changes on all
+    /// participating data connections through their
+    /// [`pre_commit_async`](crate::tokio::DataConn::pre_commit_async),
+    /// [`commit_async`](crate::tokio::DataConn::commit_async), and
+    /// [`post_commit_async`](crate::tokio::DataConn::post_commit_async) lifecycle methods.
+    ///
+    /// If any error occurred during logic execution or commit phases, all uncommitted
+    /// connections are rolled back via
+    /// [`rollback_async`](crate::tokio::DataConn::rollback_async) and notified via
+    /// [`on_txn_failure_async`](crate::tokio::DataConn::on_txn_failure_async).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if all logic and commit phases succeeded without error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * Any business logic closure returned an error.
+    /// * Pre-commit, commit, or post-commit processing on any data connection failed.
     pub async fn end_txn_async(self) -> errs::Result<()> {
         match self.err {
             LogicErrAt::Begin { err } => {

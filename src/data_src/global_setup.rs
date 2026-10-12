@@ -32,6 +32,25 @@ impl Drop for AutoShutdown {
     }
 }
 
+/// Registers a data source into the global registry.
+///
+/// This registers a [`DataSrc`] with a unique name so that it can later be initialized via
+/// [`setup`] or [`setup_with_order`], and accessed globally by [`DataHub`](crate::DataHub).
+///
+/// # Type Parameters
+///
+/// * `S`: The type of the data source implementing [`DataSrc<C>`].
+/// * `C`: The type of the data connection implementing [`DataConn`].
+///
+/// # Parameters
+///
+/// * `name`: The unique identifier name for the data source.
+/// * `ds`: The data source instance to register.
+///
+/// # Errors
+///
+/// Returns an error if the global data source registry has already transitioned past the
+/// registration phase (for example, if setup has already been called).
 pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C>,
@@ -63,6 +82,23 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
     dsm.prepend(static_vec);
 }
 
+/// Initializes all globally registered data sources concurrently.
+///
+/// This transitions the global data source registry to the active read phase and runs the
+/// setup logic for all registered data sources concurrently using
+/// [`AsyncGroup`](crate::AsyncGroup).
+///
+/// # Returns
+///
+/// Returns an [`AutoShutdown`] instance that will automatically close and clean up all global
+/// data sources when dropped.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The data sources have already been initialized.
+/// * Initialization is currently in progress.
+/// * Any data source fails during its [`setup`](crate::DataSrc::setup) execution.
 pub fn setup() -> errs::Result<AutoShutdown> {
     let mut errors = Vec::new();
     let em = &mut errors;
@@ -86,6 +122,26 @@ pub fn setup() -> errs::Result<AutoShutdown> {
     }
 }
 
+/// Initializes all globally registered data sources, executing setup in the specified order.
+///
+/// Data sources whose names are present in `names` are set up in the specified sequence. Any
+/// registered data sources not listed in `names` are set up subsequently.
+///
+/// # Parameters
+///
+/// * `names`: A slice of data source names defining the desired order of setup.
+///
+/// # Returns
+///
+/// Returns an [`AutoShutdown`] instance that will automatically close and clean up all global
+/// data sources when dropped.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The data sources have already been initialized.
+/// * Initialization is currently in progress.
+/// * Any data source fails during its [`setup`](crate::DataSrc::setup) execution.
 pub fn setup_with_order(names: &[&str]) -> errs::Result<AutoShutdown> {
     let mut errors = Vec::new();
     let em = &mut errors;
@@ -109,6 +165,21 @@ pub fn setup_with_order(names: &[&str]) -> errs::Result<AutoShutdown> {
     }
 }
 
+/// Creates a container for a statically registered data source.
+///
+/// # Type Parameters
+///
+/// * `S`: The type of the data source implementing [`DataSrc<C>`].
+/// * `C`: The type of the data connection implementing [`DataConn`].
+///
+/// # Parameters
+///
+/// * `name`: The name of the data source.
+/// * `data_src`: The data source instance.
+///
+/// # Returns
+///
+/// A [`StaticDataSrcContainer`] holding the data source.
 #[doc(hidden)]
 pub fn create_static_data_src_container<S, C>(
     name: &'static str,
@@ -126,6 +197,11 @@ where
 }
 
 impl StaticDataSrcRegistration {
+    /// Creates a new static data source registration entry.
+    ///
+    /// # Parameters
+    ///
+    /// * `factory`: A function pointer that produces a [`StaticDataSrcContainer`].
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub const fn new(factory: fn() -> StaticDataSrcContainer) -> Self {
         Self { factory }
@@ -133,6 +209,15 @@ impl StaticDataSrcRegistration {
 }
 inventory::collect!(StaticDataSrcRegistration);
 
+/// Registers a global data source statically at compile/link time.
+///
+/// This macro registers a static data source factory that is collected and initialized during
+/// [`setup`] or [`setup_with_order`].
+///
+/// # Parameters
+///
+/// * `$name`: A string literal representing the data source name.
+/// * `$data_src`: An expression evaluating to the data source instance.
 #[macro_export]
 macro_rules! uses {
     ($name:tt, $data_src:expr) => {

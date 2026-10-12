@@ -11,23 +11,34 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, mem};
 
+/// Represents errors that can occur during data connection operations, transactions,
+/// or type casting.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
+    /// Indicates that pre-commit processing failed for one or more data connections.
     FailToPreCommitDataConn {
+        /// The list of error entries detailing which connections failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
+    /// Indicates that committing changes failed for one or more data connections.
     FailToCommitDataConn {
+        /// The list of error entries detailing which connections failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
+    /// Indicates that post-commit processing failed for one or more data connections.
     FailToPostCommitDataConn {
+        /// The list of error entries detailing which connections failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
+    /// Indicates that a data connection could not be downcast to the requested concrete type.
     FailToCastDataConn {
+        /// The registered name of the data connection.
         name: Arc<str>,
+        /// The expected target type name.
         target_type: &'static str,
     },
 }

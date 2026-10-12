@@ -16,6 +16,13 @@ impl TxnFailureReport {
         }
     }
 
+    /// Returns whether this data connection was an identified cause of the transaction
+    /// failure.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the connection failure cause is not [`TxnFailureCause::NoneByCommitted`] and
+    /// not [`TxnFailureCause::NoneByUncommitted`]; otherwise `false`.
     pub fn is_cause_of_failure(&self) -> bool {
         !matches!(
             self.cause,
@@ -23,6 +30,15 @@ impl TxnFailureReport {
         )
     }
 
+    /// Determines the recommended recovery strategy for attempting to commit the transaction.
+    ///
+    /// This evaluates the connection's [`cause`](TxnFailureReport::cause) and
+    /// [`rollback`](TxnFailureReport::rollback) state to suggest an appropriate recovery action
+    /// when deciding whether or how to commit.
+    ///
+    /// # Returns
+    ///
+    /// A [`TxnFailureRecovery`] variant specifying the suggested recovery action.
     pub fn recovery_for_commit(&self) -> TxnFailureRecovery {
         use TxnFailureCause::*;
         use TxnFailureRecovery::*;
@@ -51,6 +67,15 @@ impl TxnFailureReport {
         }
     }
 
+    /// Determines the recommended recovery strategy for rolling back the transaction.
+    ///
+    /// This evaluates the connection's [`cause`](TxnFailureReport::cause) and
+    /// [`rollback`](TxnFailureReport::rollback) state to suggest an appropriate recovery action
+    /// when rolling back.
+    ///
+    /// # Returns
+    ///
+    /// A [`TxnFailureRecovery`] variant specifying the suggested recovery action.
     pub fn recovery_for_rollback(&self) -> TxnFailureRecovery {
         use TxnFailureCause::*;
         use TxnFailureRecovery::*;

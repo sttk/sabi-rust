@@ -30,6 +30,26 @@ impl Drop for AutoShutdown {
     }
 }
 
+/// Registers an asynchronous data source into the global registry asynchronously.
+///
+/// This registers an asynchronous [`DataSrc`] with a unique name so that it can later be
+/// initialized via [`setup_async`] or [`setup_with_order_async`], and accessed globally by
+/// [`DataHub`](crate::tokio::DataHub).
+///
+/// # Type Parameters
+///
+/// * `S`: The type of the data source implementing [`DataSrc<C>`].
+/// * `C`: The type of the data connection implementing [`DataConn`].
+///
+/// # Parameters
+///
+/// * `name`: The unique identifier name for the data source.
+/// * `ds`: The data source instance to register.
+///
+/// # Errors
+///
+/// Returns an error if the global data source registry has already transitioned past the
+/// registration phase (for example, if setup has already been called).
 pub async fn uses_async<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C> + 'static,
@@ -47,6 +67,26 @@ where
     }
 }
 
+/// Registers an asynchronous data source into the global registry synchronously.
+///
+/// This registers an asynchronous [`DataSrc`] with a unique name if the global registry lock
+/// is immediately available without waiting. It can later be initialized via [`setup_async`] or
+/// [`setup_with_order_async`], and accessed globally by [`DataHub`](crate::tokio::DataHub).
+///
+/// # Type Parameters
+///
+/// * `S`: The type of the data source implementing [`DataSrc<C>`].
+/// * `C`: The type of the data connection implementing [`DataConn`].
+///
+/// # Parameters
+///
+/// * `name`: The unique identifier name for the data source.
+/// * `ds`: The data source instance to register.
+///
+/// # Errors
+///
+/// Returns an error if the registry lock cannot be acquired immediately or if the global data
+/// source registry has already transitioned past the registration phase.
 pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C> + 'static,
@@ -78,6 +118,24 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
     dsm.prepend(static_vec);
 }
 
+/// Initializes all globally registered data sources asynchronously and concurrently.
+///
+/// This transitions the global data source registry to the active read phase and runs the
+/// setup logic for all registered data sources concurrently using
+/// [`AsyncGroup`](crate::tokio::AsyncGroup).
+///
+/// # Returns
+///
+/// Returns an [`AutoShutdown`] instance that will automatically close and clean up all global
+/// data sources when dropped.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The data sources have already been initialized.
+/// * Initialization is currently in progress.
+/// * Any data source fails during its
+///   [`setup_async`](crate::tokio::DataSrc::setup_async) execution.
 pub async fn setup_async() -> errs::Result<AutoShutdown> {
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_for_closure = Arc::clone(&errors);
@@ -111,6 +169,27 @@ pub async fn setup_async() -> errs::Result<AutoShutdown> {
     }
 }
 
+/// Initializes all globally registered data sources asynchronously in the specified order.
+///
+/// Data sources whose names are present in `names` are set up in the specified sequence. Any
+/// registered data sources not listed in `names` are set up subsequently.
+///
+/// # Parameters
+///
+/// * `names`: A static slice of data source names defining the desired order of setup.
+///
+/// # Returns
+///
+/// Returns an [`AutoShutdown`] instance that will automatically close and clean up all global
+/// data sources when dropped.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The data sources have already been initialized.
+/// * Initialization is currently in progress.
+/// * Any data source fails during its
+///   [`setup_async`](crate::tokio::DataSrc::setup_async) execution.
 pub async fn setup_with_order_async(names: &'static [&str]) -> errs::Result<AutoShutdown> {
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_for_closure = Arc::clone(&errors);
@@ -163,6 +242,21 @@ pub(crate) fn copy_global_data_srcs_to_map(index_map: &mut HashMap<Arc<str>, (bo
     }
 }
 
+/// Creates a container for a statically registered asynchronous data source.
+///
+/// # Type Parameters
+///
+/// * `S`: The type of the data source implementing [`DataSrc<C>`].
+/// * `C`: The type of the data connection implementing [`DataConn`].
+///
+/// # Parameters
+///
+/// * `name`: The name of the data source.
+/// * `data_src`: The data source instance.
+///
+/// # Returns
+///
+/// A [`StaticDataSrcContainer`] holding the data source.
 #[doc(hidden)]
 pub fn create_static_data_src_container<S, C>(
     name: &'static str,
@@ -180,6 +274,11 @@ where
 }
 
 impl StaticDataSrcRegistration {
+    /// Creates a new static data source registration entry.
+    ///
+    /// # Parameters
+    ///
+    /// * `factory`: A function pointer that produces a [`StaticDataSrcContainer`].
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub const fn new(factory: fn() -> StaticDataSrcContainer) -> Self {
         Self { factory }
@@ -187,6 +286,15 @@ impl StaticDataSrcRegistration {
 }
 inventory::collect!(StaticDataSrcRegistration);
 
+/// Registers a global asynchronous data source statically at compile/link time.
+///
+/// This macro registers a static data source factory that is collected and initialized during
+/// [`setup_async`] or [`setup_with_order_async`].
+///
+/// # Parameters
+///
+/// * `$name`: A string literal representing the data source name.
+/// * `$data_src`: An expression evaluating to the data source instance.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _uses_for_async {

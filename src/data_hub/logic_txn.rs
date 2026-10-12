@@ -25,6 +25,22 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a transactional logic closure if no previous error has occurred.
+    ///
+    /// If an error was already encountered in a preceding step, this closure is skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The transactional business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub fn run<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -49,6 +65,24 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a transactional logic closure regardless of prior non-blocking errors.
+    ///
+    /// This closure will be executed even if preceding calls to [`run`](LogicTxn::run) or
+    /// [`run_force`](LogicTxn::run_force) failed, unless a previous call to
+    /// [`run_or_block`](LogicTxn::run_or_block) resulted in an error.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The transactional business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -71,6 +105,24 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a transactional logic closure, blocking all subsequent steps if it fails.
+    ///
+    /// If no error has occurred so far, this closure is executed. If it returns an error, all
+    /// subsequent steps (including [`run_force`](LogicTxn::run_force)) will be blocked and
+    /// skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The transactional business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -98,6 +150,28 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Concludes the transaction, committing participating data connections or rolling them
+    /// back.
+    ///
+    /// If all executed logic closures succeeded without error, this commits changes on all
+    /// participating data connections through their
+    /// [`pre_commit`](crate::DataConn::pre_commit),
+    /// [`commit`](crate::DataConn::commit), and
+    /// [`post_commit`](crate::DataConn::post_commit) lifecycle methods.
+    ///
+    /// If any error occurred during logic execution or commit phases, all uncommitted
+    /// connections are rolled back via [`rollback`](crate::DataConn::rollback) and notified via
+    /// [`on_txn_failure`](crate::DataConn::on_txn_failure).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if all logic and commit phases succeeded without error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * Any business logic closure returned an error.
+    /// * Pre-commit, commit, or post-commit processing on any data connection failed.
     pub fn end_txn(self) -> errs::Result<()> {
         match self.err {
             LogicErrAt::Begin { err } => {

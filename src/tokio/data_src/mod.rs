@@ -22,32 +22,52 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, mem, ptr};
 
+/// Represents errors that can occur during asynchronous data source registration, setup, or
+/// connection creation.
 #[derive(Debug)]
 pub enum DataSrcError {
+    /// Indicates that a global data source failed to register, typically because the global
+    /// registry is already finalized or in use.
     FailToRegisterGlobalDataSrc {
+        /// The name of the data source that failed to register.
         name: Arc<str>,
     },
 
+    /// Indicates that one or more global data sources failed during their asynchronous setup
+    /// phase.
     FailToSetupGlobalDataSrcs {
+        /// The list of error entries detailing which data sources failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
+    /// Indicates that global data sources are currently in the middle of being set up.
     DuringSetupGlobalDataSrcs,
 
+    /// Indicates that global data sources have already been set up.
     AlreadySetupGlobalDataSrcs,
 
+    /// Indicates that a connection produced by a data source could not be cast to the requested
+    /// data connection type.
     FailToCastDataConn {
+        /// The name of the data connection.
         name: Arc<str>,
+        /// The expected target type name.
         target_type: &'static str,
     },
 
+    /// Indicates that the data source encountered an error when creating a data connection.
     FailToCreateDataConn {
+        /// The name of the data connection.
         name: Arc<str>,
+        /// The requested data connection type name.
         data_conn_type: &'static str,
     },
 
+    /// Indicates that no data source with the specified name was found to create the connection.
     NotFoundDataSrcToCreateDataConn {
+        /// The requested data connection name.
         name: Arc<str>,
+        /// The requested data connection type name.
         data_conn_type: &'static str,
     },
 }

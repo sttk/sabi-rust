@@ -7,8 +7,12 @@ use crate::{AsyncGroup, ErrEntry};
 use std::sync::Arc;
 use std::{mem, thread};
 
+/// Represents errors that can occur when executing tasks in an [`AsyncGroup`].
 #[derive(Debug)]
 pub enum AsyncGroupError {
+    /// Indicates that a spawned worker thread panicked during execution.
+    ///
+    /// The string payload contains the panic message or a description of the panic.
     ThreadPanicked(String),
 }
 
@@ -21,6 +25,19 @@ impl AsyncGroup {
         }
     }
 
+    /// Adds a task (a closure) to the group to be executed concurrently.
+    ///
+    /// This provided closure is executed in a new `std::thread` concurrently
+    /// with other added tasks.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnOnce() -> errs::Result<()> + Send + 'static`.
+    ///
+    /// # Parameters
+    ///
+    /// * `f`: The closure to be executed in a separate thread.
     pub fn add<F>(&mut self, f: F)
     where
         F: FnOnce() -> errs::Result<()> + Send + 'static,

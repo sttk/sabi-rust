@@ -7,11 +7,34 @@ use crate::{DataAcc, DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn
 use std::sync::Arc;
 
 impl<T: 'static> LogicRunner<T> {
+    /// Creates a new `LogicRunner` with the given [`DataHub`].
+    ///
+    /// # Parameters
+    ///
+    /// * `hub`: The `DataHub` instance to wrap.
+    ///
+    /// # Returns
+    ///
+    /// A new [`LogicRunner`].
     #[inline]
     pub fn new(hub: DataHub<T>) -> Self {
         Self { hub }
     }
 
+    /// Registers a local data source for this runner.
+    ///
+    /// Local data sources registered here take precedence over global data sources when
+    /// retrieving connections with the same name.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `S`: The type of the data source implementing [`DataSrc<C>`].
+    /// * `C`: The type of the data connection implementing [`DataConn`].
+    ///
+    /// # Parameters
+    ///
+    /// * `name`: The name identifier for the data source.
+    /// * `ds`: The data source instance to register.
     #[inline]
     pub fn uses<S, C>(&mut self, name: impl Into<Arc<str>>, ds: S)
     where
@@ -21,11 +44,37 @@ impl<T: 'static> LogicRunner<T> {
         self.hub.run.uses(name, ds);
     }
 
+    /// Deregisters a local or previously registered data source by name.
+    ///
+    /// # Parameters
+    ///
+    /// * `name`: The name of the data source to deregister.
     #[inline]
     pub fn disuses(&mut self, name: impl AsRef<str>) {
         self.hub.run.disuses(name);
     }
 
+    /// Executes a single business logic closure non-transactionally.
+    ///
+    /// Sets up local data sources, invokes the closure with a mutable reference to [`DataHub`],
+    /// and closes all participating data connections afterwards.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if execution succeeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if local data source setup fails or if the closure returns an error.
     #[inline]
     pub fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
@@ -34,11 +83,39 @@ impl<T: 'static> LogicRunner<T> {
         self.hub.run(logic_fn)
     }
 
+    /// Starts a builder chain for executing non-transactional business logic steps.
+    ///
+    /// # Returns
+    ///
+    /// A [`LogicRun`] builder to configure and execute sequential logic steps.
     #[inline]
     pub fn start(&mut self) -> LogicRun<'_, T> {
         self.hub.start()
     }
 
+    /// Executes a single business logic closure within a transaction.
+    ///
+    /// Sets up local data sources, runs the closure, and automatically commits all participating
+    /// data connections if the closure succeeds. If the closure or commit phase fails, all
+    /// connections are rolled back.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the closure, which must be
+    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The transactional business logic closure to execute.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the logic execution and all commit phases succeeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if local data source setup fails, if the closure returns an error, or if
+    /// any data connection fails to commit.
     #[inline]
     pub fn txn<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
@@ -47,6 +124,12 @@ impl<T: 'static> LogicRunner<T> {
         self.hub._txn(logic_fn)
     }
 
+    /// Starts a builder chain for executing transactional business logic steps.
+    ///
+    /// # Returns
+    ///
+    /// A [`LogicTxn`] builder to configure, execute, and commit or roll back sequential logic
+    /// steps.
     #[inline]
     pub fn begin_txn(&mut self) -> LogicTxn<'_, T> {
         self.hub._begin_txn()

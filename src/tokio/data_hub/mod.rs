@@ -21,18 +21,28 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, marker, ptr};
 
+/// Represents errors that can occur during [`DataHub`](crate::tokio::DataHub) setup, connection
+/// retrieval, or logic execution.
 #[derive(Debug)]
 pub enum DataHubError {
+    /// Indicates that setting up local data sources failed.
     FailToSetupLocalDataSrcs {
+        /// The list of error entries detailing which local data sources failed and their errors.
         errors: Vec<ErrEntry>,
     },
 
+    /// Indicates that no data source with the specified name was found when attempting to create
+    /// a data connection.
     NoDataSrcToCreateDataConn {
+        /// The requested data connection name.
         name: Arc<str>,
+        /// The requested data connection type name.
         data_conn_type: &'static str,
     },
 
+    /// Indicates that an error occurred while executing a logic function.
     FailToRunLogic {
+        /// The list of error entries detailing which logic executions failed and their errors.
         errors: Vec<ErrEntry>,
     },
 }
@@ -189,6 +199,11 @@ impl<T: 'static + Send> DataAcc for DataHub<T> {
 }
 
 impl<T: 'static + Send> DataHub<T> {
+    /// Creates a new asynchronous `DataHub` instance with default commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub`] initialized with available global data sources.
     #[allow(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
@@ -198,6 +213,19 @@ impl<T: 'static + Send> DataHub<T> {
         }
     }
 
+    /// Creates a new asynchronous `DataHub` instance configured with an explicit commit order for
+    /// data connections.
+    ///
+    /// When a transaction commits, data connections with names listed in `names` are committed
+    /// in the specified sequence. Connections not listed are committed after them.
+    ///
+    /// # Parameters
+    ///
+    /// * `names`: A slice of data connection names defining the commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub`] configured with the specified commit order.
     #[inline]
     pub fn with_commit_order(names: &[&str]) -> Self {
         Self {

@@ -31,6 +31,21 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Executes an asynchronous logic closure if no previous error has occurred.
+    ///
+    /// If an error was already encountered in a preceding step, this closure is skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the asynchronous closure returning a pinned future.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The business logic closure to execute asynchronously.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub async fn run_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(
@@ -57,6 +72,24 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Executes an asynchronous logic closure regardless of prior non-blocking errors.
+    ///
+    /// This closure will be executed even if preceding calls to
+    /// [`run_async`](LogicRun::run_async) or [`run_force_async`](LogicRun::run_force_async)
+    /// failed, unless a previous call to [`run_or_block_async`](LogicRun::run_or_block_async)
+    /// resulted in an error.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the asynchronous closure returning a pinned future.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The business logic closure to execute asynchronously.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub async fn run_force_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(
@@ -81,6 +114,23 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Executes an asynchronous logic closure, blocking all subsequent steps if it fails.
+    ///
+    /// If no error has occurred so far, this closure is executed. If it returns an error, all
+    /// subsequent steps (including [`run_force_async`](LogicRun::run_force_async)) will be
+    /// blocked and skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F`: The type of the asynchronous closure returning a pinned future.
+    ///
+    /// # Parameters
+    ///
+    /// * `logic_fn`: The business logic closure to execute asynchronously.
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     pub async fn run_or_block_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(
@@ -110,6 +160,19 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    /// Finalizes the logic execution chain and releases resources.
+    ///
+    /// This ends the execution run, closes any open data connections, and returns the result of
+    /// the execution.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if all executed logic closures succeeded without error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any executed logic closure returned an error, or if local data source
+    /// setup failed.
     pub fn end(self) -> errs::Result<()> {
         if !self.nested {
             self.hub.run.end();
