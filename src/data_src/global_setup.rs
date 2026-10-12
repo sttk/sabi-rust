@@ -2,11 +2,9 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use super::DataSrcError;
-
 use crate::{
-    AutoShutdown, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcManager,
-    SendSyncNonNull, StaticDataSrcContainer, StaticDataSrcRegistration,
+    AutoShutdown, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcError,
+    DataSrcManager, SendSyncNonNull, StaticDataSrcContainer, StaticDataSrcRegistration,
 };
 
 #[allow(unused)] // for rustdoc
