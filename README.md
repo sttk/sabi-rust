@@ -141,11 +141,14 @@ use override_macro::override_with;
 use crate::logic_layer::MyData;
 use crate::data_access_layer::{GettingDataAcc, SettingDataAcc};
 
-impl GettingDataAcc for DataHub {}
-impl SettingDataAcc for DataHub {}
+// A type used as a generic parameter to define distinct DataHub by data access group.
+struct MyDataScope;
+
+impl GettingDataAcc for DataHub<MyDataScope> {}
+impl SettingDataAcc for DataHub<MyDataScope> {}
 
 #[override_with(GettingDataAcc, SettingDataAcc)]
-impl MyData for DataHub {}
+impl MyData for DataHub<MyDataScope> {}
 ```
 
 ### 4. Using logic functions and DataHub
@@ -157,8 +160,9 @@ Finally, use the `run` method or `txn` method of `DataHub` to execute your defin
 ```rust
 use sabi::{uses, setup, DataHub};
 use sabi_redis::RedisDataSrc;
-use sabi_stdio::StdioDataSrc;  // This is a conceptual, non-existent DataConn.
+use sabi_stdio::StdioDataSrc;  // This is a conceptual, non-existent DataSrc.
 use crate::logic_layer::my_logic;
+use crate::data_hub_layer::MyDataScope;
 use std::process::ExitCode;
 
 // Register global DataSrc using the `sabi::uses!` macro.
@@ -179,17 +183,17 @@ fn main() -> errs::Result<()> {
 }
 
 fn run() -> errs::Result<()> {
-    let mut data = DataHub::new();
+    let mut runner = LogicRunner::new(DataHub::<MyDataScope>::new());
 
     // Register session-local DataSrc with DataHub using the `uses` method.
     // This makes `StdioDataSrc` available only within this `DataHub` instance's session.
-    data.uses("stdio", StdioDataSrc::new());
+    runner.uses("stdio", StdioDataSrc::new());
 
     // Execute application logic without a transactional control.
-    data.run(my_logic)?;
+    runner.run(my_logic)?;
 
     // If you need to execute logic within a transaction, use the `txn` method instead of `run`.
-    //data.txn(my_logic)?;
+    //runner.txn(my_logic)?;
 }
 ```
 
@@ -282,11 +286,14 @@ use override_macro::override_with;
 use crate::logic_layer::MyAsyncData;
 use crate::data_access_layer::{GettingAsyncDataAcc, SettingAsyncDataAcc};
 
-impl GettingAsyncDataAcc for DataHub {}
-impl SettingAsyncDataAcc for DataHub {}
+// A type used as a generic parameter to define distinct DataHub by data access group.
+struct MyDataScope;
+
+impl GettingAsyncDataAcc for DataHub<MyDataScope> {}
+impl SettingAsyncDataAcc for DataHub<MyDataScope> {}
 
 #[override_with(GettingAsyncDataAcc, SettingAsyncDataAcc)]
-impl MyAsyncData for DataHub {}
+impl MyAsyncData for DataHub<MyDataScope> {}
 ```
 
 ### 4. Using logic functions and DataHub (Asynchronous)
@@ -300,8 +307,9 @@ Execute your logic with `data.txn_async` or `data.run_async`.
 use sabi::tokio::{uses, uses_async, setup_async, DataHub, logic};
 use tokio; // Ensure tokio is in scope for #[tokio::main]
 use sabi_redis::RedisDataSrcAsync;
-use sabi_stdio::StdioDataSrcAsync;
+use sabi_stdio::StdioDataSrcAsync;  // This is a conceptual, non-existent DataSrc.
 use crate::logic_layer::my_async_logic;
+use crate::data_hub_layer::MyDataScope;
 
 // Register global DataSrc using the `sabi::tokio::uses!` macro.
 uses!("redis", RedisDataSrcAsync::new("redis://127.0.0.1:6379/0"));
@@ -325,21 +333,21 @@ async fn run_async() -> errs::Result<()> {
     tokio::spawn(async move {
         // Create a new instance of DataHub.
         // Since DataHub is Send, it can be moved into another task.
-        let mut data = DataHub::new();
+        let mut runner = LogicRunner::new(DataHub::<MyDataScope>::new());
 
         // Register session-local DataSrc with DataHub using the `uses` method.
         // This makes `StdioDataSrc` available only within this `DataHub` instance's session.
         // If this `DataHub` is moved between threads, `ds` must also implement `Send`.
-        data.uses("stdio", StdioDataSrc::new());
+        runner.uses("stdio", StdioDataSrc::new());
 
         // Execute application logic without an asynchronous transaction
         // The `logic!` macro helps convert an async function into the required closure type.
         // The resulting future is `Send`.
-        data.run_async(logic!(my_async_logic)).await?;
+        runner.run_async(logic!(my_async_logic)).await?;
 
         // If you need to execute logic within a transaction, use `txn_async` method instead of
         // `run_async`.
-        //data.txn_async(logic!(my_async_logic)).await?;
+        //runner.txn_async(logic!(my_async_logic)).await?;
     })
     .await
 }
