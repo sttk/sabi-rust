@@ -160,7 +160,7 @@ Finally, use the `run` method or `txn` method of `DataHub` to execute your defin
 ```rust
 use sabi::{uses, setup, DataHub};
 use sabi_redis::RedisDataSrc;
-use sabi_stdio::StdioDataSrc;  // This is a conceptual, non-existent DataConn.
+use sabi_stdio::StdioDataSrc;  // This is a conceptual, non-existent DataSrc.
 use crate::logic_layer::my_logic;
 use crate::data_hub_layer::MyDataScope;
 use std::process::ExitCode;
