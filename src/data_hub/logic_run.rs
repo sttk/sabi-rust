@@ -154,6 +154,14 @@ impl<'a, T> LogicRun<'a, T> {
         }
     }
 
+    fn end_once(&mut self) -> LogicErrAt {
+        let prev = mem::replace(&mut self.err, LogicErrAt::Ended);
+        if !self.nested && !matches!(prev, LogicErrAt::Ended) {
+            self.hub.run.end();
+        }
+        prev
+    }
+
     /// Finalizes the logic execution chain and releases resources.
     ///
     /// This ends the execution run, closes any open data connections, and returns the result of
@@ -163,12 +171,8 @@ impl<'a, T> LogicRun<'a, T> {
     ///
     /// * `errs::Result<()>`: The result of the logic function's execution,
     ///   or an error if executing `logic_fn` fails.
-    pub fn end(self) -> errs::Result<()> {
-        if !self.nested {
-            self.hub.run.end();
-        }
-
-        match self.err {
+    pub fn end(mut self) -> errs::Result<()> {
+        match self.end_once() {
             LogicErrAt::Begin { err } => Err(err),
             LogicErrAt::Run { errors } => {
                 if errors.is_empty() {
@@ -180,7 +184,14 @@ impl<'a, T> LogicRun<'a, T> {
             LogicErrAt::Block { errors } => {
                 Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
             }
+            LogicErrAt::Ended => Ok(()),
         }
+    }
+}
+
+impl<'a, T> Drop for LogicRun<'a, T> {
+    fn drop(&mut self) {
+        let _ = self.end_once();
     }
 }
 
@@ -190,6 +201,7 @@ mod tests_of_logic_run {
     use super::*;
     use crate::_test_commons::*;
     use crate::{DataAcc, LogicRunner};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -512,6 +524,72 @@ mod tests_of_logic_run {
                 "SyncDataConn::new 1",
                 "execute logic-0",
                 "execute logic-2",
+                "SyncDataConn::close 1",
+                "SyncDataConn::drop 1",
+                "SyncDataSrc::close 2",
+                "SyncDataSrc::drop 2",
+                "SyncDataSrc::close 1",
+                "SyncDataSrc::drop 1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_logic_run_and_panic_but_end_is_executed() {
+        let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            struct A;
+            let mut runner = LogicRunner::new(DataHub::<A>::new());
+
+            runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+            runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+
+            let logger_clone_0 = logger.clone();
+            let logger_clone_1 = logger.clone();
+            let logger_clone_2 = logger.clone();
+
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                runner
+                    .start()
+                    .run(move |data| {
+                        let _conn = data.get_data_conn::<SyncDataConn>("foo")?;
+                        logger_clone_0
+                            .lock()
+                            .unwrap()
+                            .push("execute logic-0 but panic".to_string());
+                        panic!("logic_fn panic");
+                    })
+                    .run_or_block(move |data| {
+                        let _conn = data.get_data_conn::<SyncDataConn>("bar")?;
+                        logger_clone_1
+                            .lock()
+                            .unwrap()
+                            .push("execute logic-1".to_string());
+                        Ok(())
+                    })
+                    .run_force(move |data| {
+                        let _conn = data.get_data_conn::<SyncDataConn>("foo")?;
+                        logger_clone_2
+                            .lock()
+                            .unwrap()
+                            .push("execute logic-2".to_string());
+                        Ok(())
+                    })
+                    .end()
+            }));
+            assert!(result.is_err());
+        }
+
+        assert_eq!(
+            *logger.lock().unwrap(),
+            &[
+                "SyncDataSrc::new 1",
+                "SyncDataSrc::new 2",
+                "SyncDataSrc::setup 1",
+                "SyncDataSrc::setup 2",
+                "SyncDataSrc::create_data_conn 1",
+                "SyncDataConn::new 1",
+                "execute logic-0 but panic",
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
                 "SyncDataSrc::close 2",

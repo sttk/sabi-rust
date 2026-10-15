@@ -62,6 +62,7 @@
 #![allow(unused_features)]
 
 mod async_group;
+mod auto_end;
 mod data_conn;
 mod data_hub;
 mod data_src;
@@ -567,6 +568,7 @@ enum LogicErrAt {
     Begin { err: errs::Err },
     Run { errors: Vec<ErrEntry> },
     Block { errors: Vec<ErrEntry> },
+    Ended,
 }
 
 /// Builder for chaining and executing non-transactional business logic steps on a [`DataHub`].
@@ -609,4 +611,9 @@ pub struct LogicTxn<'a, T> {
 /// * `T`: The domain marker type of the underlying [`DataHub`].
 pub struct LogicRunner<T> {
     hub: DataHub<T>,
+}
+
+struct AutoEnd<'a, T, F: FnOnce(&mut T)> {
+    target: &'a mut T,
+    end_fn: Option<F>,
 }

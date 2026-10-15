@@ -41,6 +41,13 @@ pub enum DataHubError {
         /// Errors returned by the failed logic functions.
         errors: Vec<ErrEntry>,
     },
+
+    /// Indicates that a data connection callback panicked and the panic was
+    /// caught and converted into an error.
+    Panicked {
+        /// The panic message.
+        message: String,
+    },
 }
 
 impl DataRun {

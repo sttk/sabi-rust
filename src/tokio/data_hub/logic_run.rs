@@ -186,6 +186,7 @@ impl<'a, T> LogicRun<'a, T> {
             LogicErrAt::Block { errors } => {
                 Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
             }
+            LogicErrAt::Ended => Ok(()),
         }
     }
 }

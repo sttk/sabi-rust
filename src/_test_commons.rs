@@ -16,6 +16,11 @@ pub(crate) enum Fail {
     Rollback,
     PreCommitBecomeCommitted,
     CreateDataConn,
+    PreCommitPanicked,
+    CommitPanicked,
+    PostCommitPanicked,
+    RollbackPanicked,
+    OnTxnFailurePanicked,
 }
 
 pub(crate) struct SyncDataConn {
@@ -57,6 +62,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::commit {} failed", self.id));
             return Err(errs::Err::new("ZZZ".to_string()));
+        } else if self.fail == Fail::CommitPanicked {
+            panic!("commit panicked");
         }
         self.committed = true;
         self.logger
@@ -73,6 +80,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::pre_commit {} failed", self.id));
             return Err(errs::Err::new("zzz".to_string()));
+        } else if self.fail == Fail::PreCommitPanicked {
+            panic!("pre_commit panicked");
         }
         self.logger
             .lock()
@@ -91,6 +100,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::post_commit {} failed", self.id));
             return Err(errs::Err::new("!!!".to_string()));
+        } else if self.fail == Fail::PostCommitPanicked {
+            panic!("post_commit panicked");
         }
         self.logger
             .lock()
@@ -110,6 +121,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::rollback {} failed", self.id));
             return Err(errs::Err::new("???".to_string()));
+        } else if self.fail == Fail::RollbackPanicked {
+            panic!("rollback panicked");
         }
         self.logger
             .lock()
@@ -119,6 +132,9 @@ impl DataConn for SyncDataConn {
     }
 
     fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {
+        if self.fail == Fail::OnTxnFailurePanicked {
+            panic!("rollback panicked");
+        }
         let mut logger = self.logger.lock().unwrap();
         logger.push(format!("SyncDataConn::on_txn_failure {}", self.id));
         logger.push(format!("TxnFailureReports={:?}", reports));

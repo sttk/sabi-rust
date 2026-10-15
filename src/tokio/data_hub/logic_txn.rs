@@ -203,6 +203,7 @@ impl<'a, T> LogicTxn<'a, T> {
                 self.hub.run.end();
                 Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
             }
+            LogicErrAt::Ended => Ok(()),
         }
     }
 }

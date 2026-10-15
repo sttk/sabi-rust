@@ -49,6 +49,33 @@ pub enum DataHubError {
     },
 }
 
+/*
+struct AutoEnd<'a, T, F: FnOnce(&mut T)> {
+    target: &'a mut T,
+    end_fn: Option<F>,
+}
+
+impl<'a, T, F: FnOnce(&mut T)> Drop for AutoEnd<'a, T, F> {
+    fn drop(&mut self) {
+      if let Some(end_fn) = self.end_fn.take() {
+        end_fn(self.target);
+      }
+    }
+}
+
+fn run_with_end<T, R>(
+    target: &mut T,
+    run_fn: impl FnOnce(&mut T) -> R,
+    end_fn: impl FnOnce(&mut T),
+) -> R {
+    let ender = AutoEnd {
+        target,
+        end_fn: Some(end_fn),
+    };
+    run_fn(&mut *ender.target)
+}
+*/
+
 impl DataRun {
     fn new() -> Self {
         let mut data_src_map = HashMap::new();
