@@ -2,7 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::{DataAcc, DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
+use crate::{DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
 
 use std::sync::Arc;
 
@@ -73,11 +73,14 @@ impl<T: 'static> LogicRunner<T> {
     /// * `errs::Result<()>`: The result of the logic function's execution,
     ///   or an error if executing `logic_fn` fails.
     #[inline]
-    pub fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
+    pub fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
-        self.hub.run(logic_fn)
+        self.hub.run.begin()?;
+        let r = logic_fn(&mut self.hub);
+        self.hub.run.end();
+        r
     }
 
     /// Starts a builder chain for executing non-transactional business logic steps.
@@ -87,7 +90,7 @@ impl<T: 'static> LogicRunner<T> {
     /// A [`LogicRun`] builder to configure and execute sequential logic steps.
     #[inline]
     pub fn start(&mut self) -> LogicRun<'_, T> {
-        self.hub.start()
+        LogicRun::new(&mut self.hub, false)
     }
 
     /// Executes a single business logic closure within a transaction.
@@ -114,20 +117,15 @@ impl<T: 'static> LogicRunner<T> {
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
-        let mut r = self.hub.run.begin();
-        if r.is_ok() {
-            r = logic_fn(&mut self.hub);
-        }
-
+        self.hub.run.begin()?;
+        let mut r = logic_fn(&mut self.hub);
         let mut reports = self.hub.run.new_failure_reports();
-
         if r.is_ok() {
             r = self.hub.run.commit(&mut reports);
         }
         if r.is_err() {
             self.hub.run.rollback(reports);
         }
-
         self.hub.run.end();
         r
     }
@@ -143,7 +141,7 @@ impl<T: 'static> LogicRunner<T> {
 mod tests_of_logic_runner {
     use super::*;
     use crate::_test_commons::*;
-    use crate::{DataConnError, DataHubError, DataSrcError};
+    use crate::{DataAcc, DataConnError, DataHubError, DataSrcError};
     use std::sync::Mutex;
 
     #[test]

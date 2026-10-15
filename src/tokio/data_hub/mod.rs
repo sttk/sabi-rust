@@ -106,6 +106,7 @@ impl DataRun {
                 .copy_ds_ready_to_map(&mut self.data_src_map);
             Ok(())
         } else {
+            self.fixed = false;
             Err(errs::Err::new(DataHubError::FailToSetupLocalDataSrcs {
                 errors,
             }))
@@ -186,17 +187,12 @@ impl<T: 'static + Send> DataAcc for DataHub<T> {
             &'b mut DataHub<T>,
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
-        let mut r = self.run.begin_async().await;
-        if r.is_ok() {
-            r = logic_fn(self).await;
-        }
-        self.run.end();
-        r
+        logic_fn(self).await
     }
 
     #[inline]
     async fn start_async(&mut self) -> LogicRun<'_, T> {
-        LogicRun::new_async(self, false).await
+        LogicRun::new_async(self, true).await
     }
 }
 

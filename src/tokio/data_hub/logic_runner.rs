@@ -2,7 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::tokio::{DataAcc, DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
+use crate::tokio::{DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
 
 use std::future::Future;
 use std::pin::Pin;
@@ -74,13 +74,16 @@ impl<T: 'static + Send> LogicRunner<T> {
     /// * `errs::Result<()>`: The result of the logic function's execution,
     ///   or an error if executing `logic_fn` fails.
     #[inline]
-    pub async fn run_async<F>(&mut self, logic_fn: F) -> errs::Result<()>
+    pub async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
         for<'b> F: FnMut(
             &'b mut DataHub<T>,
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
-        self.hub.run_async(logic_fn).await
+        self.hub.run.begin_async().await?;
+        let r = logic_fn(&mut self.hub).await;
+        self.hub.run.end();
+        r
     }
 
     /// Starts a builder chain for executing non-transactional business logic steps
@@ -91,7 +94,7 @@ impl<T: 'static + Send> LogicRunner<T> {
     /// A [`LogicRun`] builder to configure and execute sequential logic steps.
     #[inline]
     pub async fn start_async(&mut self) -> LogicRun<'_, T> {
-        self.hub.start_async().await
+        LogicRun::new_async(&mut self.hub, false).await
     }
 
     /// Executes a single business logic closure within an asynchronous transaction.
@@ -119,20 +122,15 @@ impl<T: 'static + Send> LogicRunner<T> {
             &'b mut DataHub<T>,
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
-        let mut r = self.hub.run.begin_async().await;
-        if r.is_ok() {
-            r = logic_fn(&mut self.hub).await;
-        }
-
+        self.hub.run.begin_async().await?;
+        let mut r = logic_fn(&mut self.hub).await;
         let mut reports = self.hub.run.new_failure_reports();
-
         if r.is_ok() {
             r = self.hub.run.commit_async(&mut reports).await;
         }
         if r.is_err() {
             self.hub.run.rollback_async(reports).await;
         }
-
         self.hub.run.end();
         r
     }
@@ -172,7 +170,7 @@ macro_rules! _logic {
 mod tests_of_logic_runner {
     use super::*;
     use crate::tokio::_test_commons::*;
-    use crate::tokio::{DataConnError, DataHubError, DataSrcError, LogicRunner};
+    use crate::tokio::{DataAcc, DataConnError, DataHubError, DataSrcError, LogicRunner};
     use std::sync::Mutex;
 
     #[test]
