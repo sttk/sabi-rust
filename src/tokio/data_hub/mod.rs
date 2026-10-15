@@ -106,6 +106,7 @@ impl DataRun {
                 .copy_ds_ready_to_map(&mut self.data_src_map);
             Ok(())
         } else {
+            self.fixed = false;
             Err(errs::Err::new(DataHubError::FailToSetupLocalDataSrcs {
                 errors,
             }))

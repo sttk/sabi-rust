@@ -77,11 +77,8 @@ impl<T: 'static> LogicRunner<T> {
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
-        let mut r = self.hub.run.begin();
-        if r.is_ok() {
-            r = logic_fn(&mut self.hub);
-        }
-
+        self.hub.run.begin()?;
+        let r = logic_fn(&mut self.hub);
         self.hub.run.end();
         r
     }
@@ -120,20 +117,15 @@ impl<T: 'static> LogicRunner<T> {
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
-        let mut r = self.hub.run.begin();
-        if r.is_ok() {
-            r = logic_fn(&mut self.hub);
-        }
-
+        self.hub.run.begin()?;
+        let mut r = logic_fn(&mut self.hub);
         let mut reports = self.hub.run.new_failure_reports();
-
         if r.is_ok() {
             r = self.hub.run.commit(&mut reports);
         }
         if r.is_err() {
             self.hub.run.rollback(reports);
         }
-
         self.hub.run.end();
         r
     }
