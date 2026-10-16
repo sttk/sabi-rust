@@ -7,13 +7,18 @@ use tokio::time;
 #[derive(PartialEq, Copy, Clone)]
 pub(crate) enum Fail {
     None,
-    Commit,
+    Setup,
     PreCommit,
+    Commit,
     PostCommit,
     Rollback,
     PreCommitBecomeCommitted,
     CreateDataConn,
-    Setup,
+    PreCommitPanicked,
+    CommitPanicked,
+    PostCommitPanicked,
+    RollbackPanicked,
+    OnTxnFailurePanicked,
 }
 
 pub(crate) struct SyncDataConn {
@@ -59,6 +64,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::commit_async {} failed", id));
             return Err(errs::Err::new("ZZZ".to_string()));
+        } else if fail == Fail::CommitPanicked {
+            panic!("commit panicked");
         }
         committed.store(true, Ordering::Release);
         logger
@@ -78,6 +85,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::pre_commit_async {} failed", id));
             return Err(errs::Err::new("zzz".to_string()));
+        } else if fail == Fail::PreCommitPanicked {
+            panic!("pre_commit panicked");
         }
         logger
             .lock()
@@ -96,6 +105,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::post_commit_async {} failed", id));
             return Err(errs::Err::new("!!!".to_string()));
+        } else if fail == Fail::PostCommitPanicked {
+            panic!("post_commit panicked");
         }
         logger
             .lock()
@@ -118,6 +129,8 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::rollback_async {} failed", id));
             return Err(errs::Err::new("!!!".to_string()));
+        } else if fail == Fail::RollbackPanicked {
+            panic!("rollback panicked");
         }
         logger
             .lock()
@@ -131,6 +144,9 @@ impl DataConn for SyncDataConn {
         _ag: &mut AsyncGroup,
         reports: Arc<[TxnFailureReport]>,
     ) {
+        if self.fail == Fail::OnTxnFailurePanicked {
+            panic!("rollback panicked");
+        }
         let logger = self.logger.clone();
         let mut logger = logger.lock().unwrap();
         logger.push(format!("SyncDataConn::on_txn_failure_async {}", self.id));

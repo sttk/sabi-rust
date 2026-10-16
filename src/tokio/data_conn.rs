@@ -13,6 +13,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, mem};
 
+use futures::FutureExt;
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+
 /// Represents the reasons for errors that can occur within `DataConn` operations.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
@@ -41,6 +44,13 @@ pub enum DataConnError {
         name: Arc<str>,
         /// The type name to which the [`DataConn`] attempted to cast.
         target_type: &'static str,
+    },
+
+    /// Indicates that a data connection callback panicked and the panic was
+    /// caught and converted into an error.
+    Panicked {
+        /// The panic message.
+        message: String,
     },
 }
 
@@ -288,7 +298,7 @@ impl DataConnManager {
             let name = unsafe { &(*ptr).name };
             ag._index = i;
             ag._name = name.clone();
-            if let Err(err) = pre_commit_fn(ptr, &mut ag).await {
+            if let Err(err) = catch_to_err_async(|| pre_commit_fn(ptr, &mut ag)).await {
                 errors.push(ErrEntry {
                     index: i,
                     name: name.clone(),
@@ -322,7 +332,7 @@ impl DataConnManager {
             let name = unsafe { &(*ptr).name };
             ag._index = i;
             ag._name = name.clone();
-            if let Err(err) = commit_fn(ptr, &mut ag).await {
+            if let Err(err) = catch_to_err_async(|| commit_fn(ptr, &mut ag)).await {
                 errors.push(ErrEntry {
                     index: i,
                     name: name.clone(),
@@ -352,7 +362,7 @@ impl DataConnManager {
             let name = unsafe { &(*ptr).name };
             ag._index = i;
             ag._name = name.clone();
-            if let Err(err) = post_commit_fn(ptr, &mut ag).await {
+            if let Err(err) = catch_to_err_async(|| post_commit_fn(ptr, &mut ag)).await {
                 errors.push(ErrEntry {
                     index: i,
                     name: name.clone(),
@@ -397,7 +407,7 @@ impl DataConnManager {
             let name = unsafe { &(*ptr).name };
             ag._index = i;
             ag._name = name.clone();
-            if let Err(err) = rollback_fn(ptr, &mut ag).await {
+            if let Err(err) = catch_to_err_async(|| rollback_fn(ptr, &mut ag)).await {
                 errors.push(ErrEntry {
                     index: i,
                     name: name.clone(),
@@ -418,13 +428,24 @@ impl DataConnManager {
 
         let reports: Arc<[TxnFailureReport]> = Arc::from(reports);
 
+        let mut first_panic: Option<Box<dyn any::Any + Send>> = None;
         let mut ag = AsyncGroup::new();
         for ssnnptr in self.vec.iter().flatten() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let on_txn_failure_fn = unsafe { (*ptr).on_txn_failure_fn };
-            on_txn_failure_fn(ptr, &mut ag, reports.clone()).await;
+            if let Err(payload) =
+                AssertUnwindSafe(async { on_txn_failure_fn(ptr, &mut ag, reports.clone()).await })
+                    .catch_unwind()
+                    .await
+            {
+                first_panic.get_or_insert(payload);
+            }
         }
         ag.join_and_ignore_errors_async().await;
+
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
     }
 
     pub(crate) fn close(&mut self) {
@@ -438,6 +459,35 @@ impl DataConnManager {
             close_fn(ptr);
             drop_fn(ptr);
         }
+    }
+}
+
+async fn catch_to_err_async<R, Fut>(f: impl FnOnce() -> Fut) -> errs::Result<R>
+where
+    Fut: Future<Output = errs::Result<R>>,
+{
+    let fut = match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(fut) => fut,
+        Err(payload) => {
+            return Err(errs::Err::new(DataConnError::Panicked {
+                message: payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "non-string panic payload".to_string()),
+            }))
+        }
+    };
+
+    match AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(r) => r,
+        Err(payload) => Err(errs::Err::new(DataConnError::Panicked {
+            message: payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_string()),
+        })),
     }
 }
 
@@ -977,9 +1027,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback_async 1",
                     "AsyncDataConn::rollback_async 2",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -996,9 +1046,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback_async 1",
                     "AsyncDataConn::rollback_async 2",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1051,9 +1101,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback_async 1",
                 "AsyncDataConn::rollback_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -1067,9 +1117,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback_async 1",
                 "AsyncDataConn::rollback_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 80),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 87),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -1123,9 +1173,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback_async 2",
                     "AsyncDataConn::rollback_async 1",
                     "SyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 215),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 231),
                     "AsyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 215),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"yyy\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 231),
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
                     "AsyncDataConn::close 1",
@@ -1182,9 +1232,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback_async 1",
                     "AsyncDataConn::rollback_async 2",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 61),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 66),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 61),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 66),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1203,9 +1253,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::rollback_async 1",
                     "AsyncDataConn::rollback_async 2",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 61),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 66),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 61),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 66),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1262,9 +1312,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit_async 1 failed",
                     "AsyncDataConn::rollback_async 1",
                     "SyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 208),
                     "AsyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 208),
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
                     "AsyncDataConn::close 1",
@@ -1283,9 +1333,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit_async 1 failed",
                     "AsyncDataConn::rollback_async 1",
                     "SyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 208),
                     "AsyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}]", 208),
                     "SyncDataConn::close 2",
                     "SyncDataConn::drop 2",
                     "AsyncDataConn::close 1",
@@ -1342,9 +1392,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit_async 2 failed",
                     "AsyncDataConn::rollback_async 2",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1363,9 +1413,9 @@ mod tests_of_data_conn {
                     "AsyncDataConn::commit_async 2 failed",
                     "AsyncDataConn::rollback_async 2",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1426,9 +1476,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit_async 1 failed",
                     "AsyncDataConn::post_commit_async 2 failed",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98, 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107, 253),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98, 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107, 253),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1448,9 +1498,9 @@ mod tests_of_data_conn {
                     "SyncDataConn::post_commit_async 1 failed",
                     "AsyncDataConn::post_commit_async 2 failed",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98, 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107, 253),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98, 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107, 253),
                     "AsyncDataConn::close 2",
                     "AsyncDataConn::drop 2",
                     "SyncDataConn::close 1",
@@ -1509,9 +1559,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::post_commit_async 1 failed",
                 "AsyncDataConn::post_commit_async 2 failed",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 237, 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 253, 107),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 237, 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 253, 107),
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
@@ -1528,9 +1578,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::post_commit_async 1 failed",
                 "AsyncDataConn::post_commit_async 2 failed",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = 610 }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = 660 }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = 610 }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = 660 }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107),
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
@@ -1585,9 +1635,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::post_commit_async 1 failed",
                 "AsyncDataConn::post_commit_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107),
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
@@ -1604,9 +1654,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::post_commit_async 1 failed",
                 "AsyncDataConn::post_commit_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 98),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}]", 107),
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
                 "AsyncDataConn::close 2",
@@ -1674,11 +1724,11 @@ mod tests_of_data_conn {
                     "NoCommitDataConn::post_commit_async 3",
                     "AsyncDataConn::post_commit_async 2 failed",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 253),
                     "NoCommitDataConn::on_txn_failure_async 3",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 253),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 253),
                     "NoCommitDataConn::close 3",
                     "NoCommitDataConn::drop 3",
                     "AsyncDataConn::close 2",
@@ -1704,11 +1754,11 @@ mod tests_of_data_conn {
                     "NoCommitDataConn::post_commit_async 3",
                     "AsyncDataConn::post_commit_async 2 failed",
                     "SyncDataConn::on_txn_failure_async 1",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 253),
                     "NoCommitDataConn::on_txn_failure_async 3",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 253),
                     "AsyncDataConn::on_txn_failure_async 2",
-                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 237),
+                    &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: PostCommitFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"baz\", data_conn_type: \"sabi::tokio::_test_commons::NoCommitDataConn\", cause: NoneByUncommitted, rollback: NoneByNotRolledBack }}]", 253),
                     "NoCommitDataConn::close 3",
                     "NoCommitDataConn::drop 3",
                     "AsyncDataConn::close 2",
@@ -1827,9 +1877,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback_async 2 failed",
                 "AsyncDataConn::rollback_async 1",
                 "SyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 120),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 131),
                 "AsyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 120),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 131),
                 "SyncDataConn::close 2",
                 "SyncDataConn::drop 2",
                 "AsyncDataConn::close 1",
@@ -1842,9 +1892,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback_async 2 failed",
                 "AsyncDataConn::rollback_async 1",
                 "SyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 120),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 131),
                 "AsyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 120),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"!!!\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 131),
                 "SyncDataConn::close 2",
                 "SyncDataConn::drop 2",
                 "AsyncDataConn::close 1",
@@ -1882,9 +1932,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback_async 2",
                 "AsyncDataConn::rollback_async 1 failed",
                 "SyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 263),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 279),
                 "AsyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 263),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 279),
                 "SyncDataConn::close 2",
                 "SyncDataConn::drop 2",
                 "AsyncDataConn::close 1",
@@ -1955,9 +2005,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback_async 1",
                 "AsyncDataConn::rollback_async 2 failed",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 61, 263),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 66, 279),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 61, 263),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src/tokio/_test_commons.rs, line = {} }}) }}]", 66, 279),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -1973,9 +2023,9 @@ mod tests_of_data_conn {
                 "SyncDataConn::rollback_async 1",
                 "AsyncDataConn::rollback_async 2 failed",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 61, BASE_LINE + 240),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 66, BASE_LINE + 240),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 61, BASE_LINE + 240),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"ZZZ\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err {{ reason = alloc::string::String \"???\", file = src\\tokio\\_test_commons.rs, line = {} }}) }}]", 66, BASE_LINE + 240),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2031,9 +2081,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit_async 2 failed",
                 "AsyncDataConn::rollback_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2049,9 +2099,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit_async 2 failed",
                 "AsyncDataConn::rollback_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2151,9 +2201,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit_async 2 failed",
                 "AsyncDataConn::rollback_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src/tokio/_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
@@ -2169,9 +2219,9 @@ mod tests_of_data_conn {
                 "AsyncDataConn::commit_async 2 failed",
                 "AsyncDataConn::rollback_async 2",
                 "SyncDataConn::on_txn_failure_async 1",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::on_txn_failure_async 2",
-                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 192),
+                &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::_test_commons::AsyncDataConn\", cause: CommitFailure(errs::Err {{ reason = alloc::string::String \"YYY\", file = src\\tokio\\_test_commons.rs, line = {} }}), rollback: NoneByRolledBack }}]", 208),
                 "AsyncDataConn::close 2",
                 "AsyncDataConn::drop 2",
                 "SyncDataConn::close 1",
