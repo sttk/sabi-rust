@@ -42,6 +42,7 @@
 //! connection transaction processing. It allows asynchronous setup, commit, rollback, and related
 //! operations to be performed concurrently on the Tokio runtime.
 
+mod anti_panic;
 mod async_group;
 mod data_conn;
 mod data_hub;

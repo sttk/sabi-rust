@@ -61,6 +61,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(unused_features)]
 
+mod anti_panic;
 mod async_group;
 mod data_conn;
 mod data_hub;
@@ -609,4 +610,9 @@ pub struct LogicTxn<'a, T> {
 /// * `T`: The domain marker type of the underlying [`DataHub`].
 pub struct LogicRunner<T> {
     hub: DataHub<T>,
+}
+
+pub(crate) struct AutoEnd<'a, T, F: FnOnce(&mut T)> {
+    target: &'a mut T,
+    end_fn: Option<F>,
 }
