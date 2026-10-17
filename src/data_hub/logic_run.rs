@@ -264,7 +264,7 @@ mod tests_of_logic_run {
     }
 
     #[test]
-    fn test_logic_run_but_fail_to_run_but_run_forc_runs() {
+    fn test_logic_run_but_fail_to_run_but_run_force_runs() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
         {
             struct A;

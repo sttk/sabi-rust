@@ -1490,7 +1490,7 @@ mod tests_of_logic_runner {
     }
 
     #[tokio::test]
-    async fn test_begin_txn_with_some_data_src() {
+    async fn test_begin_txn_with_some_data_srcs() {
         let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
         {
