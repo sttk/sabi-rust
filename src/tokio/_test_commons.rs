@@ -7,13 +7,18 @@ use tokio::time;
 #[derive(PartialEq, Copy, Clone)]
 pub(crate) enum Fail {
     None,
+    Setup,
     Commit,
     PreCommit,
     PostCommit,
     Rollback,
     PreCommitBecomeCommitted,
     CreateDataConn,
-    Setup,
+    CommitPanicked,
+    PreCommitPanicked,
+    PostCommitPanicked,
+    RollbackPanicked,
+    OnTxnFailurePanicked,
 }
 
 pub(crate) struct SyncDataConn {
@@ -59,6 +64,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::commit_async {} failed", id));
             return Err(errs::Err::new("ZZZ".to_string()));
+        } else if fail == Fail::CommitPanicked {
+            logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::commit_async {} panicked", id));
+            panic!("commit_async panic");
         }
         committed.store(true, Ordering::Release);
         logger
@@ -78,6 +89,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::pre_commit_async {} failed", id));
             return Err(errs::Err::new("zzz".to_string()));
+        } else if fail == Fail::PreCommitPanicked {
+            logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::pre_commit_async {} panicked", id));
+            panic!("pre_commit_async panic");
         }
         logger
             .lock()
@@ -96,6 +113,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::post_commit_async {} failed", id));
             return Err(errs::Err::new("!!!".to_string()));
+        } else if fail == Fail::PostCommitPanicked {
+            logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::post_commit_async {} panicked", id));
+            panic!("post_commit_async panic");
         }
         logger
             .lock()
@@ -118,6 +141,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::rollback_async {} failed", id));
             return Err(errs::Err::new("!!!".to_string()));
+        } else if fail == Fail::RollbackPanicked {
+            logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::rollback_async {} panicked", id));
+            panic!("rollback_async panic");
         }
         logger
             .lock()
@@ -132,6 +161,13 @@ impl DataConn for SyncDataConn {
         reports: Arc<[TxnFailureReport]>,
     ) {
         let logger = self.logger.clone();
+        if self.fail == Fail::OnTxnFailurePanicked {
+            logger.lock().unwrap().push(format!(
+                "SyncDataConn::on_txn_failure_async {} panicked",
+                self.id
+            ));
+            panic!("rollback_async panic");
+        }
         let mut logger = logger.lock().unwrap();
         logger.push(format!("SyncDataConn::on_txn_failure_async {}", self.id));
         logger.push(format!("TxnFailureReports={:?}", reports));
@@ -190,6 +226,12 @@ impl DataConn for AsyncDataConn {
                     .unwrap()
                     .push(format!("AsyncDataConn::commit_async {} failed", id));
                 return Err(errs::Err::new("YYY".to_string()));
+            } else if fail == Fail::CommitPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::commit_async {} panicked", id));
+                panic!("commit_async panic");
             }
             committed.store(true, Ordering::Release);
             logger
@@ -213,6 +255,12 @@ impl DataConn for AsyncDataConn {
                     .unwrap()
                     .push(format!("AsyncDataConn::pre_commit_async {} failed", id));
                 return Err(errs::Err::new("yyy".to_string()));
+            } else if fail == Fail::PreCommitPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::pre_commit_async {} panicked", id));
+                panic!("pre_commit_async panic");
             }
             logger
                 .lock()
@@ -235,6 +283,12 @@ impl DataConn for AsyncDataConn {
                     .unwrap()
                     .push(format!("AsyncDataConn::post_commit_async {} failed", id));
                 return Err(errs::Err::new("!!!".to_string()));
+            } else if fail == Fail::PostCommitPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::post_commit_async {} panicked", id));
+                panic!("post_commit_async panic");
             }
             logger
                 .lock()
@@ -261,6 +315,12 @@ impl DataConn for AsyncDataConn {
                     .unwrap()
                     .push(format!("AsyncDataConn::rollback_async {} failed", id));
                 return Err(errs::Err::new("???".to_string()));
+            } else if fail == Fail::RollbackPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::rollback_async {} panicked", id));
+                panic!("rollback_async panic");
             }
             logger
                 .lock()
@@ -279,9 +339,17 @@ impl DataConn for AsyncDataConn {
         let reports_log = format!("TxnFailureReports={:?}", reports);
         let logger = self.logger.clone();
         let id = self.id;
+        let fail = self.fail;
         ag.add(async move {
             time::sleep(time::Duration::from_millis(100)).await;
             let mut logger = logger.lock().unwrap();
+            if fail == Fail::OnTxnFailurePanicked {
+                logger.push(format!(
+                    "AsyncDataConn::on_txn_failure_async {} panicked",
+                    id
+                ));
+                panic!("rollback_async panic");
+            }
             logger.push(format!("AsyncDataConn::on_txn_failure_async {}", id));
             logger.push(reports_log);
             Ok(())
