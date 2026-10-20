@@ -828,9 +828,9 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 0);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/_test_commons.rs, line = 421 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/_test_commons.rs, line = 490 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\_test_commons.rs, line = 421 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\_test_commons.rs, line = 490 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
