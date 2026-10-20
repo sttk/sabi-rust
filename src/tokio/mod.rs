@@ -325,6 +325,7 @@ where
 pub(crate) struct DataConnManager {
     vec: Vec<Option<SendSyncNonNull<DataConnContainer>>>,
     index_map: HashMap<Arc<str>, usize>,
+    ordered_names: Box<[Arc<str>]>,
     committed: bool,
 }
 
