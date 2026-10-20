@@ -1601,8 +1601,8 @@ mod tests_of_logic_runner {
             assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
             assert_eq!(runner.hub.run.local_data_src_manager.local, true);
             assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 2);
+            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 2);
             assert_eq!(runner.hub.run.fixed, false);
         }
 
@@ -1758,8 +1758,8 @@ mod tests_of_logic_runner {
             assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
             assert_eq!(runner.hub.run.local_data_src_manager.local, true);
             assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 2);
+            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 2);
             assert_eq!(runner.hub.run.fixed, false);
         }
 

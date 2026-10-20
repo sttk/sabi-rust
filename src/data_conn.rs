@@ -180,20 +180,24 @@ impl DataConnManager {
         Self {
             vec: Vec::new(),
             index_map: HashMap::new(),
+            ordered_names: Box::new([]),
             committed: false,
         }
     }
 
     pub(crate) fn with_commit_order(names: &[&str]) -> Self {
+        let names: Box<[Arc<str>]> = names.iter().map(|s| Arc::from(*s)).collect();
+
         let mut index_map = HashMap::with_capacity(names.len());
         // Using rev because eariler ones take precedence when names overlap
         for (i, nm) in names.iter().rev().enumerate() {
-            index_map.insert((*nm).into(), names.len() - 1 - i);
+            index_map.insert(Arc::clone(nm), names.len() - 1 - i);
         }
 
         Self {
             vec: vec![None; names.len()],
             index_map,
+            ordered_names: names,
             committed: false,
         }
     }
@@ -414,8 +418,14 @@ impl DataConnManager {
 
     pub(crate) fn close(&mut self) {
         self.index_map.clear();
+        for (i, nm) in self.ordered_names.iter().enumerate() {
+            self.index_map.insert(nm.clone(), i);
+        }
 
-        let vec: Vec<Option<SendSyncNonNull<DataConnContainer>>> = mem::take(&mut self.vec);
+        let mut vec: Vec<Option<SendSyncNonNull<DataConnContainer>>> =
+            vec![None; self.ordered_names.len()];
+        mem::swap(&mut self.vec, &mut vec);
+
         for ssnnptr in vec.iter().flatten().rev() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let close_fn = unsafe { (*ptr).close_fn };
@@ -2218,6 +2228,87 @@ mod tests_of_data_conn {
                 "SyncDataConn::close 1",
                 "SyncDataConn::drop 1",
             ]);
+        }
+
+        #[test]
+        fn preserve_commit_order_after_close() {
+            let logger = Arc::new(Mutex::new(Vec::new()));
+
+            {
+                let mut manager = DataConnManager::with_commit_order(&["baz", "bar"]);
+                assert_eq!(manager.vec.len(), 2);
+                assert!(manager.vec[0].is_none());
+                assert!(manager.vec[1].is_none());
+                assert_eq!(manager.index_map.len(), 2);
+                assert_eq!(*manager.index_map.get("bar").unwrap(), 1);
+                assert_eq!(*manager.index_map.get("baz").unwrap(), 0);
+
+                let conn1 = SyncDataConn::new(1, logger.clone(), Fail::None);
+                let boxed1 = Box::new(DataConnContainer::new("foo", Box::new(conn1)));
+                let nnptr1 = ptr::NonNull::from(Box::leak(boxed1)).cast::<DataConnContainer>();
+                let ssnnptr = SendSyncNonNull::new(nnptr1);
+                manager.add(ssnnptr);
+                assert_eq!(manager.vec.len(), 3);
+                assert!(manager.vec[0].is_none());
+                assert!(manager.vec[1].is_none());
+                assert_eq!(manager.vec[2].clone().unwrap().non_null_ptr, nnptr1);
+                assert_eq!(manager.index_map.len(), 3);
+                assert_eq!(*manager.index_map.get("bar").unwrap(), 1);
+                assert_eq!(*manager.index_map.get("baz").unwrap(), 0);
+                assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
+
+                let conn2 = SyncDataConn::new(2, logger.clone(), Fail::None);
+                let boxed2 = Box::new(DataConnContainer::new("bar", Box::new(conn2)));
+                let nnptr2 = ptr::NonNull::from(Box::leak(boxed2)).cast::<DataConnContainer>();
+                let ssnnptr = SendSyncNonNull::new(nnptr2);
+                manager.add(ssnnptr);
+                assert_eq!(manager.vec.len(), 3);
+                assert!(manager.vec[0].is_none());
+                assert_eq!(manager.vec[1].clone().unwrap().non_null_ptr, nnptr2);
+                assert_eq!(manager.vec[2].clone().unwrap().non_null_ptr, nnptr1);
+                assert_eq!(manager.index_map.len(), 3);
+                assert_eq!(*manager.index_map.get("bar").unwrap(), 1);
+                assert_eq!(*manager.index_map.get("baz").unwrap(), 0);
+                assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
+
+                let conn3 = SyncDataConn::new(3, logger.clone(), Fail::None);
+                let boxed3 = Box::new(DataConnContainer::new("baz", Box::new(conn3)));
+                let nnptr3 = ptr::NonNull::from(Box::leak(boxed3)).cast::<DataConnContainer>();
+                let ssnnptr = SendSyncNonNull::new(nnptr3);
+                manager.add(ssnnptr);
+                assert_eq!(manager.vec.len(), 3);
+                assert_eq!(manager.vec[0].clone().unwrap().non_null_ptr, nnptr3);
+                assert_eq!(manager.vec[1].clone().unwrap().non_null_ptr, nnptr2);
+                assert_eq!(manager.vec[2].clone().unwrap().non_null_ptr, nnptr1);
+                assert_eq!(manager.index_map.len(), 3);
+                assert_eq!(*manager.index_map.get("bar").unwrap(), 1);
+                assert_eq!(*manager.index_map.get("baz").unwrap(), 0);
+                assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
+
+                let conn4 = SyncDataConn::new(4, logger.clone(), Fail::None);
+                let boxed4 = Box::new(DataConnContainer::new("qux", Box::new(conn4)));
+                let nnptr4 = ptr::NonNull::from(Box::leak(boxed4)).cast::<DataConnContainer>();
+                let ssnnptr = SendSyncNonNull::new(nnptr4);
+                manager.add(ssnnptr);
+                assert_eq!(manager.vec.len(), 4);
+                assert_eq!(manager.vec[0].clone().unwrap().non_null_ptr, nnptr3);
+                assert_eq!(manager.vec[1].clone().unwrap().non_null_ptr, nnptr2);
+                assert_eq!(manager.vec[2].clone().unwrap().non_null_ptr, nnptr1);
+                assert_eq!(manager.vec[3].clone().unwrap().non_null_ptr, nnptr4);
+                assert_eq!(manager.index_map.len(), 4);
+                assert_eq!(*manager.index_map.get("bar").unwrap(), 1);
+                assert_eq!(*manager.index_map.get("baz").unwrap(), 0);
+                assert_eq!(*manager.index_map.get("foo").unwrap(), 2);
+                assert_eq!(*manager.index_map.get("qux").unwrap(), 3);
+
+                manager.close();
+                assert_eq!(manager.vec.len(), 2);
+                assert!(manager.vec[0].is_none());
+                assert!(manager.vec[1].is_none());
+                assert_eq!(manager.index_map.len(), 2);
+                assert_eq!(*manager.index_map.get("bar").unwrap(), 1);
+                assert_eq!(*manager.index_map.get("baz").unwrap(), 0);
+            }
         }
     }
 }
