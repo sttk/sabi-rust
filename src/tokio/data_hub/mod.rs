@@ -2,13 +2,14 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
+mod data_acc;
 mod logic_run;
 mod logic_runner;
 mod logic_txn;
 
 use crate::tokio::{
-    DataAcc, DataConn, DataConnContainer, DataConnManager, DataHub, DataRun, DataSrc,
-    DataSrcManager, ErrEntry, LogicRun, SendSyncNonNull, TxnFailureReport,
+    DataConn, DataConnContainer, DataConnManager, DataHub, DataRun, DataSrc, DataSrcManager,
+    ErrEntry, SendSyncNonNull, TxnFailureReport,
 };
 
 use crate::tokio::data_src::{
@@ -16,8 +17,6 @@ use crate::tokio::data_src::{
 };
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, marker, ptr};
 
@@ -166,33 +165,6 @@ impl DataRun {
             name: name.into(),
             data_conn_type: any::type_name::<C>(),
         }))
-    }
-}
-
-impl<T: 'static + Send> DataAcc for DataHub<T> {
-    type D = T;
-
-    #[inline]
-    async fn get_data_conn_async<C>(&mut self, name: &str) -> errs::Result<&mut C>
-    where
-        C: DataConn + 'static,
-    {
-        self.run.get_data_conn_async(name).await
-    }
-
-    #[allow(clippy::doc_overindented_list_items)]
-    async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
-    where
-        for<'b> F: FnMut(
-            &'b mut DataHub<T>,
-        ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
-    {
-        logic_fn(self).await
-    }
-
-    #[inline]
-    async fn start_async(&mut self) -> LogicRun<'_, T> {
-        LogicRun::new_async(self, true).await
     }
 }
 
