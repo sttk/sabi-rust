@@ -16,11 +16,12 @@ use crate::tokio::{
     SendSyncNonNull,
 };
 
+use futures::FutureExt;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::{any, mem, ptr};
+use std::{any, mem, panic, ptr};
 
 /// Represents the reasons for errors that can occur within [`DataSrc`] operations.
 #[derive(Debug)]
@@ -242,37 +243,78 @@ impl DataSrcManager {
         }
     }
 
+    async fn close_on_panic_async(
+        &mut self,
+        indices: &[usize],
+    ) -> Option<Box<dyn any::Any + Send + 'static>> {
+        let mut first_panic = None;
+
+        for &idx in indices.iter().rev() {
+            if let Some(ssnnptr) = self.vec_unready.get(idx) {
+                if let Err(payload) = panic::AssertUnwindSafe(async {
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let close_fn = unsafe { (*ptr).close_fn };
+                    close_fn(ptr);
+                })
+                .catch_unwind()
+                .await
+                {
+                    first_panic.get_or_insert(payload);
+                }
+            }
+        }
+
+        first_panic
+    }
+
     pub(crate) async fn setup_async(&mut self, errors: &mut Vec<ErrEntry>) {
         if self.vec_unready.is_empty() {
             return;
         }
 
         let mut ag = AsyncGroup::new();
-        for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let setup_fn = unsafe { (*ptr).setup_fn };
-            let name = unsafe { &(*ptr).name };
-            ag._index = i;
-            ag._name = name.clone();
-            if let Err(err) = setup_fn(ptr, &mut ag).await {
-                errors.push(ErrEntry {
-                    index: i,
-                    name: name.clone(),
-                    err,
-                });
-                break;
+
+        let setup_panic = panic::AssertUnwindSafe(async {
+            for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let setup_fn = unsafe { (*ptr).setup_fn };
+                let name = unsafe { &(*ptr).name };
+
+                ag._index = i;
+                ag._name = name.clone();
+
+                if let Err(err) = setup_fn(ptr, &mut ag).await {
+                    errors.push(ErrEntry {
+                        index: i,
+                        name: name.clone(),
+                        err,
+                    });
+                    break;
+                }
             }
-        }
+        })
+        .catch_unwind()
+        .await;
+
         let n_done = ag._index;
         ag.join_and_collect_errors_async(errors).await;
 
-        if errors.is_empty() {
-            self.vec_ready.append(&mut self.vec_unready);
-        } else {
-            for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
+        match setup_panic {
+            Ok(()) => {
+                if errors.is_empty() {
+                    self.vec_ready.append(&mut self.vec_unready);
+                } else {
+                    for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
+                        let ptr = ssnnptr.non_null_ptr.as_ptr();
+                        let close_fn = unsafe { (*ptr).close_fn };
+                        close_fn(ptr);
+                    }
+                }
+            }
+            Err(setup_payload) => {
+                let indices: Vec<usize> = (0..n_done).collect();
+                let _close_panic = self.close_on_panic_async(&indices).await;
+                panic::resume_unwind(setup_payload);
             }
         }
     }
@@ -308,41 +350,61 @@ impl DataSrcManager {
 
         let mut ag = AsyncGroup::new();
         let mut n_done = 0;
-        for vec_index_opt in ordered_indexes.iter() {
-            if let Some(vec_index) = vec_index_opt {
-                let ssnnptr = &self.vec_unready[*vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let setup_fn = unsafe { (*ptr).setup_fn };
-                let name = unsafe { &(*ptr).name };
-                ag._index = *vec_index;
-                ag._name = name.clone();
-                if let Err(err) = setup_fn(ptr, &mut ag).await {
-                    errors.push(ErrEntry {
-                        index: *vec_index,
-                        name: name.clone(),
-                        err,
-                    });
-                    break;
+
+        let setup_panic = panic::AssertUnwindSafe(async {
+            for vec_index_opt in ordered_indexes.iter() {
+                if let Some(vec_index) = vec_index_opt {
+                    let ssnnptr = &self.vec_unready[*vec_index];
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let setup_fn = unsafe { (*ptr).setup_fn };
+                    let name = unsafe { &(*ptr).name };
+
+                    ag._index = *vec_index;
+                    ag._name = name.clone();
+
+                    if let Err(err) = setup_fn(ptr, &mut ag).await {
+                        errors.push(ErrEntry {
+                            index: *vec_index,
+                            name: name.clone(),
+                            err,
+                        });
+                        break;
+                    }
                 }
+                n_done += 1;
             }
-            n_done += 1;
-        }
+        })
+        .catch_unwind()
+        .await;
+
         ag.join_and_collect_errors_async(errors).await;
 
-        if errors.is_empty() {
-            let old_unready = mem::take(&mut self.vec_unready);
-            // Maximizing performance by pre-allocating the required capacity.
-            self.vec_ready
-                .reserve(ordered_indexes.iter().flatten().count());
-            for vec_index in ordered_indexes.iter().flatten() {
-                self.vec_ready.push(old_unready[*vec_index]);
+        match setup_panic {
+            Ok(()) => {
+                if errors.is_empty() {
+                    let old_unready = mem::take(&mut self.vec_unready);
+                    // Maximizing performance by pre-allocating the required capacity.
+                    self.vec_ready
+                        .reserve(ordered_indexes.iter().flatten().count());
+                    for vec_index in ordered_indexes.iter().flatten() {
+                        self.vec_ready.push(old_unready[*vec_index]);
+                    }
+                } else {
+                    for vec_index in ordered_indexes.iter().take(n_done).flatten() {
+                        let ssnnptr = &self.vec_unready[*vec_index];
+                        let ptr = ssnnptr.non_null_ptr.as_ptr();
+                        let close_fn = unsafe { (*ptr).close_fn };
+                        close_fn(ptr);
+                    }
+                }
             }
-        } else {
-            for vec_index in ordered_indexes.iter().take(n_done).flatten() {
-                let ssnnptr = &self.vec_unready[*vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
+            Err(setup_payload) => {
+                let indices: Vec<usize> = ordered_indexes[0..n_done]
+                    .iter()
+                    .filter_map(|o| *o)
+                    .collect();
+                let _close_panic = self.close_on_panic_async(&indices).await;
+                panic::resume_unwind(setup_payload);
             }
         }
     }
@@ -1139,6 +1201,142 @@ mod tests_of_data_src {
             }
         } else {
             panic!();
+        }
+    }
+
+    mod test_panic {
+        use super::*;
+        use std::panic::AssertUnwindSafe;
+
+        #[tokio::test]
+        async fn test_of_setup_but_error() {
+            let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut manager = DataSrcManager::new(true);
+
+                let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
+                manager.add("foo", ds1);
+
+                let ds1 = SyncDataSrc::new(2, logger.clone(), Fail::SetupPanicked);
+                manager.add("bar", ds1);
+
+                let ds1 = SyncDataSrc::new(3, logger.clone(), Fail::None);
+                manager.add("baz", ds1);
+
+                assert!(manager.local);
+                assert_eq!(manager.vec_unready.len(), 3);
+                assert_eq!(manager.vec_ready.len(), 0);
+
+                let mut errors = Vec::new();
+                let setup_panic = AssertUnwindSafe(async {
+                    manager.setup_async(&mut errors).await;
+                })
+                .catch_unwind()
+                .await;
+
+                match setup_panic {
+                    Ok(()) => panic!(),
+                    Err(payload) => {
+                        let s = payload
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .unwrap();
+                        assert_eq!(s, "setup_async panic");
+                    }
+                }
+
+                assert!(manager.local);
+                assert_eq!(manager.vec_unready.len(), 3);
+                assert_eq!(manager.vec_ready.len(), 0);
+
+                assert_eq!(errors.len(), 0);
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            {
+                let locked = logger.lock().unwrap();
+                assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::setup_async 1".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::setup_async 2 panicked".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::close 1".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+            }
+        }
+
+        #[tokio::test]
+        async fn test_of_setup_with_order_but_fail() {
+            let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut manager = DataSrcManager::new(true);
+
+                let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::SetupPanicked);
+                manager.add("foo", ds1);
+
+                let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::SetupPanicked);
+                manager.add("bar", ds2);
+
+                let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::None);
+                manager.add("baz", ds3);
+
+                let ds4 = SyncDataSrc::new(4, logger.clone(), Fail::None);
+                manager.add("qux", ds4);
+
+                assert!(manager.local);
+                assert_eq!(manager.vec_unready.len(), 4);
+                assert_eq!(manager.vec_ready.len(), 0);
+
+                let mut errors = Vec::new();
+                let setup_panic = AssertUnwindSafe(async {
+                    manager
+                        .setup_with_order_async(&["qux", "baz", "foo"], &mut errors)
+                        .await;
+                })
+                .catch_unwind()
+                .await;
+
+                match setup_panic {
+                    Ok(()) => panic!(),
+                    Err(payload) => {
+                        let s = payload
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .unwrap();
+                        assert_eq!(s, "setup_async panic");
+                    }
+                }
+
+                assert!(manager.local);
+                assert_eq!(manager.vec_unready.len(), 4);
+                assert_eq!(manager.vec_ready.len(), 0);
+
+                assert_eq!(errors.len(), 0);
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            {
+                let locked = logger.lock().unwrap();
+                assert!(locked.contains(&"SyncDataSrc::new 1".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::new 2".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::new 3".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::new 4".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::setup_async 4".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::setup_async 3".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::setup_async 1 panicked".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::close 4".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::close 3".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::drop 2".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::drop 1".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::drop 3".to_string()));
+                assert!(locked.contains(&"SyncDataSrc::drop 4".to_string()));
+            }
         }
     }
 }
