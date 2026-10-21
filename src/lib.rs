@@ -450,6 +450,7 @@ struct DataSrcManager {
     vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
     vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
     local: bool,
+    is_abnormal: bool,
 }
 
 /// A utility struct that ensures to close and drop global data sources when it goes out of scope.
