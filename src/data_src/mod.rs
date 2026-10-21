@@ -16,7 +16,7 @@ use crate::{
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{any, mem, ptr};
+use std::{any, mem, panic, ptr};
 
 /// Represents the reasons for errors that can occur within [`DataSrc`] operations.
 #[derive(Debug)]
@@ -227,37 +227,68 @@ impl DataSrcManager {
         }
     }
 
+    fn close_on_panic(&mut self, n_done: usize) -> Option<Box<dyn any::Any + Send + 'static>> {
+        let mut first_panic = None;
+
+        for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
+
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let close_fn = unsafe { (*ptr).close_fn };
+                close_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
+        }
+
+        first_panic
+    }
+
     pub(crate) fn setup(&mut self, errors: &mut Vec<ErrEntry>) {
         if self.vec_unready.is_empty() {
             return;
         }
 
         let mut ag = AsyncGroup::new();
-        for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let setup_fn = unsafe { (*ptr).setup_fn };
-            let name = unsafe { &(*ptr).name };
-            ag._index = i;
-            ag._name = name.clone();
-            if let Err(err) = setup_fn(ptr, &mut ag) {
-                errors.push(ErrEntry {
-                    index: i,
-                    name: name.clone(),
-                    err,
-                });
-                break;
+
+        let setup_panic = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let setup_fn = unsafe { (*ptr).setup_fn };
+                let name = unsafe { &(*ptr).name };
+
+                ag._index = i;
+                ag._name = name.clone();
+
+                if let Err(err) = setup_fn(ptr, &mut ag) {
+                    errors.push(ErrEntry {
+                        index: i,
+                        name: name.clone(),
+                        err,
+                    });
+                    break;
+                }
             }
-        }
+        }));
+
         let n_done = ag._index;
         ag.join_and_collect_errors(errors);
 
-        if errors.is_empty() {
-            self.vec_ready.append(&mut self.vec_unready);
-        } else {
-            for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
+        match setup_panic {
+            Ok(()) => {
+                if errors.is_empty() {
+                    self.vec_ready.append(&mut self.vec_unready);
+                } else {
+                    for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
+                        let ptr = ssnnptr.non_null_ptr.as_ptr();
+                        let close_fn = unsafe { (*ptr).close_fn };
+                        close_fn(ptr);
+                    }
+                }
+            }
+            Err(setup_payload) => {
+                let _close_panic = self.close_on_panic(n_done);
+                panic::resume_unwind(setup_payload);
             }
         }
     }
@@ -289,41 +320,55 @@ impl DataSrcManager {
 
         let mut ag = AsyncGroup::new();
         let mut n_done = 0;
-        for vec_index_opt in ordered_indexes.iter() {
-            if let Some(vec_index) = vec_index_opt {
-                let ssnnptr = &self.vec_unready[*vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let setup_fn = unsafe { (*ptr).setup_fn };
-                let name = unsafe { &(*ptr).name };
-                ag._index = *vec_index;
-                ag._name = name.clone();
-                if let Err(err) = setup_fn(ptr, &mut ag) {
-                    errors.push(ErrEntry {
-                        index: *vec_index,
-                        name: name.clone(),
-                        err,
-                    });
-                    break;
+
+        let setup_panic = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            for vec_index_opt in ordered_indexes.iter() {
+                if let Some(vec_index) = vec_index_opt {
+                    let ssnnptr = &self.vec_unready[*vec_index];
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let setup_fn = unsafe { (*ptr).setup_fn };
+                    let name = unsafe { &(*ptr).name };
+
+                    ag._index = *vec_index;
+                    ag._name = name.clone();
+
+                    if let Err(err) = setup_fn(ptr, &mut ag) {
+                        errors.push(ErrEntry {
+                            index: *vec_index,
+                            name: name.clone(),
+                            err,
+                        });
+                        break;
+                    }
                 }
+                n_done += 1;
             }
-            n_done += 1;
-        }
+        }));
+
         ag.join_and_collect_errors(errors);
 
-        if errors.is_empty() {
-            let old_unready = mem::take(&mut self.vec_unready);
-            // Maximizing performance by pre-allocating the required capacity.
-            self.vec_ready
-                .reserve(ordered_indexes.iter().flatten().count());
-            for vec_index in ordered_indexes.iter().flatten() {
-                self.vec_ready.push(old_unready[*vec_index]);
+        match setup_panic {
+            Ok(()) => {
+                if errors.is_empty() {
+                    let old_unready = mem::take(&mut self.vec_unready);
+                    // Maximizing performance by pre-allocating the required capacity.
+                    self.vec_ready
+                        .reserve(ordered_indexes.iter().flatten().count());
+                    for vec_index in ordered_indexes.iter().flatten() {
+                        self.vec_ready.push(old_unready[*vec_index]);
+                    }
+                } else {
+                    for vec_index in ordered_indexes.iter().take(n_done).flatten().rev() {
+                        let ssnnptr = &self.vec_unready[*vec_index];
+                        let ptr = ssnnptr.non_null_ptr.as_ptr();
+                        let close_fn = unsafe { (*ptr).close_fn };
+                        close_fn(ptr);
+                    }
+                }
             }
-        } else {
-            for vec_index in ordered_indexes.iter().take(n_done).flatten().rev() {
-                let ssnnptr = &self.vec_unready[*vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
+            Err(setup_payload) => {
+                let _close_panic = self.close_on_panic(n_done);
+                panic::resume_unwind(setup_payload);
             }
         }
     }
@@ -1214,6 +1259,62 @@ mod tests_of_data_src {
             }
         } else {
             panic!();
+        }
+    }
+
+    mod test_panic {
+        use super::*;
+
+        #[test]
+        fn test_of_setup_but_error() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut manager = DataSrcManager::new(true);
+
+                let ds1 = SyncDataSrc::new(1, logger.clone(), Fail::None);
+                manager.add("foo", ds1);
+
+                let ds2 = SyncDataSrc::new(2, logger.clone(), Fail::SetupPanicked);
+                manager.add("bar", ds2);
+
+                let ds3 = SyncDataSrc::new(3, logger.clone(), Fail::Setup);
+                manager.add("bar", ds3);
+
+                assert!(manager.local);
+                assert_eq!(manager.vec_unready.len(), 3);
+                assert_eq!(manager.vec_ready.len(), 0);
+
+                let mut errors = Vec::new();
+                manager.setup(&mut errors);
+
+                assert!(manager.local);
+                assert_eq!(manager.vec_unready.len(), 3);
+                assert_eq!(manager.vec_ready.len(), 0);
+
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].index, 1);
+                assert_eq!(errors[0].name, "bar".into());
+                #[cfg(unix)]
+                assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/_test_commons.rs, line = 461 }");
+                #[cfg(windows)]
+                assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\_test_commons.rs, line = 461 }");
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                vec![
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::new 3",
+                    "SyncDataSrc::setup 1",
+                    "SyncDataSrc::setup 2 failed",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 3",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::drop 1",
+                ],
+            );
         }
     }
 }

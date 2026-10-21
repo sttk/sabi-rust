@@ -16,6 +16,7 @@ pub(crate) enum Fail {
     Rollback,
     PreCommitBecomeCommitted,
     CreateDataConn,
+    SetupPanicked,
     PreCommitPanicked,
     CommitPanicked,
     PostCommitPanicked,
@@ -459,6 +460,12 @@ impl DataSrc<SyncDataConn> for SyncDataSrc {
                 .unwrap()
                 .push(format!("SyncDataSrc::setup {} failed", self.id));
             return Err(errs::Err::new("XXX".to_string()));
+        } else if self.fail == Fail::SetupPanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataSrc::setup {} panicked", self.id));
+            panic!("setup panic");
         }
         self.logger
             .lock()
@@ -530,8 +537,11 @@ impl DataSrc<AsyncDataConn> for AsyncDataSrc {
             std::thread::sleep(std::time::Duration::from_millis(wait));
             let mut logger = logger.lock().unwrap();
             if fail == Fail::Setup {
-                logger.push(format!("AsyncDataSrc::setup {} failed to setup", id));
+                logger.push(format!("AsyncDataSrc::setup {} failed", id));
                 return Err(errs::Err::new("XXX".to_string()));
+            } else if fail == Fail::SetupPanicked {
+                logger.push(format!("AsyncDataSrc::setup {} panicked", id));
+                panic!("setup panic");
             }
             logger.push(format!("AsyncDataSrc::setup {}", id));
             Ok(())
