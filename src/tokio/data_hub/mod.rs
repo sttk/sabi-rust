@@ -42,7 +42,7 @@ pub enum DataHubError {
     },
 
     /// Indicates that one or more logic functions failed to execute.
-    FailToRunLogic {
+    FailToRunLogics {
         /// Errors returned by the failed logic functions.
         errors: Vec<ErrEntry>,
     },
@@ -131,6 +131,11 @@ impl DataRun {
     fn end(&mut self) {
         self.data_conn_manager.close();
         self.fixed = false;
+    }
+
+    #[inline]
+    async fn abend_async(&mut self) -> Option<Box<dyn std::any::Any + std::marker::Send>> {
+        self.data_conn_manager.abend_async().await
     }
 
     async fn get_data_conn_async<C>(&mut self, name: &str) -> errs::Result<&mut C>

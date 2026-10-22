@@ -4,7 +4,9 @@
 
 use crate::tokio::{DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
 
+use futures::FutureExt;
 use std::future::Future;
+use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -81,9 +83,20 @@ impl<T: 'static + Send> LogicRunner<T> {
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         self.hub.run.begin_async().await?;
-        let r = logic_fn(&mut self.hub).await;
-        self.hub.run.end();
-        r
+
+        match panic::AssertUnwindSafe(async { logic_fn(&mut self.hub).await })
+            .catch_unwind()
+            .await
+        {
+            Ok(result) => {
+                self.hub.run.end();
+                result
+            }
+            Err(payload) => {
+                let _ = self.hub.run.abend_async().await;
+                panic::resume_unwind(payload);
+            }
+        }
     }
 
     /// Starts a builder chain for executing non-transactional business logic steps
@@ -123,16 +136,32 @@ impl<T: 'static + Send> LogicRunner<T> {
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         self.hub.run.begin_async().await?;
-        let mut r = logic_fn(&mut self.hub).await;
-        let mut reports = self.hub.run.new_failure_reports();
-        if r.is_ok() {
-            r = self.hub.run.commit_async(&mut reports).await;
+
+        match panic::AssertUnwindSafe(async {
+            let mut result = logic_fn(&mut self.hub).await;
+
+            let mut reports = self.hub.run.new_failure_reports();
+            if result.is_ok() {
+                result = self.hub.run.commit_async(&mut reports).await;
+            }
+            if result.is_err() {
+                self.hub.run.rollback_async(reports).await;
+            }
+
+            result
+        })
+        .catch_unwind()
+        .await
+        {
+            Ok(result) => {
+                self.hub.run.end();
+                result
+            }
+            Err(payload) => {
+                let _ = self.hub.run.abend_async().await;
+                panic::resume_unwind(payload);
+            }
         }
-        if r.is_err() {
-            self.hub.run.rollback_async(reports).await;
-        }
-        self.hub.run.end();
-        r
     }
 
     /// Starts a builder chain for executing transactional business logic steps asynchronously.

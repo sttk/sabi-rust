@@ -4,9 +4,10 @@
 
 use crate::tokio::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicRun};
 
+use futures::FutureExt;
 use std::future::Future;
-use std::mem;
 use std::pin::Pin;
+use std::{mem, panic};
 
 impl<'a, T> LogicRun<'a, T> {
     pub(crate) async fn new_async(hub: &'a mut DataHub<T>, nested: bool) -> LogicRun<'a, T> {
@@ -58,12 +59,22 @@ impl<'a, T> LogicRun<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub).await {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicRun#run_async(logic-{})", index).into(),
-                            err,
-                        });
+                    match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicRun#run_async(logic-{})", index).into(),
+                                err,
+                            });
+                        }
+                        Err(payload) => {
+                            let _ = self.hub.run.abend_async().await;
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -101,12 +112,22 @@ impl<'a, T> LogicRun<'a, T> {
 
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
-                if let Err(err) = logic_fn(self.hub).await {
-                    errors.push(ErrEntry {
-                        index,
-                        name: format!("LogicRun#run_force_async(logic-{})", index).into(),
-                        err,
-                    });
+                match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("LogicRun#run_force_async(logic-{})", index).into(),
+                            err,
+                        });
+                    }
+                    Err(payload) => {
+                        let _ = self.hub.run.abend_async().await;
+                        panic::resume_unwind(payload);
+                    }
                 }
                 self
             }
@@ -143,15 +164,26 @@ impl<'a, T> LogicRun<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub).await {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicRun#run_or_block_async(logic-{})", index).into(),
-                            err,
-                        });
-                        self.err = LogicErrAt::Block {
-                            errors: mem::take(errors),
-                        };
+                    match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicRun#run_or_block_async(logic-{})", index)
+                                    .into(),
+                                err,
+                            });
+                            self.err = LogicErrAt::Block {
+                                errors: mem::take(errors),
+                            };
+                        }
+                        Err(payload) => {
+                            let _ = self.hub.run.abend_async().await;
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -180,11 +212,11 @@ impl<'a, T> LogicRun<'a, T> {
                 if errors.is_empty() {
                     Ok(())
                 } else {
-                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
                 }
             }
             LogicErrAt::Block { errors } => {
-                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
             }
         }
     }
@@ -331,7 +363,7 @@ mod tests_of_logic_run {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicRun#run_async(logic-0)".into());
@@ -423,7 +455,7 @@ mod tests_of_logic_run {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(
@@ -516,7 +548,7 @@ mod tests_of_logic_run {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicRun#run_force_async(logic-0)".into());

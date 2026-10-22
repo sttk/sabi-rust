@@ -259,6 +259,15 @@ pub trait DataConn {
     /// This method should release any resources held by the data connection, ensuring
     /// a graceful shutdown of the connection.
     fn close(&mut self);
+
+    /// Closes the connection after an abnormal termination.
+    ///
+    /// The default implementation calls [`close`](Self::close).
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn abend_async(&mut self) -> impl Future<Output = ()> + Send {
+        self.close();
+        async {}
+    }
 }
 
 pub(crate) struct NoopDataConn {}
@@ -317,6 +326,8 @@ where
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
 
     close_fn: fn(*const DataConnContainer),
+
+    abend_fn: fn(*const DataConnContainer) -> Pin<Box<dyn Future<Output = ()> + Send>>,
 
     name: Arc<str>,
     data_conn: Box<C>,

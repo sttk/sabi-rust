@@ -7,11 +7,12 @@ use crate::tokio::{
 };
 use crate::{TxnFailureCause, TxnFailureReport, TxnFailureRollback};
 
+use futures::FutureExt;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::{any, mem};
+use std::{any, mem, panic};
 
 /// Represents the reasons for errors that can occur within `DataConn` operations.
 #[allow(clippy::enum_variant_names)]
@@ -83,6 +84,7 @@ where
             rollback_fn: rollback_data_conn_async::<C>,
             on_txn_failure_fn: on_txn_failure_data_conn_async::<C>,
             close_fn: close_data_conn::<C>,
+            abend_fn: abend_data_conn_async::<C>,
 
             name: name.into(),
             data_conn,
@@ -183,6 +185,16 @@ where
 {
     let container = unsafe { &mut *(ptr as *mut DataConnContainer<C>) };
     container.data_conn.close();
+}
+
+fn abend_data_conn_async<C>(
+    ptr: *const DataConnContainer,
+) -> Pin<Box<dyn Future<Output = ()> + Send>>
+where
+    C: DataConn + 'static,
+{
+    let container = unsafe { &mut *(ptr as *mut DataConnContainer<C>) };
+    Box::pin(container.data_conn.abend_async())
 }
 
 impl DataConnManager {
@@ -441,13 +453,42 @@ impl DataConnManager {
             vec![None; self.ordered_names.len()];
         mem::swap(&mut self.vec, &mut vec);
 
+        let mut first_panic: Option<Box<dyn any::Any + Send>> = None;
+
         for ssnnptr in vec.iter().flatten().rev() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let close_fn = unsafe { (*ptr).close_fn };
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            close_fn(ptr);
-            drop_fn(ptr);
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let close_fn = unsafe { (*ptr).close_fn };
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                close_fn(ptr);
+                drop_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
         }
+
+        if let Some(payload) = first_panic {
+            panic::resume_unwind(payload);
+        }
+    }
+
+    pub(crate) async fn abend_async(&mut self) -> Option<Box<dyn any::Any + Send>> {
+        let mut first_panic = None;
+
+        for ssnnptr in self.vec.iter().flatten().rev() {
+            if let Err(payload) = panic::AssertUnwindSafe(async {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let abend_fn = unsafe { (*ptr).abend_fn };
+                abend_fn(ptr).await;
+            })
+            .catch_unwind()
+            .await
+            {
+                let _ = first_panic.get_or_insert(payload);
+            }
+        }
+
+        first_panic
     }
 }
 

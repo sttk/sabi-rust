@@ -4,7 +4,7 @@
 
 use crate::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicTxn};
 
-use std::mem;
+use std::{mem, panic};
 
 impl<'a, T> LogicTxn<'a, T> {
     pub(crate) fn new(hub: &'a mut DataHub<T>) -> LogicTxn<'a, T> {
@@ -51,12 +51,19 @@ impl<'a, T> LogicTxn<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicTxn#run(logic-{})", index).into(),
-                            err,
-                        });
+                    match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self.hub))) {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicTxn#run(logic-{})", index).into(),
+                                err,
+                            });
+                        }
+                        Err(payload) => {
+                            let _ = self.hub.run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -92,12 +99,19 @@ impl<'a, T> LogicTxn<'a, T> {
 
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
-                if let Err(err) = logic_fn(self.hub) {
-                    errors.push(ErrEntry {
-                        index,
-                        name: format!("LogicTxn#run_force(logic-{})", index).into(),
-                        err,
-                    });
+                match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self.hub))) {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("LogicTxn#run_force(logic-{})", index).into(),
+                            err,
+                        });
+                    }
+                    Err(payload) => {
+                        let _ = self.hub.run.abend();
+                        panic::resume_unwind(payload);
+                    }
                 }
                 self
             }
@@ -133,15 +147,22 @@ impl<'a, T> LogicTxn<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicTxn#run_or_block(logic-{})", index).into(),
-                            err,
-                        });
-                        self.err = LogicErrAt::Block {
-                            errors: mem::take(errors),
-                        };
+                    match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self.hub))) {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicTxn#run_or_block(logic-{})", index).into(),
+                                err,
+                            });
+                            self.err = LogicErrAt::Block {
+                                errors: mem::take(errors),
+                            };
+                        }
+                        Err(payload) => {
+                            let _ = self.hub.run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -168,31 +189,33 @@ impl<'a, T> LogicTxn<'a, T> {
     /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
     ///   or an `errs::Err` if any transaction phase fails.
     pub fn end_txn(self) -> errs::Result<()> {
-        match self.err {
-            LogicErrAt::Begin { err } => {
-                self.hub.run.end();
-                Err(err)
-            }
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| match self.err {
+            LogicErrAt::Begin { err } => Err(err),
             LogicErrAt::Run { errors } => {
                 let mut reports = self.hub.run.new_failure_reports();
-                if errors.is_empty() {
-                    let result = self.hub.run.commit(&mut reports);
-                    if result.is_err() {
-                        self.hub.run.rollback(reports);
-                    }
-                    self.hub.run.end();
-                    result
+                let result = if errors.is_empty() {
+                    self.hub.run.commit(&mut reports)
                 } else {
+                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+                };
+                if result.is_err() {
                     self.hub.run.rollback(reports);
-                    self.hub.run.end();
-                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
                 }
+                result
             }
             LogicErrAt::Block { errors } => {
                 let reports = self.hub.run.new_failure_reports();
                 self.hub.run.rollback(reports);
+                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
+            }
+        })) {
+            Ok(result) => {
                 self.hub.run.end();
-                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                result
+            }
+            Err(payload) => {
+                let _ = self.hub.run.abend();
+                panic::resume_unwind(payload);
             }
         }
     }
@@ -336,7 +359,7 @@ mod tests_of_logic_txn {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicTxn#run(logic-0)".into());
@@ -426,7 +449,7 @@ mod tests_of_logic_txn {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicTxn#run_or_block(logic-0)".into());
@@ -514,7 +537,7 @@ mod tests_of_logic_txn {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicTxn#run_force(logic-0)".into());
