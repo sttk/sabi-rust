@@ -194,14 +194,14 @@ impl<'a, T> LogicTxn<'a, T> {
                 } else {
                     self.hub.run.rollback_async(reports).await;
                     self.hub.run.end();
-                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
                 }
             }
             LogicErrAt::Block { errors } => {
                 let reports = self.hub.run.new_failure_reports();
                 self.hub.run.rollback_async(reports).await;
                 self.hub.run.end();
-                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
             }
         }
     }
@@ -356,7 +356,7 @@ mod tests_of_logic_txn {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicTxn#run_async(logic-0)".into());
@@ -452,7 +452,7 @@ mod tests_of_logic_txn {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(
@@ -549,7 +549,7 @@ mod tests_of_logic_txn {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicTxn#run_force_async(logic-0)".into());

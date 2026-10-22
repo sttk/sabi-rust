@@ -42,7 +42,7 @@ pub enum DataHubError {
     },
 
     /// Indicates that one or more logic functions failed to execute.
-    FailToRunLogic {
+    FailToRunLogics {
         /// Errors returned by the failed logic functions.
         errors: Vec<ErrEntry>,
     },

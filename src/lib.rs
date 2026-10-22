@@ -322,6 +322,10 @@ pub trait DataConn {
     /// This method should release any resources held by the data connection, ensuring
     /// a graceful shutdown of the connection.
     fn close(&mut self);
+
+    fn abend(&mut self) {
+        self.close();
+    }
 }
 
 struct NoopDataConn {}
@@ -355,6 +359,7 @@ where
     rollback_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> errs::Result<()>,
     on_txn_failure_fn: fn(*const DataConnContainer, &mut AsyncGroup, &[TxnFailureReport]),
     close_fn: fn(*const DataConnContainer),
+    abend_fn: fn(*const DataConnContainer),
 
     name: Arc<str>,
     data_conn: Box<C>,

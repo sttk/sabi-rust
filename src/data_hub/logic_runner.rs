@@ -4,6 +4,7 @@
 
 use crate::{DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
 
+use std::panic;
 use std::sync::Arc;
 
 impl<T: 'static> LogicRunner<T> {
@@ -78,9 +79,17 @@ impl<T: 'static> LogicRunner<T> {
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
         self.hub.run.begin()?;
-        let r = logic_fn(&mut self.hub);
-        self.hub.run.end();
-        r
+
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(&mut self.hub))) {
+            Ok(result) => {
+                self.hub.run.end();
+                result
+            }
+            Err(payload) => {
+                let _ = self.hub.run.abend();
+                panic::resume_unwind(payload);
+            }
+        }
     }
 
     /// Starts a builder chain for executing non-transactional business logic steps.
@@ -118,16 +127,29 @@ impl<T: 'static> LogicRunner<T> {
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
         self.hub.run.begin()?;
-        let mut r = logic_fn(&mut self.hub);
-        let mut reports = self.hub.run.new_failure_reports();
-        if r.is_ok() {
-            r = self.hub.run.commit(&mut reports);
+
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let mut result = logic_fn(&mut self.hub);
+
+            let mut reports = self.hub.run.new_failure_reports();
+            if result.is_ok() {
+                result = self.hub.run.commit(&mut reports);
+            }
+            if result.is_err() {
+                self.hub.run.rollback(reports);
+            }
+
+            result
+        })) {
+            Ok(result) => {
+                self.hub.run.end();
+                result
+            }
+            Err(payload) => {
+                let _ = self.hub.run.abend();
+                panic::resume_unwind(payload);
+            }
         }
-        if r.is_err() {
-            self.hub.run.rollback(reports);
-        }
-        self.hub.run.end();
-        r
     }
 
     #[inline]

@@ -180,11 +180,11 @@ impl<'a, T> LogicRun<'a, T> {
                 if errors.is_empty() {
                     Ok(())
                 } else {
-                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                    Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
                 }
             }
             LogicErrAt::Block { errors } => {
-                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                Err(errs::Err::new(DataHubError::FailToRunLogics { errors }))
             }
         }
     }
@@ -331,7 +331,7 @@ mod tests_of_logic_run {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicRun#run_async(logic-0)".into());
@@ -423,7 +423,7 @@ mod tests_of_logic_run {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(
@@ -516,7 +516,7 @@ mod tests_of_logic_run {
 
             if let Err(err) = result {
                 match err.reason::<DataHubError>() {
-                    Ok(DataHubError::FailToRunLogic { errors }) => {
+                    Ok(DataHubError::FailToRunLogics { errors }) => {
                         assert_eq!(errors.len(), 1);
                         assert_eq!(errors[0].index, 0);
                         assert_eq!(errors[0].name, "LogicRun#run_force_async(logic-0)".into());
