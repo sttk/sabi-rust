@@ -322,6 +322,18 @@ pub trait DataConn {
     /// This method should release any resources held by the data connection, ensuring
     /// a graceful shutdown of the connection.
     fn close(&mut self);
+
+    /// Closes connections to external data sources as part of abnormal termination handling.
+    ///
+    /// This method is called when a panic occurs. Connections must be reliably closed even when
+    /// the program terminates abnormally due to a panic. If a connection to a database is involved
+    /// in a transaction, a rollback command should also be executed. This method is intended to
+    /// perform such cleanup operations.
+    ///
+    /// The default implementation calls the [`DataConn::close`] method.
+    fn abend(&mut self) {
+        self.close();
+    }
 }
 
 struct NoopDataConn {}
@@ -355,6 +367,7 @@ where
     rollback_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> errs::Result<()>,
     on_txn_failure_fn: fn(*const DataConnContainer, &mut AsyncGroup, &[TxnFailureReport]),
     close_fn: fn(*const DataConnContainer),
+    abend_fn: fn(*const DataConnContainer),
 
     name: Arc<str>,
     data_conn: Box<C>,

@@ -9,7 +9,7 @@ use crate::{
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{any, mem};
+use std::{any, mem, panic};
 
 /// Represents the reasons for errors that can occur within `DataConn` operations.
 #[allow(clippy::enum_variant_names)]
@@ -81,6 +81,7 @@ where
             rollback_fn: rollback_data_conn::<C>,
             on_txn_failure_fn: on_txn_failure_data_conn::<C>,
             close_fn: close_data_conn::<C>,
+            abend_fn: close_data_conn::<C>,
 
             name: name.into(),
             data_conn,
@@ -172,6 +173,16 @@ where
     let typed_ptr = ptr as *mut DataConnContainer<C>;
     unsafe {
         (*typed_ptr).data_conn.close();
+    }
+}
+
+fn abend_data_conn<C>(ptr: *const DataConnContainer)
+where
+    C: DataConn + 'static,
+{
+    let typed_ptr = ptr as *mut DataConnContainer<C>;
+    unsafe {
+        (*typed_ptr).data_conn.abend();
     }
 }
 
@@ -370,32 +381,38 @@ impl DataConnManager {
     pub(crate) fn rollback(&mut self, mut reports: Vec<TxnFailureReport>) {
         let mut errors = Vec::new();
 
+        let mut first_panic: Option<Box<dyn std::any::Any + std::marker::Send>> = None;
+
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let report = &mut reports[i];
-            let is_committed_fn = unsafe { (*ptr).is_committed_fn };
-            if is_committed_fn(ptr) {
-                if let TxnFailureCause::NoneByUncommitted = report.cause {
-                    report.cause = TxnFailureCause::NoneByCommitted;
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let report = &mut reports[i];
+                let is_committed_fn = unsafe { (*ptr).is_committed_fn };
+                if is_committed_fn(ptr) {
+                    if let TxnFailureCause::NoneByUncommitted = report.cause {
+                        report.cause = TxnFailureCause::NoneByCommitted;
+                    }
+                    return;
                 }
-                continue;
-            }
-            if self.committed {
-                continue;
-            }
-            let rollback_fn = unsafe { (*ptr).rollback_fn };
-            let name = unsafe { &(*ptr).name };
-            ag._index = i;
-            ag._name = name.clone();
-            if let Err(err) = rollback_fn(ptr, &mut ag) {
-                errors.push(ErrEntry {
-                    index: i,
-                    name: name.clone(),
-                    err,
-                });
-            } else {
-                report.rollback = TxnFailureRollback::NoneByRolledBack;
+                if self.committed {
+                    return;
+                }
+                let rollback_fn = unsafe { (*ptr).rollback_fn };
+                let name = unsafe { &(*ptr).name };
+                ag._index = i;
+                ag._name = name.clone();
+                if let Err(err) = rollback_fn(ptr, &mut ag) {
+                    errors.push(ErrEntry {
+                        index: i,
+                        name: name.clone(),
+                        err,
+                    });
+                } else {
+                    report.rollback = TxnFailureRollback::NoneByRolledBack;
+                }
+            })) {
+                let _ = first_panic.get_or_insert(payload);
             }
         }
         ag.join_and_collect_errors(&mut errors);
@@ -409,11 +426,19 @@ impl DataConnManager {
 
         let mut ag = AsyncGroup::new();
         for ssnnptr in self.vec.iter().flatten() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let on_txn_failure_fn = unsafe { (*ptr).on_txn_failure_fn };
-            on_txn_failure_fn(ptr, &mut ag, &reports);
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let on_txn_failure_fn = unsafe { (*ptr).on_txn_failure_fn };
+                on_txn_failure_fn(ptr, &mut ag, &reports);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
         }
         ag.join_and_ignore_errors();
+
+        if let Some(payload) = first_panic {
+            panic::resume_unwind(payload);
+        }
     }
 
     pub(crate) fn close(&mut self) {
@@ -426,12 +451,36 @@ impl DataConnManager {
             vec![None; self.ordered_names.len()];
         mem::swap(&mut self.vec, &mut vec);
 
+        let mut first_panic: Option<Box<dyn std::any::Any + std::marker::Send>> = None;
+
         for ssnnptr in vec.iter().flatten().rev() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let close_fn = unsafe { (*ptr).close_fn };
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            close_fn(ptr);
-            drop_fn(ptr);
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let close_fn = unsafe { (*ptr).close_fn };
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                close_fn(ptr);
+                drop_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
+        }
+
+        if let Some(payload) = first_panic {
+            panic::resume_unwind(payload);
+        }
+    }
+
+    pub(crate) fn abend(&mut self) {
+        let vec = mem::take(&mut self.vec);
+
+        for ssnnptr in vec.iter().flatten().rev() {
+            let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let close_fn = unsafe { (*ptr).close_fn };
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                close_fn(ptr);
+                drop_fn(ptr);
+            }));
         }
     }
 }
