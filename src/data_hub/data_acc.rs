@@ -15,7 +15,7 @@ impl<T: 'static> DataAcc for DataHub<T> {
     #[inline]
     fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
-        F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
+        F: for<'a> FnMut(&'a mut Self) -> errs::Result<()>,
     {
         logic_fn(self)
     }

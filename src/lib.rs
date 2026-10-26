@@ -551,7 +551,7 @@ pub trait DataAcc {
     ///   or an error if executing `logic_fn` fails.
     fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
-        F: FnMut(&mut DataHub<Self::D>) -> errs::Result<()>;
+        F: for<'a> FnMut(&'a mut Self) -> errs::Result<()>;
 
     /// Creates a [`LogicRun`] for executing multiple logic functions.
     ///
