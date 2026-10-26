@@ -2,14 +2,14 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicRun};
+use crate::{AsDataHub, DataHubError, ErrEntry, LogicErrAt, LogicRun};
 
 use std::mem;
 
-impl<'a, T> LogicRun<'a, T> {
-    pub(crate) fn new(hub: &'a mut DataHub<T>, nested: bool) -> LogicRun<'a, T> {
+impl<'a, A: AsDataHub> LogicRun<'a, A> {
+    pub(crate) fn new(hub: &'a mut A, nested: bool) -> LogicRun<'a, A> {
         if !nested {
-            if let Err(err) = hub.run.begin() {
+            if let Err(err) = hub.as_hub().run.begin() {
                 return Self {
                     hub,
                     err: LogicErrAt::Begin { err },
@@ -36,7 +36,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// # Type Parameters
     ///
     /// * `F`: The type of the closure, which must be
-    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///   `FnMut(&mut A) -> errs::Result<()>`.
     ///
     /// # Parameters
     ///
@@ -47,7 +47,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// Self for method chaining.
     pub fn run<F>(mut self, mut logic_fn: F) -> Self
     where
-        F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
+        F: FnMut(&mut A) -> errs::Result<()>,
     {
         let index = self.index;
         self.index = index + 1;
@@ -78,7 +78,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// # Type Parameters
     ///
     /// * `F`: The type of the closure, which must be
-    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///   `FnMut(&mut A) -> errs::Result<()>`.
     ///
     /// # Parameters
     ///
@@ -89,7 +89,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// Self for method chaining.
     pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
     where
-        F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
+        F: FnMut(&mut A) -> errs::Result<()>,
     {
         let index = self.index;
         self.index = index + 1;
@@ -118,7 +118,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// # Type Parameters
     ///
     /// * `F`: The type of the closure, which must be
-    ///   `FnMut(&mut DataHub<T>) -> errs::Result<()>`.
+    ///   `FnMut(&mut A) -> errs::Result<()>`.
     ///
     /// # Parameters
     ///
@@ -129,7 +129,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// Self for method chaining.
     pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
     where
-        F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
+        F: FnMut(&mut A) -> errs::Result<()>,
     {
         let index = self.index;
         self.index = index + 1;
@@ -165,7 +165,7 @@ impl<'a, T> LogicRun<'a, T> {
     ///   or an error if executing `logic_fn` fails.
     pub fn end(self) -> errs::Result<()> {
         if !self.nested {
-            self.hub.run.end();
+            self.hub.as_hub().run.end();
         }
 
         match self.err {
@@ -189,7 +189,7 @@ impl<'a, T> LogicRun<'a, T> {
 mod tests_of_logic_run {
     use super::*;
     use crate::_test_commons::*;
-    use crate::{DataAcc, LogicRunner};
+    use crate::{DataAcc, DataHub, LogicRunner};
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -520,5 +520,105 @@ mod tests_of_logic_run {
                 "SyncDataSrc::drop 1",
             ]
         );
+    }
+
+    mod test_nested_logic_running_in_data_acc {
+        use super::*;
+        use crate::DataAcc;
+        use override_macro::{overridable, override_with};
+
+        #[overridable]
+        trait GettingDataAcc3: DataAcc {
+            fn get_text(&mut self) -> errs::Result<String> {
+                let _conn = self.get_data_conn::<SyncDataConn>("foo")?;
+                // getting a text by using _conn
+                Ok("hello".to_string())
+            }
+        }
+
+        #[overridable]
+        trait SettingDataAcc3: DataAcc {
+            fn set_text(&mut self, _text: String) -> errs::Result<()> {
+                let _conn = self.get_data_conn::<SyncDataConn>("bar")?;
+                // setting a text by using _conn
+                Ok(())
+            }
+        }
+
+        #[overridable]
+        trait GetSetDataAcc3: DataAcc + HogeData3 {
+            fn process_text(&mut self) -> errs::Result<()> {
+                self.start().run(hoge_logic3).end()
+            }
+        }
+
+        struct MyScope3;
+        impl GettingDataAcc3 for DataHub<MyScope3> {}
+        impl SettingDataAcc3 for DataHub<MyScope3> {}
+        impl GetSetDataAcc3 for DataHub<MyScope3> {}
+
+        #[overridable]
+        trait HogeData3: Sized {
+            fn get_text(&mut self) -> errs::Result<String>;
+            fn set_text(&mut self, text: String) -> errs::Result<()>;
+        }
+
+        #[override_with(GettingDataAcc3, SettingDataAcc3)]
+        impl HogeData3 for DataHub<MyScope3> {}
+
+        fn hoge_logic3(data: &mut impl HogeData3) -> errs::Result<()> {
+            let mut text = data.get_text()?;
+            text = text.to_uppercase();
+            data.set_text(text)?;
+            Ok(())
+        }
+
+        #[overridable]
+        trait FugaData3 {
+            fn process_text(&mut self) -> errs::Result<()>;
+        }
+
+        #[override_with(GetSetDataAcc3)]
+        impl FugaData3 for DataHub<MyScope3> {}
+
+        fn fuga_logic3(data: &mut impl FugaData3) -> errs::Result<()> {
+            data.process_text()
+        }
+
+        #[test]
+        fn test_run() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut runner = LogicRunner::new(DataHub::<MyScope3>::new());
+                runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+                if let Err(err) = runner.start().run(fuga_logic3).end() {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                &[
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup 1",
+                    "SyncDataSrc::setup 2",
+                    "SyncDataSrc::create_data_conn 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ]
+            );
+        }
     }
 }

@@ -77,7 +77,159 @@ pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
 pub use data_src::DataSrcError;
 
-pub use data_src::{create_static_data_src_container, setup, setup_with_order, uses};
+pub use data_src::create_static_data_src_container;
+
+/// Executes the setup process for all globally registered data sources.
+///
+/// This setup typically involves tasks such as creating connection pools,
+/// opening global connections, or performing initial configurations necessary
+/// for creating session-specific connections.
+///
+/// If any data source fails to set up, this function returns an `errs::Err` with
+/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
+/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
+/// all global data sources that were successfully set up are also closed.
+///
+/// If all data source setups are successful, the [`Result::Ok`] which contains an
+/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
+/// data sources when it's dropped.
+/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
+/// automatically cleaned up when the return value goes out of scope.
+///
+/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
+/// variable using `let _ = ...`.
+/// If you do, the inner object is dropped immediately at that point.
+///
+/// # Returns
+///
+/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
+///   set up successfully, or an `errs::Err` if any setup fails.
+#[inline]
+pub fn setup() -> errs::Result<AutoShutdown> {
+    data_src::setup()
+}
+
+/// Executes the setup process for all globally registered data sources, allowing for a specified
+/// order of setup for a subset of data sources.
+///
+/// This function is similar to [`setup`], but it allows defining a specific order for the setup
+/// of certain data sources identified by their names. Data sources not specified in `names` will
+/// be set up after the named ones, in their order of acquisition.
+///
+/// This setup typically involves tasks such as creating connection pools,
+/// opening global connections, or performing initial configurations necessary
+/// for creating session-specific connections.
+///
+/// If any data source fails to set up, this function returns an `errs::Err` with
+/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
+/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
+/// all global data sources that were successfully set up are also closed.
+///
+/// If all data source setups are successful, the [`Result::Ok`] which contains an
+/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
+/// data sources when it's dropped.
+/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
+/// automatically cleaned up when the return value goes out of scope.
+///
+/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
+/// variable using `let _ = ...`.
+/// If you do, the inner object is dropped immediately at that point.
+///
+/// # Parameters
+///
+/// * `names`: A slice of `&str` representing the names of data sources to set up in a specific
+///   order.
+///
+/// # Returns
+///
+/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
+///   set up successfully, or an `errs::Err` if any setup fails.
+#[inline]
+pub fn setup_with_order(names: &[&str]) -> errs::Result<AutoShutdown> {
+    data_src::setup_with_order(names)
+}
+
+/// Registers a global data source dynamically at runtime.
+///
+/// This function associates a given [`DataSrc`] implementation with a unique name.
+/// This name will later be used to retrieve session-specific [`DataConn`] instances from this
+/// data source.
+///
+/// Global data sources added via this function can be set up via [`setup`] or [`setup_with_order`].
+///
+/// If `setup` or `setup_with_order` has already been called, this function will return an
+/// `errs::Err`.
+///
+/// # Parameters
+///
+/// * `name`: The unique name for the data source.
+/// * `ds`: The [`DataSrc`] instance to register.
+///
+/// # Returns
+///
+/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an `errs::Err`
+///   if the global data source manager is in an invalid state or if [`setup`] or
+///   [`setup_with_order`] has already been called.
+#[inline]
+pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
+where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    data_src::uses(name, ds)
+}
+
+/// Registers a global data source that can be used throughout the application.
+///
+/// This macro associates a given [`DataSrc`] implementation with a unique name.
+/// This name will later be used to retrieve session-specific [`DataConn`] instances
+/// from this data source.
+///
+/// Global data sources are set up once via the [`setup`] function and are available
+/// to all [`DataHub`] instances.
+///
+/// # Parameters
+///
+/// * `name`: The unique name for the data source.
+/// * `ds`: The [`DataSrc`] instance to register.
+///
+/// # Examples
+///
+/// ```ignore
+/// use sabi::{DataSrc, DataConn, AsyncGroup, uses};
+/// use errs::Err;
+///
+/// struct MyDataSrc;
+/// impl DataSrc<MyDataConn> for MyDataSrc {
+///     fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
+///     fn close(&mut self) {}
+///     fn create_data_conn(&mut self) -> errs::Result<Box<MyDataConn>> {
+///         Ok(Box::new(MyDataConn))
+///     }
+/// }
+///
+/// struct MyDataConn;
+/// impl DataConn for MyDataConn {
+///     fn commit(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
+///     fn rollback(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> { Ok(()) }
+///     fn is_committed(&self) -> bool { false }
+///     fn close(&mut self) {}
+/// }
+///
+/// uses!("my_data_src", MyDataSrc);
+/// ```
+#[macro_export]
+macro_rules! uses {
+    ($name:tt, $data_src:expr) => {
+        const _: () = {
+            inventory::submit! {
+                $crate::StaticDataSrcRegistration::new(|| {
+                    $crate::create_static_data_src_container($name, $data_src)
+                })
+            }
+        };
+    };
+}
 
 #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 #[cfg(feature = "tokio")]
@@ -461,6 +613,7 @@ struct DataSrcManager {
 ///
 /// **NOTE:** Do not receive an instance of this struct into an anonymous variable
 /// (`let _ = ...`), because an anonymous variable is dropped immediately at that point.
+#[must_use = "global data sources are closed when this value is dropped; bind it to a named variable"]
 pub struct AutoShutdown {}
 
 #[doc(hidden)]
@@ -498,6 +651,32 @@ struct DataRun {
     fixed: bool,
 }
 
+/// Trait for accessing the concrete [`DataHub`] backing a data-access object.
+///
+/// This trait is used to bridge a generic data-access abstraction to the concrete
+/// hub implementation that owns the runtime data sources and connections.
+///
+/// In other words, if a type implements [`DataAcc`], it must also be able to expose
+/// the underlying [`DataHub`] instance that stores the active data-set and runtime
+/// transaction state associated with its domain type `Self::D`.
+///
+/// The associated type `D` identifies the domain payload carried by the hub.
+/// For example, a [`DataHub<T>`] implements this trait with `D = T`.
+///
+/// This trait is primarily intended as an internal bridge between generic
+/// data-access abstractions and the concrete hub implementation used to
+/// perform transaction and connection management.
+pub trait AsDataHub {
+    /// The domain type managed by the underlying [`DataHub`].
+    type D: 'static;
+
+    /// Returns a mutable reference to the concrete hub backing this object.
+    ///
+    /// The returned reference must correspond exactly to the underlying
+    /// [`DataHub`] instance that owns the state for `Self::D`.
+    fn as_hub(&mut self) -> &mut DataHub<Self::D>;
+}
+
 /// Trait for accessing data connections and executing business logic against a [`DataHub`].
 ///
 /// This trait provides a mechanism to retrieve a mutable reference to a [`DataConn`] object
@@ -506,10 +685,7 @@ struct DataRun {
 /// It is typically implemented as a derived trait with default methods (using
 /// the `override_macro` crate) on [`DataHub`], allowing application logic to
 /// interact with data services through an abstract interface.
-pub trait DataAcc {
-    /// The associated domain marker type used by [`DataHub`].
-    type D: any::Any;
-
+pub trait DataAcc: AsDataHub + Sized {
     /// Retrieves a mutable reference to a [`DataConn`] object by name, creating it if necessary.
     ///
     /// This is the core method used by [`DataAcc`] implementations to obtain connections
@@ -534,16 +710,16 @@ pub trait DataAcc {
 
     /// Executes a logic function with this data-access context.
     ///
-    /// The logic function receives a mutable reference to the underlying [`DataHub`].
+    /// The logic function receives a mutable reference to `Self`.
     ///
     /// # Type Parameters
     ///
-    /// * `F`: The closure type, implementing `FnMut(&mut DataHub<Self::D>) -> errs::Result<()>`.
+    /// * `F`: The closure type, implementing `FnMut(&mut Self) -> errs::Result<()>`.
     ///
     /// # Parameters
     ///
     /// * `logic_fn`: A closure that encapsulates the business logic to be executed.
-    ///   It takes a mutable reference to [`DataHub`] as an argument.
+    ///   It takes a mutable reference to `Self` as an argument.
     ///
     /// # Returns
     ///
@@ -551,17 +727,19 @@ pub trait DataAcc {
     ///   or an error if executing `logic_fn` fails.
     fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
-        F: FnMut(&mut DataHub<Self::D>) -> errs::Result<()>;
+        F: for<'a> FnMut(&'a mut Self) -> errs::Result<()>;
 
     /// Creates a [`LogicRun`] for executing multiple logic functions.
     ///
     /// The returned [`LogicRun`] can execute logic functions using method chaining and collect
-    /// errors from their execution.
+    /// errors from their execution. Each logic function receives a mutable reference to
+    /// `Self`, so a function that requires a trait implemented by `Self` can be passed
+    /// directly.
     ///
     /// # Returns
     ///
     /// * `LogicRun`: The struct that executes logic functions using method chaining.
-    fn start(&mut self) -> LogicRun<'_, Self::D>;
+    fn start(&mut self) -> LogicRun<'_, Self>;
 }
 
 enum LogicErrAt {
@@ -579,9 +757,12 @@ enum LogicErrAt {
 /// # Type Parameters
 ///
 /// * `'a`: The lifetime of the mutable borrow of [`DataHub`].
-/// * `T`: The domain marker type of the `DataHub`.
-pub struct LogicRun<'a, T> {
-    hub: &'a mut DataHub<T>,
+/// * `A`: The type of the data-access object passed to each logic closure. It is either a
+///   [`DataHub`] itself or a type implementing [`AsDataHub`] (for example, the `Self` type of
+///   a [`DataAcc`]-derived trait).
+#[must_use = "call `end()` to finish the chain and release the data connections"]
+pub struct LogicRun<'a, A> {
+    hub: &'a mut A,
     err: LogicErrAt,
     index: usize,
     nested: bool,
@@ -596,7 +777,10 @@ pub struct LogicRun<'a, T> {
 /// # Type Parameters
 ///
 /// * `'a`: The lifetime of the mutable borrow of [`DataHub`].
-/// * `T`: The domain marker type of the `DataHub`.
+/// * `A`: The type of the data-access object passed to each logic closure. It is either a
+///   [`DataHub`] itself or a type implementing [`AsDataHub`] (for example, the `Self` type of
+///   a [`DataAcc`]-derived trait).
+#[must_use = "call `end_txn()` to commit or roll back the transaction"]
 pub struct LogicTxn<'a, T> {
     hub: &'a mut DataHub<T>,
     err: LogicErrAt,

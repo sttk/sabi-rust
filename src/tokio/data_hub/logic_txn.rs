@@ -159,7 +159,7 @@ impl<'a, T> LogicTxn<'a, T> {
     }
 
     /// Concludes the transaction asynchronously, committing participating data connections or
-    /// rolling them back.
+    /// rolling them back, and then closes the data connections.
     ///
     /// If all executed logic closures succeeded without error, this commits changes on all
     /// participating data connections through their
@@ -174,8 +174,11 @@ impl<'a, T> LogicTxn<'a, T> {
     ///
     /// # Returns
     ///
-    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
-    ///   or an `errs::Err` if any transaction phase fails.
+    /// * `errs::Result<()>`: `Ok(())` if all executed steps and the commit phase succeed.
+    ///   Otherwise an `errs::Err` holding `DataHubError::FailToSetupLocalDataSrcs`,
+    ///   `DataHubError::FailToRunLogic` containing the errors of all failed steps, or
+    ///   `DataConnError::FailToPreCommitDataConn` / `FailToCommitDataConn` /
+    ///   `FailToPostCommitDataConn` if a commit phase failed.
     pub async fn end_txn_async(self) -> errs::Result<()> {
         match self.err {
             LogicErrAt::Begin { err } => {
@@ -752,5 +755,123 @@ mod tests_of_logic_txn {
                 "SyncDataSrc::drop 1",
             ]
         );
+    }
+
+    mod test_nested_logic_running_in_data_acc {
+        use super::*;
+        use crate::tokio::{logic, DataAcc};
+        use override_macro::{overridable, override_with};
+
+        #[overridable]
+        trait GettingDataAcc14: DataAcc {
+            async fn get_text_async(&mut self) -> errs::Result<String> {
+                let _conn = self.get_data_conn_async::<SyncDataConn>("foo").await?;
+                // getting a text by using _conn
+                Ok("hello".to_string())
+            }
+        }
+
+        #[overridable]
+        trait SettingDataAcc14: DataAcc {
+            async fn set_text_async(&mut self, _text: String) -> errs::Result<()> {
+                let _conn = self.get_data_conn_async::<SyncDataConn>("bar").await?;
+                // setting a text by using _conn
+                Ok(())
+            }
+        }
+
+        #[overridable]
+        trait GetSetDataAcc14: DataAcc + HogeData14 {
+            async fn process_text_async(&mut self) -> errs::Result<()> {
+                self.start_async()
+                    .await
+                    .run_async(logic!(hoge_logic14))
+                    .await
+                    .end()
+            }
+        }
+
+        struct MyScope14;
+        impl GettingDataAcc14 for DataHub<MyScope14> {}
+        impl SettingDataAcc14 for DataHub<MyScope14> {}
+        impl GetSetDataAcc14 for DataHub<MyScope14> {}
+
+        #[trait_variant::make(Send)]
+        #[overridable]
+        trait HogeData14: Sized {
+            async fn get_text_async(&mut self) -> errs::Result<String>;
+            async fn set_text_async(&mut self, text: String) -> errs::Result<()>;
+        }
+
+        #[override_with(GettingDataAcc14, SettingDataAcc14)]
+        impl HogeData14 for DataHub<MyScope14> {}
+
+        async fn hoge_logic14(data: &mut impl HogeData14) -> errs::Result<()> {
+            let mut text = data.get_text_async().await?;
+            text = text.to_uppercase();
+            data.set_text_async(text).await?;
+            Ok(())
+        }
+
+        #[overridable]
+        trait FugaData14 {
+            async fn process_text_async(&mut self) -> errs::Result<()>;
+        }
+
+        #[override_with(GetSetDataAcc14)]
+        impl FugaData14 for DataHub<MyScope14> {}
+
+        async fn fuga_logic14(data: &mut impl FugaData14) -> errs::Result<()> {
+            data.process_text_async().await
+        }
+
+        #[tokio::test]
+        async fn test_txn() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut runner = LogicRunner::new(DataHub::<MyScope14>::new());
+                runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+                if let Err(err) = runner
+                    .begin_txn_async()
+                    .await
+                    .run_async(logic!(fuga_logic14))
+                    .await
+                    .end_txn_async()
+                    .await
+                {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                &[
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit_async 1",
+                    "SyncDataConn::pre_commit_async 2",
+                    "SyncDataConn::commit_async 1",
+                    "SyncDataConn::commit_async 2",
+                    "SyncDataConn::post_commit_async 1",
+                    "SyncDataConn::post_commit_async 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ]
+            );
+        }
     }
 }

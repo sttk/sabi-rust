@@ -2,16 +2,16 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::tokio::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicRun};
+use crate::tokio::{AsDataHub, DataHubError, ErrEntry, LogicErrAt, LogicRun};
 
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
 
-impl<'a, T> LogicRun<'a, T> {
-    pub(crate) async fn new_async(hub: &'a mut DataHub<T>, nested: bool) -> LogicRun<'a, T> {
+impl<'a, A: AsDataHub> LogicRun<'a, A> {
+    pub(crate) async fn new_async(hub: &'a mut A, nested: bool) -> LogicRun<'a, A> {
         if !nested {
-            if let Err(err) = hub.run.begin_async().await {
+            if let Err(err) = hub.as_hub().run.begin_async().await {
                 return Self {
                     hub,
                     err: LogicErrAt::Begin { err },
@@ -48,9 +48,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// Self for method chaining.
     pub async fn run_async<F>(mut self, mut logic_fn: F) -> Self
     where
-        for<'b> F: FnMut(
-            &'b mut DataHub<T>,
-        ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
+        for<'b> F: FnMut(&'b mut A) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         let index = self.index;
         self.index = index + 1;
@@ -92,9 +90,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// Self for method chaining.
     pub async fn run_force_async<F>(mut self, mut logic_fn: F) -> Self
     where
-        for<'b> F: FnMut(
-            &'b mut DataHub<T>,
-        ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
+        for<'b> F: FnMut(&'b mut A) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         let index = self.index;
         self.index = index + 1;
@@ -133,9 +129,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// Self for method chaining.
     pub async fn run_or_block_async<F>(mut self, mut logic_fn: F) -> Self
     where
-        for<'b> F: FnMut(
-            &'b mut DataHub<T>,
-        ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
+        for<'b> F: FnMut(&'b mut A) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         let index = self.index;
         self.index = index + 1;
@@ -162,16 +156,19 @@ impl<'a, T> LogicRun<'a, T> {
 
     /// Finalizes the logic execution chain and releases resources.
     ///
-    /// This ends the execution run, closes any open data connections, and returns the result of
-    /// the execution.
+    /// If this `LogicRun` is not nested (created by [`LogicRunner::start_async`]), this ends the
+    /// session and closes the data connections. A nested one (created by
+    /// [`DataAcc::start_async`]) leaves them to the enclosing run.
     ///
     /// # Returns
     ///
-    /// * `errs::Result<()>`: The result of the logic function's execution,
-    ///   or an error if executing `logic_fn` fails.
+    /// * `errs::Result<()>`: `Ok(())` if all executed steps succeeded. Otherwise an
+    ///   `errs::Err` holding [`DataHubError::FailToSetupLocalDataSrcs`] if the setup of local
+    ///   data sources failed, or [`DataHubError::FailToRunLogic`] containing the errors of all
+    ///   failed steps.
     pub fn end(self) -> errs::Result<()> {
         if !self.nested {
-            self.hub.run.end();
+            self.hub.as_hub().run.end();
         }
 
         match self.err {
@@ -195,7 +192,7 @@ impl<'a, T> LogicRun<'a, T> {
 mod tests_of_logic_run {
     use super::*;
     use crate::tokio::_test_commons::*;
-    use crate::tokio::{DataAcc, LogicRunner};
+    use crate::tokio::{DataAcc, DataHub, LogicRunner};
     use std::sync::{Arc, Mutex};
 
     #[tokio::test]
@@ -548,5 +545,116 @@ mod tests_of_logic_run {
                 "SyncDataSrc::drop 1",
             ]
         );
+    }
+
+    mod test_nested_logic_running_in_data_acc {
+        use super::*;
+        use crate::tokio::{logic, DataAcc};
+        use override_macro::{overridable, override_with};
+
+        #[overridable]
+        trait GettingDataAcc13: DataAcc {
+            async fn get_text_async(&mut self) -> errs::Result<String> {
+                let _conn = self.get_data_conn_async::<SyncDataConn>("foo").await?;
+                // getting a text by using _conn
+                Ok("hello".to_string())
+            }
+        }
+
+        #[overridable]
+        trait SettingDataAcc13: DataAcc {
+            async fn set_text_async(&mut self, _text: String) -> errs::Result<()> {
+                let _conn = self.get_data_conn_async::<SyncDataConn>("bar").await?;
+                // setting a text by using _conn
+                Ok(())
+            }
+        }
+
+        #[overridable]
+        trait GetSetDataAcc13: DataAcc + HogeData13 {
+            async fn process_text_async(&mut self) -> errs::Result<()> {
+                self.start_async()
+                    .await
+                    .run_async(logic!(hoge_logic13))
+                    .await
+                    .end()
+            }
+        }
+
+        struct MyScope13;
+        impl GettingDataAcc13 for DataHub<MyScope13> {}
+        impl SettingDataAcc13 for DataHub<MyScope13> {}
+        impl GetSetDataAcc13 for DataHub<MyScope13> {}
+
+        #[trait_variant::make(Send)]
+        #[overridable]
+        trait HogeData13: Sized {
+            async fn get_text_async(&mut self) -> errs::Result<String>;
+            async fn set_text_async(&mut self, text: String) -> errs::Result<()>;
+        }
+
+        #[override_with(GettingDataAcc13, SettingDataAcc13)]
+        impl HogeData13 for DataHub<MyScope13> {}
+
+        async fn hoge_logic13(data: &mut impl HogeData13) -> errs::Result<()> {
+            let mut text = data.get_text_async().await?;
+            text = text.to_uppercase();
+            data.set_text_async(text).await?;
+            Ok(())
+        }
+
+        #[overridable]
+        trait FugaData13 {
+            async fn process_text_async(&mut self) -> errs::Result<()>;
+        }
+
+        #[override_with(GetSetDataAcc13)]
+        impl FugaData13 for DataHub<MyScope13> {}
+
+        async fn fuga_logic13(data: &mut impl FugaData13) -> errs::Result<()> {
+            data.process_text_async().await
+        }
+
+        #[tokio::test]
+        async fn test_run() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut runner = LogicRunner::new(DataHub::<MyScope13>::new());
+                runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+                if let Err(err) = runner
+                    .start_async()
+                    .await
+                    .run_async(logic!(fuga_logic13))
+                    .await
+                    .end()
+                {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                &[
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ]
+            );
+        }
     }
 }

@@ -27,12 +27,16 @@ pub enum DataHubError {
     ///
     /// Contains a vector of data source names and their corresponding errors.
     FailToSetupLocalDataSrcs {
-        /// The vector contains errors that occurred in each [`DataSrc`] object.
+        /// The errors that occurred in each [`DataSrc`] object. Each entry holds the registration
+        /// index and the name of the failed data source, and the error from its setup.
         errors: Vec<ErrEntry>,
     },
 
-    /// Indicates that no [`DataSrc`] was found to create a [`DataConn`] for the specified name
-    /// and type.
+    /// Indicates that no [`DataSrc`] is registered under the specified name.
+    ///
+    /// The type name is included for diagnosis only. A mismatch between the requested type and
+    /// the type of the connection is reported as `DataSrcError::FailToCastDataConn` (when the
+    /// connection is created) or `DataConnError::FailToCastDataConn` (when it is already cached).
     NoDataSrcToCreateDataConn {
         /// The name of the data source that could not be found.
         name: Arc<str>,
@@ -41,9 +45,14 @@ pub enum DataHubError {
         data_conn_type: &'static str,
     },
 
-    /// Indicates that one or more logic functions failed to execute.
+    /// Indicates that one or more logic closures executed by a `LogicRun` or a `LogicTxn` failed.
+    ///
+    /// It is returned by `LogicRun::end` and `LogicTxn::end_txn_async`.
+    /// `LogicRunner::run_async` and `LogicRunner::txn_async` return the error of the closure
+    /// as it is.
     FailToRunLogic {
-        /// Errors returned by the failed logic functions.
+        /// Errors returned by the failed logic closures, in the order of execution. Each entry
+        /// holds the zero-based index of the step and a name like `LogicRun#run_async(logic-0)`.
         errors: Vec<ErrEntry>,
     },
 }
@@ -169,6 +178,11 @@ impl DataRun {
 }
 
 impl<T: 'static + Send> DataHub<T> {
+    /// Creates a new `DataHub` with default commit order.
+    ///
+    /// # Returns
+    ///     
+    /// A new [`DataHub`] initialized with available global data sources.
     #[allow(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
@@ -178,6 +192,19 @@ impl<T: 'static + Send> DataHub<T> {
         }
     }
 
+    /// Creates a new `DataHub` instance configured with an explicit commit order for data
+    /// connections.
+    ///
+    /// When a transaction commits, data connections with names listed in `names` are committed
+    /// in the specified sequence. Connections not listed are committed after them.
+    ///
+    /// # Parameters
+    ///
+    /// * `names`: A slice of data connection names defining the commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub`] configured with the specified commit order.
     #[inline]
     pub fn with_commit_order(names: &[&str]) -> Self {
         Self {

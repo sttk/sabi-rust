@@ -4,11 +4,10 @@
 
 mod global_setup;
 
+pub use global_setup::create_static_data_src_container;
 pub(crate) use global_setup::{
-    copy_global_data_srcs_to_map, create_data_conn_from_global_data_src_async,
-};
-pub use global_setup::{
-    create_static_data_src_container, setup_async, setup_with_order_async, uses, uses_async,
+    copy_global_data_srcs_to_map, create_data_conn_from_global_data_src_async, setup_async,
+    setup_with_order_async, uses, uses_async,
 };
 
 use crate::tokio::{

@@ -712,4 +712,110 @@ mod tests_of_logic_txn {
             ]
         );
     }
+
+    mod test_nested_logic_running_in_data_acc {
+        use super::*;
+        use crate::DataAcc;
+        use override_macro::{overridable, override_with};
+
+        #[overridable]
+        trait GettingDataAcc4: DataAcc {
+            fn get_text(&mut self) -> errs::Result<String> {
+                let _conn = self.get_data_conn::<SyncDataConn>("foo")?;
+                // getting a text by using _conn
+                Ok("hello".to_string())
+            }
+        }
+
+        #[overridable]
+        trait SettingDataAcc4: DataAcc {
+            fn set_text(&mut self, _text: String) -> errs::Result<()> {
+                let _conn = self.get_data_conn::<SyncDataConn>("bar")?;
+                // setting a text by using _conn
+                Ok(())
+            }
+        }
+
+        #[overridable]
+        trait GetSetDataAcc4: DataAcc + HogeData4 {
+            fn process_text(&mut self) -> errs::Result<()> {
+                self.start().run(hoge_logic4).end()
+            }
+        }
+
+        struct MyScope4;
+        impl GettingDataAcc4 for DataHub<MyScope4> {}
+        impl SettingDataAcc4 for DataHub<MyScope4> {}
+        impl GetSetDataAcc4 for DataHub<MyScope4> {}
+
+        #[overridable]
+        trait HogeData4: Sized {
+            fn get_text(&mut self) -> errs::Result<String>;
+            fn set_text(&mut self, text: String) -> errs::Result<()>;
+        }
+
+        #[override_with(GettingDataAcc4, SettingDataAcc4)]
+        impl HogeData4 for DataHub<MyScope4> {}
+
+        fn hoge_logic4(data: &mut impl HogeData4) -> errs::Result<()> {
+            let mut text = data.get_text()?;
+            text = text.to_uppercase();
+            data.set_text(text)?;
+            Ok(())
+        }
+
+        #[overridable]
+        trait FugaData4 {
+            fn process_text(&mut self) -> errs::Result<()>;
+        }
+
+        #[override_with(GetSetDataAcc4)]
+        impl FugaData4 for DataHub<MyScope4> {}
+
+        fn fuga_logic4(data: &mut impl FugaData4) -> errs::Result<()> {
+            data.process_text()
+        }
+
+        #[test]
+        fn test_txn() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut runner = LogicRunner::new(DataHub::<MyScope4>::new());
+                runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+                if let Err(err) = runner.begin_txn().run(fuga_logic4).end_txn() {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                &[
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup 1",
+                    "SyncDataSrc::setup 2",
+                    "SyncDataSrc::create_data_conn 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit 1",
+                    "SyncDataConn::pre_commit 2",
+                    "SyncDataConn::commit 1",
+                    "SyncDataConn::commit 2",
+                    "SyncDataConn::post_commit 1",
+                    "SyncDataConn::post_commit 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ]
+            );
+        }
+    }
 }
