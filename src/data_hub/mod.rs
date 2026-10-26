@@ -8,15 +8,15 @@ mod logic_runner;
 mod logic_txn;
 
 use crate::{
-    DataConn, DataConnContainer, DataConnManager, DataHub, DataRun, DataSrc, DataSrcManager,
-    ErrEntry, SendSyncNonNull, TxnFailureReport,
+    DataConn, DataConnContainer, DataConnManager, DataHub, DataSrc, DataSrcManager, ErrEntry,
+    SendSyncNonNull,
 };
 
 use crate::data_src::{copy_global_data_srcs_to_map, create_data_conn_from_global_data_src};
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{any, marker, ptr};
+use std::{any, marker, panic, ptr};
 
 /// The enum type representing the reasons for errors that can occur within [`DataHub`] operations.
 #[derive(Debug)]
@@ -44,8 +44,14 @@ pub enum DataHubError {
     },
 }
 
-impl DataRun {
-    fn new() -> Self {
+impl<T: 'static> DataHub<T> {
+    /// Creates a new `DataHub` instance with default commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub`] initialized with available global data sources.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         let mut data_src_map = HashMap::new();
         copy_global_data_srcs_to_map(&mut data_src_map);
 
@@ -54,10 +60,25 @@ impl DataRun {
             data_src_map,
             data_conn_manager: DataConnManager::new(),
             fixed: false,
+            is_abnormal: false,
+            _phantom: marker::PhantomData,
         }
     }
 
-    fn with_commit_order(names: &[&str]) -> Self {
+    /// Creates a new `DataHub` instance configured with an explicit commit order for data
+    /// connections.
+    ///
+    /// When a transaction commits, data connections with names listed in `names` are committed
+    /// in the specified sequence. Connections not listed are committed after them.
+    ///
+    /// # Parameters
+    ///
+    /// * `names`: A slice of data connection names defining the commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub`] configured with the specified commit order.
+    pub fn with_commit_order(names: &[&str]) -> Self {
         let mut data_src_map = HashMap::new();
         copy_global_data_srcs_to_map(&mut data_src_map);
 
@@ -66,6 +87,8 @@ impl DataRun {
             data_src_map,
             data_conn_manager: DataConnManager::with_commit_order(names),
             fixed: false,
+            is_abnormal: false,
+            _phantom: marker::PhantomData,
         }
     }
 
@@ -75,6 +98,9 @@ impl DataRun {
         S: DataSrc<C>,
         C: DataConn + 'static,
     {
+        if self.is_abnormal {
+            return;
+        }
         if self.fixed {
             return;
         }
@@ -83,6 +109,9 @@ impl DataRun {
 
     #[inline]
     fn disuses(&mut self, name: impl AsRef<str>) {
+        if self.is_abnormal {
+            return;
+        }
         if self.fixed {
             return;
         }
@@ -91,11 +120,21 @@ impl DataRun {
     }
 
     fn begin(&mut self) -> errs::Result<()> {
+        if self.is_abnormal {
+            return Ok(());
+        }
+
         self.fixed = true;
 
         let mut errors = Vec::new();
 
-        self.local_data_src_manager.setup(&mut errors);
+        if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            self.local_data_src_manager.setup(&mut errors);
+        })) {
+            self.abend();
+            panic::resume_unwind(payload);
+        }
+
         if errors.is_empty() {
             self.local_data_src_manager
                 .copy_ds_ready_to_map(&mut self.data_src_map);
@@ -108,28 +147,136 @@ impl DataRun {
         }
     }
 
-    #[inline]
-    fn new_failure_reports(&self) -> Vec<TxnFailureReport> {
-        self.data_conn_manager.new_failure_reports()
-    }
+    fn run_logic<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
+    {
+        if self.is_abnormal {
+            return Ok(());
+        }
 
-    #[inline]
-    fn commit(&mut self, reports: &mut [TxnFailureReport]) -> errs::Result<()> {
-        self.data_conn_manager.commit(reports)
-    }
-
-    #[inline]
-    fn rollback(&mut self, reports: Vec<TxnFailureReport>) {
-        self.data_conn_manager.rollback(reports)
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self))) {
+            Ok(result) => result,
+            Err(payload) => {
+                self.abend();
+                panic::resume_unwind(payload);
+            }
+        }
     }
 
     #[inline]
     fn end(&mut self) {
+        if self.is_abnormal {
+            return;
+        }
+
         self.data_conn_manager.close();
         self.fixed = false;
     }
 
-    fn get_data_conn<C>(&mut self, name: &str) -> errs::Result<&mut C>
+    fn end_txn(&mut self, errors: Vec<ErrEntry>) -> errs::Result<()> {
+        if self.is_abnormal {
+            return Ok(());
+        }
+
+        let mut reports = self.data_conn_manager.new_failure_reports();
+        if errors.is_empty() {
+            match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let result = self.data_conn_manager.commit(&mut reports);
+                if result.is_err() {
+                    self.data_conn_manager.rollback(reports);
+                }
+                result
+            })) {
+                Ok(result) => {
+                    self.end();
+                    result
+                }
+                Err(payload) => {
+                    self.abend();
+                    panic::resume_unwind(payload);
+                }
+            }
+        } else {
+            match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                self.data_conn_manager.rollback(reports);
+                Ok::<(), errs::Err>(())
+            })) {
+                Ok(_) => {
+                    self.end();
+                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                }
+                Err(payload) => {
+                    self.abend();
+                    panic::resume_unwind(payload);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn abend(&mut self) {
+        self.is_abnormal = true;
+        self.data_conn_manager.abend();
+    }
+
+    fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
+    {
+        if self.is_abnormal {
+            return Ok(());
+        }
+
+        self.begin()?;
+
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self))) {
+            Ok(result) => {
+                self.end();
+                result
+            }
+            Err(payload) => {
+                self.abend();
+                panic::resume_unwind(payload);
+            }
+        }
+    }
+
+    fn txn<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    where
+        F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
+    {
+        if self.is_abnormal {
+            return Ok(());
+        }
+
+        self.begin()?;
+
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let mut result = logic_fn(self);
+
+            let mut reports = self.data_conn_manager.new_failure_reports();
+            if result.is_ok() {
+                result = self.data_conn_manager.commit(&mut reports);
+            }
+            if result.is_err() {
+                self.data_conn_manager.rollback(reports);
+            }
+
+            result
+        })) {
+            Ok(result) => {
+                self.end();
+                result
+            }
+            Err(payload) => {
+                self.abend();
+                panic::resume_unwind(payload);
+            }
+        }
+    }
+
+    pub fn get_data_conn<C>(&mut self, name: &str) -> errs::Result<&mut C>
     where
         C: DataConn + 'static,
     {
@@ -160,42 +307,5 @@ impl DataRun {
             name: name.into(),
             data_conn_type: any::type_name::<C>(),
         }))
-    }
-}
-
-impl<T: 'static> DataHub<T> {
-    /// Creates a new `DataHub` instance with default commit order.
-    ///
-    /// # Returns
-    ///
-    /// A new [`DataHub`] initialized with available global data sources.
-    #[allow(clippy::new_without_default)]
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            run: DataRun::new(),
-            _phantom: marker::PhantomData,
-        }
-    }
-
-    /// Creates a new `DataHub` instance configured with an explicit commit order for data
-    /// connections.
-    ///
-    /// When a transaction commits, data connections with names listed in `names` are committed
-    /// in the specified sequence. Connections not listed are committed after them.
-    ///
-    /// # Parameters
-    ///
-    /// * `names`: A slice of data connection names defining the commit order.
-    ///
-    /// # Returns
-    ///
-    /// A new [`DataHub`] configured with the specified commit order.
-    #[inline]
-    pub fn with_commit_order(names: &[&str]) -> Self {
-        Self {
-            run: DataRun::with_commit_order(names),
-            _phantom: marker::PhantomData,
-        }
     }
 }

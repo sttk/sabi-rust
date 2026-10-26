@@ -6,10 +6,10 @@ use crate::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicRun};
 
 use std::mem;
 
-impl<'a, T> LogicRun<'a, T> {
+impl<'a, T: 'static> LogicRun<'a, T> {
     pub(crate) fn new(hub: &'a mut DataHub<T>, nested: bool) -> LogicRun<'a, T> {
         if !nested {
-            if let Err(err) = hub.run.begin() {
+            if let Err(err) = hub.begin() {
                 return Self {
                     hub,
                     err: LogicErrAt::Begin { err },
@@ -45,7 +45,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// # Returns
     ///
     /// Self for method chaining.
-    pub fn run<F>(mut self, mut logic_fn: F) -> Self
+    pub fn run<F>(mut self, logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
@@ -55,7 +55,7 @@ impl<'a, T> LogicRun<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
+                    if let Err(err) = self.hub.run_logic(logic_fn) {
                         errors.push(ErrEntry {
                             index,
                             name: format!("LogicRun#run(logic-{})", index).into(),
@@ -87,7 +87,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// # Returns
     ///
     /// Self for method chaining.
-    pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
+    pub fn run_force<F>(mut self, logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
@@ -96,7 +96,7 @@ impl<'a, T> LogicRun<'a, T> {
 
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
-                if let Err(err) = logic_fn(self.hub) {
+                if let Err(err) = self.hub.run_logic(logic_fn) {
                     errors.push(ErrEntry {
                         index,
                         name: format!("LogicRun#run_force(logic-{})", index).into(),
@@ -127,7 +127,7 @@ impl<'a, T> LogicRun<'a, T> {
     /// # Returns
     ///
     /// Self for method chaining.
-    pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
+    pub fn run_or_block<F>(mut self, logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
@@ -137,7 +137,7 @@ impl<'a, T> LogicRun<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
+                    if let Err(err) = self.hub.run_logic(logic_fn) {
                         errors.push(ErrEntry {
                             index,
                             name: format!("LogicRun#run_or_block(logic-{})", index).into(),
@@ -165,7 +165,7 @@ impl<'a, T> LogicRun<'a, T> {
     ///   or an error if executing `logic_fn` fails.
     pub fn end(self) -> errs::Result<()> {
         if !self.nested {
-            self.hub.run.end();
+            self.hub.end();
         }
 
         match self.err {
@@ -189,7 +189,7 @@ impl<'a, T> LogicRun<'a, T> {
 mod tests_of_logic_run {
     use super::*;
     use crate::_test_commons::*;
-    use crate::{DataAcc, LogicRunner};
+    use crate::LogicRunner;
     use std::sync::{Arc, Mutex};
 
     #[test]

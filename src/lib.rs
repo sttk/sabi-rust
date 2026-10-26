@@ -331,6 +331,7 @@ pub trait DataConn {
     /// perform such cleanup operations.
     ///
     /// The default implementation calls the [`DataConn::close`] method.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn abend(&mut self) {
         self.close();
     }
@@ -501,15 +502,12 @@ pub struct StaticDataSrcRegistration {
 ///
 /// * `T`: A marker or context type representing the application domain.
 pub struct DataHub<T> {
-    run: DataRun,
-    _phantom: marker::PhantomData<T>,
-}
-
-struct DataRun {
     local_data_src_manager: DataSrcManager,
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
     data_conn_manager: DataConnManager,
     fixed: bool,
+    is_abnormal: bool,
+    _phantom: marker::PhantomData<T>,
 }
 
 /// Trait for accessing data connections and executing business logic against a [`DataHub`].

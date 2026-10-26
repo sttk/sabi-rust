@@ -41,7 +41,7 @@ impl<T: 'static> LogicRunner<T> {
         S: DataSrc<C>,
         C: DataConn + 'static,
     {
-        self.hub.run.uses(name, ds);
+        self.hub.uses(name, ds);
     }
 
     /// Deregisters a local or previously registered data source by name.
@@ -51,7 +51,7 @@ impl<T: 'static> LogicRunner<T> {
     /// * `name`: The name of the data source to deregister.
     #[inline]
     pub fn disuses(&mut self, name: impl AsRef<str>) {
-        self.hub.run.disuses(name);
+        self.hub.disuses(name);
     }
 
     /// Executes a single business logic closure non-transactionally.
@@ -73,14 +73,11 @@ impl<T: 'static> LogicRunner<T> {
     /// * `errs::Result<()>`: The result of the logic function's execution,
     ///   or an error if executing `logic_fn` fails.
     #[inline]
-    pub fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    pub fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
-        self.hub.run.begin()?;
-        let r = logic_fn(&mut self.hub);
-        self.hub.run.end();
-        r
+        self.hub.run(logic_fn)
     }
 
     /// Starts a builder chain for executing non-transactional business logic steps.
@@ -113,21 +110,11 @@ impl<T: 'static> LogicRunner<T> {
     /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
     ///   or an `errs::Err` if any transaction phase fails.
     #[inline]
-    pub fn txn<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    pub fn txn<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
-        self.hub.run.begin()?;
-        let mut r = logic_fn(&mut self.hub);
-        let mut reports = self.hub.run.new_failure_reports();
-        if r.is_ok() {
-            r = self.hub.run.commit(&mut reports);
-        }
-        if r.is_err() {
-            self.hub.run.rollback(reports);
-        }
-        self.hub.run.end();
-        r
+        self.hub.txn(logic_fn)
     }
 
     #[inline]
@@ -141,7 +128,7 @@ impl<T: 'static> LogicRunner<T> {
 mod tests_of_logic_runner {
     use super::*;
     use crate::_test_commons::*;
-    use crate::{DataAcc, DataConnError, DataHubError, DataSrcError};
+    use crate::{DataConnError, DataHubError, DataSrcError};
     use std::sync::Mutex;
 
     #[test]
@@ -150,13 +137,13 @@ mod tests_of_logic_runner {
         let hub = DataHub::<MyData>::new();
         let runner = LogicRunner::new(hub);
 
-        assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert!(runner.hub.run.data_conn_manager.vec.is_empty());
-        assert!(runner.hub.run.data_conn_manager.index_map.is_empty());
-        assert!(!runner.hub.run.fixed);
+        assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert!(runner.hub.data_conn_manager.vec.is_empty());
+        assert!(runner.hub.data_conn_manager.index_map.is_empty());
+        assert!(!runner.hub.fixed);
     }
 
     #[test]
@@ -170,23 +157,23 @@ mod tests_of_logic_runner {
         runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
         runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
-        assert!(runner.hub.run.begin().is_ok());
+        assert!(runner.hub.begin().is_ok());
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 2);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 2);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(runner.hub.fixed);
     }
 
     #[test]
@@ -199,33 +186,33 @@ mod tests_of_logic_runner {
 
         runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 1);
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 1);
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
-        assert!(runner.hub.run.begin().is_ok());
+        assert!(runner.hub.begin().is_ok());
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 1);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 1);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 1);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 1);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(runner.hub.fixed);
 
         runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 1);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 1);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 1);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 1);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(runner.hub.fixed);
     }
 
     #[test]
@@ -239,33 +226,33 @@ mod tests_of_logic_runner {
         runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
         runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
         runner.disuses("foo");
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 1);
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 1);
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
         runner.disuses("bar");
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
     }
 
     #[test]
@@ -279,96 +266,96 @@ mod tests_of_logic_runner {
         runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
         runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
         runner.disuses("foo");
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 1);
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 1);
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
         runner.disuses("bar");
 
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert!(runner.hub.run.data_src_map.is_empty());
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert!(runner.hub.data_src_map.is_empty());
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
         runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
         runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-        assert!(runner.hub.run.begin().is_ok());
+        assert!(runner.hub.begin().is_ok());
 
-        assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 2);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(runner.hub.run.fixed);
+        assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 2);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(runner.hub.fixed);
 
         runner.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::None));
 
-        assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 2);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(runner.hub.run.fixed);
+        assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 2);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(runner.hub.fixed);
 
         runner.disuses("bar");
 
-        assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 2);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(runner.hub.run.fixed);
+        assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 2);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(runner.hub.fixed);
 
-        runner.hub.run.end();
+        runner.hub.end();
 
-        assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 2);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 2);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
         runner.disuses("bar");
 
-        assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-        assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 1);
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 1);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+        assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 1);
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 1);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
 
         runner.disuses("foo");
 
-        assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-        assert!(runner.hub.run.local_data_src_manager.local);
-        assert_eq!(runner.hub.run.data_src_map.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-        assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-        assert!(!runner.hub.run.fixed);
+        assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+        assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+        assert!(runner.hub.local_data_src_manager.local);
+        assert_eq!(runner.hub.data_src_map.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+        assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+        assert!(!runner.hub.fixed);
     }
 
     #[test]
@@ -386,13 +373,13 @@ mod tests_of_logic_runner {
                 })
                 .is_ok());
 
-            assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-            assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-            assert!(runner.hub.run.local_data_src_manager.local);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert!(!runner.hub.run.fixed);
+            assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+            assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+            assert!(runner.hub.local_data_src_manager.local);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert!(!runner.hub.fixed);
         }
 
         assert_eq!(*logger.lock().unwrap(), &["Run the logic"]);
@@ -409,13 +396,13 @@ mod tests_of_logic_runner {
             runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
 
             assert!(runner
                 .run(|data| {
@@ -426,13 +413,13 @@ mod tests_of_logic_runner {
                 })
                 .is_ok());
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(
@@ -470,13 +457,13 @@ mod tests_of_logic_runner {
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
             runner.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 3);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 3);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
 
             if let Err(err) = runner.run(|_| {
                 logger.lock().unwrap().push("Run the logic".to_string());
@@ -655,13 +642,13 @@ mod tests_of_logic_runner {
                 })
                 .is_ok());
 
-            assert!(runner.hub.run.local_data_src_manager.vec_unready.is_empty());
-            assert!(runner.hub.run.local_data_src_manager.vec_ready.is_empty());
-            assert!(runner.hub.run.local_data_src_manager.local);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert!(!runner.hub.run.fixed);
+            assert!(runner.hub.local_data_src_manager.vec_unready.is_empty());
+            assert!(runner.hub.local_data_src_manager.vec_ready.is_empty());
+            assert!(runner.hub.local_data_src_manager.local);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert!(!runner.hub.fixed);
         }
 
         assert_eq!(*logger.lock().unwrap(), &["Run the logic"]);
@@ -678,13 +665,13 @@ mod tests_of_logic_runner {
             runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
 
             assert!(runner
                 .txn(|data| {
@@ -695,13 +682,13 @@ mod tests_of_logic_runner {
                 })
                 .is_ok());
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(
@@ -746,13 +733,13 @@ mod tests_of_logic_runner {
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::Setup));
             runner.uses("baz", SyncDataSrc::new(3, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 3);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 3);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
 
             if let Err(err) = runner.txn(|data| {
                 let _conn1 = data.get_data_conn::<SyncDataConn>("foo")?;
@@ -774,13 +761,13 @@ mod tests_of_logic_runner {
                 panic!();
             }
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 3);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 3);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(
@@ -912,11 +899,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::rollback 2",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = 87 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = 88 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = 87 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = 88 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = 87 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/_test_commons.rs, line = 88 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -954,11 +941,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::rollback 2",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = 87 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = 88 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = 87 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = 88 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = 87 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\_test_commons.rs, line = 88 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -1032,11 +1019,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::rollback 2",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -1076,11 +1063,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::rollback 2",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -1156,11 +1143,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::post_commit 2 failed",
                 "SyncDataConn::post_commit 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = 111 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = 112 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = 111 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = 112 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = 111 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src/_test_commons.rs, line = 112 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -1202,11 +1189,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::post_commit 2 failed",
                 "SyncDataConn::post_commit 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = 111 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = 112 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = 111 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = 112 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = 111 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: PostCommitFailure(errs::Err { reason = alloc::string::String \"!!!\", file = src\\_test_commons.rs, line = 112 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -1274,11 +1261,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::rollback 2 failed",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = 136 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = 137 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = 136 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = 137 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = 136 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src/_test_commons.rs, line = 137 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -1314,11 +1301,11 @@ mod tests_of_logic_runner {
                 "SyncDataConn::rollback 2 failed",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = 136 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = 137 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = 136 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = 137 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = 136 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: RollbackFailure(errs::Err { reason = alloc::string::String \"???\", file = src\\_test_commons.rs, line = 137 }) }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -1432,13 +1419,13 @@ mod tests_of_logic_runner {
             runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 2);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 2);
+            assert_eq!(runner.hub.fixed, false);
 
             assert!(runner
                 .txn(|data| {
@@ -1449,13 +1436,13 @@ mod tests_of_logic_runner {
                 })
                 .is_ok());
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 2);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 2);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(
@@ -1499,13 +1486,13 @@ mod tests_of_logic_runner {
             runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
 
             if let Err(err) = runner.txn(|data| {
                 let _conn1 = data.get_data_conn::<SyncDataConn>("foo")?;
@@ -1524,13 +1511,13 @@ mod tests_of_logic_runner {
                 panic!();
             }
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(
@@ -1566,13 +1553,13 @@ mod tests_of_logic_runner {
             runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 2);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 2);
+            assert_eq!(runner.hub.fixed, false);
 
             assert!(runner
                 .txn(|data| {
@@ -1586,13 +1573,13 @@ mod tests_of_logic_runner {
                 })
                 .is_ok());
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 2);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 2);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(
@@ -1636,13 +1623,13 @@ mod tests_of_logic_runner {
             runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
 
             if let Err(err) = runner.txn(|data| {
                 let _conn1 = data.get_data_conn::<SyncDataConn>("foo")?;
@@ -1663,13 +1650,13 @@ mod tests_of_logic_runner {
                 panic!();
             }
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(
@@ -1712,13 +1699,13 @@ mod tests_of_logic_runner {
             runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
             runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
 
             if let Err(err) = runner.txn(|data| {
                 let _conn1 = data.get_data_conn::<SyncDataConn>("foo")?;
@@ -1740,13 +1727,13 @@ mod tests_of_logic_runner {
                 panic!();
             }
 
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 0);
-            assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 2);
-            assert_eq!(runner.hub.run.local_data_src_manager.local, true);
-            assert_eq!(runner.hub.run.data_src_map.len(), 2);
-            assert_eq!(runner.hub.run.data_conn_manager.vec.len(), 0);
-            assert_eq!(runner.hub.run.data_conn_manager.index_map.len(), 0);
-            assert_eq!(runner.hub.run.fixed, false);
+            assert_eq!(runner.hub.local_data_src_manager.vec_unready.len(), 0);
+            assert_eq!(runner.hub.local_data_src_manager.vec_ready.len(), 2);
+            assert_eq!(runner.hub.local_data_src_manager.local, true);
+            assert_eq!(runner.hub.data_src_map.len(), 2);
+            assert_eq!(runner.hub.data_conn_manager.vec.len(), 0);
+            assert_eq!(runner.hub.data_conn_manager.index_map.len(), 0);
+            assert_eq!(runner.hub.fixed, false);
         }
 
         assert_eq!(

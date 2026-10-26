@@ -22,6 +22,7 @@ pub(crate) enum Fail {
     PostCommitPanicked,
     RollbackPanicked,
     OnTxnFailurePanicked,
+    ClosePanicked,
 }
 
 pub(crate) struct SyncDataConn {
@@ -162,6 +163,13 @@ impl DataConn for SyncDataConn {
     }
 
     fn close(&mut self) {
+        if self.fail == Fail::ClosePanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::close {} panicked", self.id));
+            panic!("on_txn_failure panicked");
+        }
         self.logger
             .lock()
             .unwrap()
@@ -341,6 +349,13 @@ impl DataConn for AsyncDataConn {
     }
 
     fn close(&mut self) {
+        if self.fail == Fail::ClosePanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("AsyncDataConn::close {} panicked", self.id));
+            panic!("on_txn_failure panicked");
+        }
         self.logger
             .lock()
             .unwrap()

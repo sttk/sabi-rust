@@ -2,13 +2,13 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicTxn};
+use crate::{DataHub, ErrEntry, LogicErrAt, LogicTxn};
 
 use std::mem;
 
-impl<'a, T> LogicTxn<'a, T> {
+impl<'a, T: 'static> LogicTxn<'a, T> {
     pub(crate) fn new(hub: &'a mut DataHub<T>) -> LogicTxn<'a, T> {
-        if let Err(err) = hub.run.begin() {
+        if let Err(err) = hub.begin() {
             Self {
                 hub,
                 err: LogicErrAt::Begin { err },
@@ -41,7 +41,7 @@ impl<'a, T> LogicTxn<'a, T> {
     /// # Returns
     ///
     /// Self for method chaining.
-    pub fn run<F>(mut self, mut logic_fn: F) -> Self
+    pub fn run<F>(mut self, logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
@@ -51,7 +51,7 @@ impl<'a, T> LogicTxn<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
+                    if let Err(err) = self.hub.run_logic(logic_fn) {
                         errors.push(ErrEntry {
                             index,
                             name: format!("LogicTxn#run(logic-{})", index).into(),
@@ -83,7 +83,7 @@ impl<'a, T> LogicTxn<'a, T> {
     /// # Returns
     ///
     /// Self for method chaining.
-    pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
+    pub fn run_force<F>(mut self, logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
@@ -92,7 +92,7 @@ impl<'a, T> LogicTxn<'a, T> {
 
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
-                if let Err(err) = logic_fn(self.hub) {
+                if let Err(err) = self.hub.run_logic(logic_fn) {
                     errors.push(ErrEntry {
                         index,
                         name: format!("LogicTxn#run_force(logic-{})", index).into(),
@@ -123,7 +123,7 @@ impl<'a, T> LogicTxn<'a, T> {
     /// # Returns
     ///
     /// Self for method chaining.
-    pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
+    pub fn run_or_block<F>(mut self, logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
@@ -133,7 +133,7 @@ impl<'a, T> LogicTxn<'a, T> {
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
+                    if let Err(err) = self.hub.run_logic(logic_fn) {
                         errors.push(ErrEntry {
                             index,
                             name: format!("LogicTxn#run_or_block(logic-{})", index).into(),
@@ -170,30 +170,11 @@ impl<'a, T> LogicTxn<'a, T> {
     pub fn end_txn(self) -> errs::Result<()> {
         match self.err {
             LogicErrAt::Begin { err } => {
-                self.hub.run.end();
+                self.hub.end();
                 Err(err)
             }
-            LogicErrAt::Run { errors } => {
-                let mut reports = self.hub.run.new_failure_reports();
-                if errors.is_empty() {
-                    let result = self.hub.run.commit(&mut reports);
-                    if result.is_err() {
-                        self.hub.run.rollback(reports);
-                    }
-                    self.hub.run.end();
-                    result
-                } else {
-                    self.hub.run.rollback(reports);
-                    self.hub.run.end();
-                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
-                }
-            }
-            LogicErrAt::Block { errors } => {
-                let reports = self.hub.run.new_failure_reports();
-                self.hub.run.rollback(reports);
-                self.hub.run.end();
-                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
-            }
+            LogicErrAt::Run { errors } => self.hub.end_txn(errors),
+            LogicErrAt::Block { errors } => self.hub.end_txn(errors),
         }
     }
 }
@@ -203,7 +184,7 @@ impl<'a, T> LogicTxn<'a, T> {
 mod tests_of_logic_txn {
     use super::*;
     use crate::_test_commons::*;
-    use crate::{DataAcc, DataConnError, LogicRunner};
+    use crate::{DataConnError, DataHubError, LogicRunner};
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -645,11 +626,11 @@ mod tests_of_logic_txn {
                 "SyncDataConn::rollback 2",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src/_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",
@@ -692,11 +673,11 @@ mod tests_of_logic_txn {
                 "SyncDataConn::rollback 2",
                 "SyncDataConn::rollback 3",
                 "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 2",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::on_txn_failure 3",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 65 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByCommitted, rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: CommitFailure(errs::Err { reason = alloc::string::String \"ZZZ\", file = src\\_test_commons.rs, line = 66 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"baz\", data_conn_type: \"sabi::_test_commons::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
                 "SyncDataConn::close 3",
                 "SyncDataConn::drop 3",
                 "SyncDataConn::close 2",

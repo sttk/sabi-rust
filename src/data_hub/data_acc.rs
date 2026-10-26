@@ -9,15 +9,15 @@ impl<T: 'static> DataAcc for DataHub<T> {
 
     #[inline]
     fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> errs::Result<&mut C> {
-        self.run.get_data_conn(name)
+        DataHub::<T>::get_data_conn(self, name)
     }
 
     #[inline]
-    fn run<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
+    fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
-        logic_fn(self)
+        DataHub::<T>::run_logic(self, logic_fn)
     }
 
     #[inline]
