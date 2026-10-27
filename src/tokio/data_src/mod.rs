@@ -742,6 +742,35 @@ mod tests_of_data_src {
     }
 
     #[tokio::test]
+    async fn setup_with_order_no_data_src() {
+        let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+        {
+            let mut manager = DataSrcManager::new(true);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 0);
+
+            let mut errors = Vec::new();
+            manager
+                .setup_with_order_async(&["baz", "foo"], &mut errors)
+                .await;
+
+            assert_eq!(errors.len(), 0);
+
+            assert!(manager.local);
+            assert_eq!(manager.vec_unready.len(), 0);
+            assert_eq!(manager.vec_ready.len(), 0);
+        }
+
+        {
+            let locked = logger.lock().unwrap();
+            assert_eq!(locked.len(), 0);
+        }
+    }
+
+    #[tokio::test]
     async fn test_of_setup_with_order_and_ok() {
         let logger = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
@@ -828,9 +857,9 @@ mod tests_of_data_src {
             assert_eq!(errors[0].index, 0);
             assert_eq!(errors[0].name, "foo".into());
             #[cfg(unix)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/_test_commons.rs, line = 421 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/_test_commons.rs, line = 512 }");
             #[cfg(windows)]
-            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\_test_commons.rs, line = 421 }");
+            assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\_test_commons.rs, line = 512 }");
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

@@ -16,6 +16,13 @@ pub(crate) enum Fail {
     Rollback,
     PreCommitBecomeCommitted,
     CreateDataConn,
+    SetupPanicked,
+    PreCommitPanicked,
+    CommitPanicked,
+    PostCommitPanicked,
+    RollbackPanicked,
+    OnTxnFailurePanicked,
+    ClosePanicked,
 }
 
 pub(crate) struct SyncDataConn {
@@ -57,6 +64,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::commit {} failed", self.id));
             return Err(errs::Err::new("ZZZ".to_string()));
+        } else if self.fail == Fail::CommitPanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::commit {} panicked", self.id));
+            panic!("commit panicked");
         }
         self.committed = true;
         self.logger
@@ -73,6 +86,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::pre_commit {} failed", self.id));
             return Err(errs::Err::new("zzz".to_string()));
+        } else if self.fail == Fail::PreCommitPanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::pre_commit {} panicked", self.id));
+            panic!("pre_commit panicked");
         }
         self.logger
             .lock()
@@ -91,6 +110,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::post_commit {} failed", self.id));
             return Err(errs::Err::new("!!!".to_string()));
+        } else if self.fail == Fail::PostCommitPanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::post_commit {} panicked", self.id));
+            panic!("post_commit panicked");
         }
         self.logger
             .lock()
@@ -110,6 +135,12 @@ impl DataConn for SyncDataConn {
                 .unwrap()
                 .push(format!("SyncDataConn::rollback {} failed", self.id));
             return Err(errs::Err::new("???".to_string()));
+        } else if self.fail == Fail::RollbackPanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::rollback {} panicked", self.id));
+            panic!("rollback panicked");
         }
         self.logger
             .lock()
@@ -119,12 +150,26 @@ impl DataConn for SyncDataConn {
     }
 
     fn on_txn_failure(&mut self, _ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {
+        if self.fail == Fail::OnTxnFailurePanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::on_txn_failure {} panicked", self.id));
+            panic!("on_txn_failure panicked");
+        }
         let mut logger = self.logger.lock().unwrap();
         logger.push(format!("SyncDataConn::on_txn_failure {}", self.id));
         logger.push(format!("TxnFailureReports={:?}", reports));
     }
 
     fn close(&mut self) {
+        if self.fail == Fail::ClosePanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataConn::close {} panicked", self.id));
+            panic!("close panicked");
+        }
         self.logger
             .lock()
             .unwrap()
@@ -201,8 +246,19 @@ impl DataConn for AsyncDataConn {
                     .unwrap()
                     .push(format!("AsyncDataConn::pre_commit {} failed", id));
                 return Err(errs::Err::new("yyy".to_string()));
-            }
-            if fail == Fail::PreCommitBecomeCommitted {
+            } else if fail == Fail::CommitPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::commit {} panicked", id));
+                panic!("commit panic");
+            } else if fail == Fail::PreCommitPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::pre_commit {} panicked", id));
+                panic!("pre_commit panic");
+            } else if fail == Fail::PreCommitBecomeCommitted {
                 committed.store(true, Ordering::Release);
             }
             logger
@@ -226,6 +282,12 @@ impl DataConn for AsyncDataConn {
                     .unwrap()
                     .push(format!("AsyncDataConn::post_commit {} failed", id));
                 return Err(errs::Err::new("!!!".to_string()));
+            } else if fail == Fail::PostCommitPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::post_commit {} panicked", id));
+                panic!("post_commit panic");
             }
             logger
                 .lock()
@@ -252,6 +314,12 @@ impl DataConn for AsyncDataConn {
                     .unwrap()
                     .push(format!("AsyncDataConn::rollback {} failed", id));
                 return Err(errs::Err::new("???".to_string()));
+            } else if fail == Fail::RollbackPanicked {
+                logger
+                    .lock()
+                    .unwrap()
+                    .push(format!("AsyncDataConn::rollback {} panicked", id));
+                panic!("rollback panic");
             }
             logger
                 .lock()
@@ -266,9 +334,14 @@ impl DataConn for AsyncDataConn {
         let reports_log = format!("TxnFailureReports={:?}", reports);
         let logger = self.logger.clone();
         let id = self.id;
+        let fail = self.fail;
         ag.add(move || {
             thread::sleep(time::Duration::from_millis(100));
             let mut logger = logger.lock().unwrap();
+            if fail == Fail::OnTxnFailurePanicked {
+                logger.push(format!("AsyncDataConn::on_txn_failure {} panicked", id));
+                panic!("on_txn_failure panicked");
+            }
             logger.push(format!("AsyncDataConn::on_txn_failure {}", id));
             logger.push(reports_log);
             Ok(())
@@ -276,6 +349,13 @@ impl DataConn for AsyncDataConn {
     }
 
     fn close(&mut self) {
+        if self.fail == Fail::ClosePanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("AsyncDataConn::close {} panicked", self.id));
+            panic!("close panicked");
+        }
         self.logger
             .lock()
             .unwrap()
@@ -395,6 +475,12 @@ impl DataSrc<SyncDataConn> for SyncDataSrc {
                 .unwrap()
                 .push(format!("SyncDataSrc::setup {} failed", self.id));
             return Err(errs::Err::new("XXX".to_string()));
+        } else if self.fail == Fail::SetupPanicked {
+            self.logger
+                .lock()
+                .unwrap()
+                .push(format!("SyncDataSrc::setup {} panicked", self.id));
+            panic!("setup panic");
         }
         self.logger
             .lock()
@@ -466,8 +552,11 @@ impl DataSrc<AsyncDataConn> for AsyncDataSrc {
             std::thread::sleep(std::time::Duration::from_millis(wait));
             let mut logger = logger.lock().unwrap();
             if fail == Fail::Setup {
-                logger.push(format!("AsyncDataSrc::setup {} failed to setup", id));
+                logger.push(format!("AsyncDataSrc::setup {} failed", id));
                 return Err(errs::Err::new("XXX".to_string()));
+            } else if fail == Fail::SetupPanicked {
+                logger.push(format!("AsyncDataSrc::setup {} panicked", id));
+                panic!("setup panic");
             }
             logger.push(format!("AsyncDataSrc::setup {}", id));
             Ok(())
