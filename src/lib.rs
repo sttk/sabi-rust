@@ -7,6 +7,7 @@
 #![allow(unused_features)]
 
 mod async_group;
+mod txn_failure;
 
 pub use async_group::AsyncGroupError;
 
@@ -24,4 +25,39 @@ pub struct AsyncGroup {
     handlers: Vec<(usize, Arc<str>, thread::JoinHandle<errs::Result<()>>)>,
     index: usize,
     name: Arc<str>,
+}
+
+#[derive(Debug)]
+pub enum TxnFailureCause {
+    NoneByCommitted,
+    NoneByUncommitted,
+    LogicFailure(errs::Err),
+    CommitFailure(errs::Err),
+    PostCommitFailure(errs::Err),
+}
+
+#[derive(Debug)]
+pub enum TxnFailureRollback {
+    NoneByRolledBack,
+    NoneByNotRolledBack,
+    RollbackFailure(errs::Err),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TxnFailureRecovery {
+    NoActionRequired,
+    RerunLogicAndCommit,
+    ResolveCauseThenRerunLogicAndCommit,
+    ResolveCauseThenRerunPostCommit,
+    ResolveCauseAndInconsistency,
+    InvestigateBecauseImpossible,
+    ManualRollbackRequired,
+}
+
+#[derive(Debug)]
+pub struct TxnFailureReport {
+    pub data_conn_name: Arc<str>,
+    pub data_conn_type: &'static str,
+    pub cause: TxnFailureCause,
+    pub rollback: TxnFailureRollback,
 }
