@@ -45,8 +45,7 @@
 //! [`DataAcc::run_async`] and [`DataAcc::start_async`] are used inside a logic closure that is
 //! already running under a [`LogicRunner`] to invoke other logic with the same data-access
 //! object. They neither set up data sources nor close connections; the nested logic shares the
-//! data connections, and the transaction when run via [`LogicRunner::txn_async`], of the
-//! enclosing run.
+//! same data connections, and the transaction state as the enclosing run.
 //!
 //! Global data sources are registered with the [`uses!`] macro or the [`uses_async`] function,
 //! and are set up by [`setup_async`] or [`setup_with_order_async`].
@@ -122,7 +121,7 @@ pub async fn setup_async() -> errs::Result<AutoShutdown> {
 ///
 /// # Parameters
 ///
-/// * `names` - A `static` slice of data source name specifying the desired setup order.
+/// * `names` - data source names.
 ///
 /// # Returns
 ///

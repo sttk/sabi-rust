@@ -164,7 +164,7 @@ impl DataRun {
 }
 
 impl<T: 'static> DataHub<T> {
-    /// Creates a new `DataHub` instance with adding commit order.
+    /// Creates a new `DataHub` instance with default commit order.
     ///
     /// # Returns
     ///
