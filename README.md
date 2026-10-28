@@ -48,14 +48,14 @@ In Cargo.toml, write this crate as a dependency:
 
 ```toml
 [dependencies]
-sabi-rust = "0.9.0" # For synchronous APIs
+sabi-rust = "0.9.1" # For synchronous APIs
 ```
 
 For asynchronous APIs with `tokio` runtime, enable the `tokio` feature:
 
 ```toml
 [dependencies]
-sabi-rust = { version = "0.9.0", features = ["tokio"] }
+sabi-rust = { version = "0.9.1", features = ["tokio"] }
 tokio = { version = "1", features = ["full"] } # Required for tokio runtime
 ```
 
@@ -387,7 +387,7 @@ Compatibility Check #5: Rust 1.87.0
   [OK]     Is compatible
 
 Result:
-   Considered (min … max):   Rust 1.56.1 … Rust 1.99.0
+   Considered (min … max):   Rust 1.56.1 … Rust 1.99.1
    Search method:            bisect
    MSRV:                     1.87.0
    Target:                   x86_64-apple-darwin
@@ -401,7 +401,7 @@ This program is free software under MIT License.<br>
 See the file LICENSE in this distribution for more details.
 
 [repo-url]: https://github.com/sttk/sabi-rust
-[cratesio-img]: https://img.shields.io/badge/crates.io-ver.0.9.0-fc8d62?logo=rust
+[cratesio-img]: https://img.shields.io/badge/crates.io-ver.0.9.1-fc8d62?logo=rust
 [cratesio-url]: https://crates.io/crates/sabi-rust
 [docrs-img]: https://img.shields.io/badge/doc.rs-sabi_rust-66c2a5?logo=docs.rs
 [docrs-url]: https://docs.rs/sabi-rust
