@@ -4,10 +4,11 @@
 
 mod global_setup;
 
+pub use global_setup::create_static_data_src_container;
 pub(crate) use global_setup::{
-    copy_global_data_srcs_to_map, create_data_conn_from_global_data_src,
+    copy_global_data_srcs_to_map, create_data_conn_from_global_data_src, setup, setup_with_order,
+    uses,
 };
-pub use global_setup::{create_static_data_src_container, setup, setup_with_order, uses};
 
 use crate::{
     AsyncGroup, DataConn, DataConnContainer, DataSrc, DataSrcContainer, DataSrcManager, ErrEntry,

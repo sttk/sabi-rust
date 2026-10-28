@@ -30,34 +30,7 @@ impl Drop for AutoShutdown {
     }
 }
 
-/// Registers a global data source, making it available throughout the application.
-///
-/// This function associates a given [`DataSrc`] implementation with a unique name.
-/// This name will later be used to retrieve session-specific [`DataConn`] instances from this
-/// data source.
-///
-/// Global data sources are managed by a singleton and can be set up once for the application's
-/// lifetime.
-/// If `setup_async` or `setup_with_order_async` has already been called, this function will return
-/// an `errs::Err`.
-/// If another Tokio task holds the lock of the global data source manager, this function will wait
-/// until the lock is released.
-///
-/// # Parameters
-///
-/// * `name` - The name to associate with this data source.
-/// * `ds` - The data source instance, which must implement `DataSrc` and have a `'static` lifetime.
-///
-/// # Type Parameters
-///
-/// * `S` - The type of the data source.
-/// * `C` - The type of the data connection provided by the data source.
-///
-/// # Returns
-///
-/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an `errs::Err` if
-///   the global data source manager is in an invalid state or setup has already occurred.
-pub async fn uses_async<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
+pub(crate) async fn uses_async<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C> + 'static,
     C: DataConn + 'static,
@@ -74,37 +47,7 @@ where
     }
 }
 
-/// Registers a global data source, making it available throughout the application.
-///
-/// This is the synchronous version of [`uses_async`].
-///
-/// This function associates a given [`DataSrc`] implementation with a unique name.
-/// This name will later be used to retrieve session-specific [`DataConn`] instances from this
-/// data source.
-///
-/// Global data sources are managed by a singleton and can be set up once for the application's
-/// lifetime.
-/// If [`setup_async`] or [`setup_with_order_async`] has already been called, this function will
-/// return an `errs::Err`.
-/// If another Tokio task holds the lock of the global data source manager, this function will
-/// return an error immediately without waiting.
-///
-/// # Parameters
-///
-/// * `name` - The name to associate with this data source.
-/// * `ds` - The data source instance, which must implement [`DataSrc`] and have a `'static`
-///   lifetime.
-///
-/// # Type Parameters
-///
-/// * `S` - The type of the data source.
-/// * `C` - The type of the data connection provided by the data source.
-///
-/// # Returns
-///
-/// * `errs::Result<()>`: [`Ok`] if the data source is successfully registered, or an `errs::Err` if
-///   the global data source manager is in an invalid state or setup has already occurred.
-pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
+pub(crate) fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
 where
     S: DataSrc<C> + 'static,
     C: DataConn + 'static,
@@ -135,32 +78,7 @@ fn collect_static_data_src_containers(dsm: &mut DataSrcManager) {
     dsm.prepend(static_vec);
 }
 
-/// Asynchronously sets up all globally registered data sources.
-///
-/// This setup typically involves tasks such as creating connection pools,
-/// opening global connections, or performing initial configurations necessary
-/// for creating session-specific connections.
-///
-/// If any data source fails to set up, this function returns an `errs::Err` with
-/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
-/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
-/// all global data sources that were successfully set up are also closed.
-///
-/// If all data source setups are successful, the [`Result::Ok`] which contains an
-/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
-/// data sources when it's dropped.
-/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
-/// automatically cleaned up when the return value goes out of scope.
-///
-/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
-/// variable using `let _ = ...`.
-/// If you do, the inner object is dropped immediately at that point.
-///
-/// # Returns
-///
-/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
-///   set up successfully, or an `errs::Err` if any setup fails.
-pub async fn setup_async() -> errs::Result<AutoShutdown> {
+pub(crate) async fn setup_async() -> errs::Result<AutoShutdown> {
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_for_closure = Arc::clone(&errors);
 
@@ -193,40 +111,7 @@ pub async fn setup_async() -> errs::Result<AutoShutdown> {
     }
 }
 
-/// Asynchronously sets up all globally registered data sources with a specified order.
-///
-/// Similar to [`setup_async`], but allows defining the order in which data sources
-/// are set up. Data sources not specified in `names` will be set up after the
-/// specified ones, in an undefined order.
-///
-/// This setup typically involves tasks such as creating connection pools,
-/// opening global connections, or performing initial configurations necessary
-/// for creating session-specific connections.
-///
-/// If any data source fails to set up, this function returns an `errs::Err` with
-/// [`DataSrcError::FailToSetupGlobalDataSrcs`], containing a vector of the names
-/// of the failed data sources and their corresponding `errs::Err` objects. In such a case,
-/// all global data sources that were successfully set up are also closed.
-///
-/// If all data source setups are successful, the [`Result::Ok`] which contains an
-/// [`AutoShutdown`] object is returned. This object is designed to close and drop global
-/// data sources when it's dropped.
-/// Thanks to Rust's ownership mechanism, this ensures that the global data sources are
-/// automatically cleaned up when the return value goes out of scope.
-///
-/// **NOTE:** Do not receive the [`Result`] or its inner object into an anonymous
-/// variable using `let _ = ...`.
-/// If you do, the inner object is dropped immediately at that point.
-///
-/// # Parameters
-///
-/// * `names` - An array of string slices specifying the desired setup order by data source name.
-///
-/// # Returns
-///
-/// * `Result<AutoShutdown, errs::Err>`: An [`AutoShutdown`] if all global data sources are
-///   set up successfully, or an `errs::Err` if any setup fails.
-pub async fn setup_with_order_async(names: &'static [&str]) -> errs::Result<AutoShutdown> {
+pub(crate) async fn setup_with_order_async(names: &'static [&str]) -> errs::Result<AutoShutdown> {
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_for_closure = Arc::clone(&errors);
 
@@ -301,20 +186,6 @@ impl StaticDataSrcRegistration {
     }
 }
 inventory::collect!(StaticDataSrcRegistration);
-
-#[macro_export]
-#[doc(hidden)]
-macro_rules! _uses_for_async {
-    ($name:tt, $data_src:expr) => {
-        const _: () = {
-            inventory::submit! {
-                $crate::tokio::StaticDataSrcRegistration::new(|| {
-                    $crate::tokio::create_static_data_src_container($name, $data_src)
-                })
-            }
-        };
-    };
-}
 
 pub(crate) async fn create_data_conn_from_global_data_src_async<C>(
     index: usize,

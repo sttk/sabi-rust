@@ -46,7 +46,11 @@ impl<T: 'static + Send> LogicRunner<T> {
         self.hub.run.uses(name, ds);
     }
 
-    /// Deregisters a local or previously registered data source by name.
+    /// Deregisters a data source by name from this runner.
+    ///
+    /// A session-local data source registered by [`uses`](LogicRunner::uses) is removed.
+    /// A global data source with the same name becomes invisible to this runner, but the global
+    /// registration itself is not affected.
     ///
     /// # Parameters
     ///
@@ -59,7 +63,8 @@ impl<T: 'static + Send> LogicRunner<T> {
     /// Executes a single business logic closure non-transactionally and asynchronously.
     ///
     /// Sets up local data sources, invokes the closure with a mutable reference to [`DataHub`],
-    /// and closes all participating data connections afterwards.
+    /// and closes all participating data connections afterwards. If the setup fails, the closure
+    /// is not executed.
     ///
     /// # Type Parameters
     ///
@@ -71,8 +76,9 @@ impl<T: 'static + Send> LogicRunner<T> {
     ///
     /// # Returns
     ///
-    /// * `errs::Result<()>`: The result of the logic function's execution,
-    ///   or an error if executing `logic_fn` fails.
+    /// * `errs::Result<()>`: `Ok(())` if the closure succeeds. Otherwise an `errs::Err` holding
+    ///   `DataHubError::FailToSetupLocalDataSrcs` if the setup fails, or the error returned by
+    ///   `logic_fn` as it is.
     #[inline]
     pub async fn run_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
@@ -92,16 +98,20 @@ impl<T: 'static + Send> LogicRunner<T> {
     /// # Returns
     ///
     /// A [`LogicRun`] builder to configure and execute sequential logic steps.
+    /// A failure in setting up local data sources is reported by
+    /// [`end`](LogicRun::end), which must always be called to finish the chain.
     #[inline]
-    pub async fn start_async(&mut self) -> LogicRun<'_, T> {
+    pub async fn start_async(&mut self) -> LogicRun<'_, DataHub<T>> {
         LogicRun::new_async(&mut self.hub, false).await
     }
 
     /// Executes a single business logic closure within an asynchronous transaction.
     ///
-    /// Sets up local data sources, runs the closure, and automatically commits all participating
-    /// data connections if the closure succeeds. If the closure or commit phase fails, all
-    /// connections are rolled back.
+    /// Sets up local data sources and runs the closure. If the closure succeeds, all
+    /// participating data connections are committed (pre-commit, commit, post-commit). If the
+    /// closure or a commit phase fails, the connections that have not been committed are rolled
+    /// back, and [`DataConn::on_txn_failure_async`] is invoked on all participating
+    /// connections. Finally, all data connections are closed.
     ///
     /// # Type Parameters
     ///
@@ -113,8 +123,11 @@ impl<T: 'static + Send> LogicRunner<T> {
     ///
     /// # Returns
     ///
-    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed,
-    ///   or an `errs::Err` if any transaction phase fails.
+    /// * `errs::Result<()>`: `Ok(())` if the closure and the commit phase succeed. Otherwise an
+    ///   `errs::Err` holding `DataHubError::FailToSetupLocalDataSrcs` (the closure is not
+    ///   executed), the error returned by `logic_fn` as it is, or
+    ///   `DataConnError::FailToPreCommitDataConn` / `FailToCommitDataConn` /
+    ///   `FailToPostCommitDataConn` if a commit phase fails.
     #[inline]
     pub async fn txn_async<F>(&mut self, mut logic_fn: F) -> errs::Result<()>
     where
@@ -141,6 +154,9 @@ impl<T: 'static + Send> LogicRunner<T> {
     ///
     /// A [`LogicTxn`] builder to configure, execute, and commit or roll back sequential logic
     /// steps.
+    /// A failure in setting up local data sources is reported by
+    /// [`end_txn_async`](LogicTxn::end_txn_async),
+    /// which must always be called to finish the chain.
     #[inline]
     pub async fn begin_txn_async(&mut self) -> LogicTxn<'_, T> {
         LogicTxn::new_async(&mut self.hub).await
@@ -170,7 +186,7 @@ macro_rules! _logic {
 mod tests_of_logic_runner {
     use super::*;
     use crate::tokio::_test_commons::*;
-    use crate::tokio::{DataAcc, DataConnError, DataHubError, DataSrcError, LogicRunner};
+    use crate::tokio::{logic, DataAcc, DataConnError, DataHubError, DataSrcError, LogicRunner};
     use std::sync::Mutex;
 
     #[test]
@@ -1984,9 +2000,9 @@ mod tests_of_logic_runner {
             }
         }
 
-        struct Hoge;
-        impl test_async_data_acc_aggregation_to_data_hub::GettingDataAcc for DataHub<Hoge> {}
-        impl test_async_data_acc_aggregation_to_data_hub::SettingDataAcc for DataHub<Hoge> {}
+        struct MyScope;
+        impl test_async_data_acc_aggregation_to_data_hub::GettingDataAcc for DataHub<MyScope> {}
+        impl test_async_data_acc_aggregation_to_data_hub::SettingDataAcc for DataHub<MyScope> {}
 
         #[overridable(mod = test_async_data_acc_aggregation_to_data_hub)]
         trait HogeData {
@@ -1998,7 +2014,7 @@ mod tests_of_logic_runner {
             test_async_data_acc_aggregation_to_data_hub::GettingDataAcc,
             test_async_data_acc_aggregation_to_data_hub::SettingDataAcc
         )]
-        impl test_async_data_acc_aggregation_to_data_hub::HogeData for DataHub<Hoge> {}
+        impl test_async_data_acc_aggregation_to_data_hub::HogeData for DataHub<MyScope> {}
 
         async fn hoge_logic_async(data: &mut impl HogeData) -> errs::Result<()> {
             let mut text = data.get_text_async().await?;
@@ -2012,7 +2028,7 @@ mod tests_of_logic_runner {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut runner = LogicRunner::new(DataHub::<Hoge>::new());
+                let mut runner = LogicRunner::new(DataHub::<MyScope>::new());
                 runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
                 if let Err(err) = runner.run_async(_logic!(hoge_logic_async)).await {
@@ -2048,7 +2064,7 @@ mod tests_of_logic_runner {
             let logger = Arc::new(Mutex::new(Vec::<String>::new()));
 
             {
-                let mut runner = LogicRunner::new(DataHub::<Hoge>::new());
+                let mut runner = LogicRunner::new(DataHub::<MyScope>::new());
                 runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
                 runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
                 if let Err(err) = runner.txn_async(_logic!(hoge_logic_async)).await {
@@ -2086,32 +2102,180 @@ mod tests_of_logic_runner {
         }
     }
 
-    struct A;
+    mod compile_check {
+        use super::*;
 
-    trait Data {}
-    impl Data for DataHub<A> {}
+        struct A;
 
-    async fn process_async(_data: &mut impl Data) -> errs::Result<()> {
-        Ok(())
+        trait Data {}
+        impl Data for DataHub<A> {}
+
+        async fn process_async(_data: &mut impl Data) -> errs::Result<()> {
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn data_hub_implements_send_trait() {
+            let handle = tokio::spawn(async {
+                let mut runner = LogicRunner::new(DataHub::<A>::new());
+                runner.run_async(_logic!(process_async)).await.unwrap();
+            });
+
+            handle.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn txn_async_in_spawn() {
+            let handle = tokio::spawn(async {
+                let mut runner = LogicRunner::new(DataHub::<A>::new());
+                runner.txn_async(_logic!(process_async)).await.unwrap();
+            });
+
+            handle.await.unwrap();
+        }
     }
 
-    #[tokio::test]
-    async fn data_hub_implements_send_trait() {
-        let handle = tokio::spawn(async {
-            let mut runner = LogicRunner::new(DataHub::<A>::new());
-            runner.run_async(_logic!(process_async)).await.unwrap();
-        });
+    mod test_nested_logic_running_in_data_acc {
+        use super::*;
+        use crate::tokio::DataAcc;
+        use override_macro::{overridable, override_with};
 
-        handle.await.unwrap();
-    }
+        #[overridable]
+        trait GettingDataAcc12: DataAcc {
+            async fn get_text_async(&mut self) -> errs::Result<String> {
+                let _conn = self.get_data_conn_async::<SyncDataConn>("foo").await?;
+                // getting a text by using _conn
+                Ok("hello".to_string())
+            }
+        }
 
-    #[tokio::test]
-    async fn txn_async_in_spawn() {
-        let handle = tokio::spawn(async {
-            let mut runner = LogicRunner::new(DataHub::<A>::new());
-            runner.txn_async(_logic!(process_async)).await.unwrap();
-        });
+        #[overridable]
+        trait SettingDataAcc12: DataAcc {
+            async fn set_text_async(&mut self, _text: String) -> errs::Result<()> {
+                let _conn = self.get_data_conn_async::<SyncDataConn>("bar").await?;
+                // setting a text by using _conn
+                Ok(())
+            }
+        }
 
-        handle.await.unwrap();
+        #[overridable]
+        trait GetSetDataAcc12: DataAcc + HogeData12 {
+            async fn process_text_async(&mut self) -> errs::Result<()> {
+                self.run_async(logic!(hoge_logic12)).await
+            }
+        }
+
+        struct MyScope12;
+        impl GettingDataAcc12 for DataHub<MyScope12> {}
+        impl SettingDataAcc12 for DataHub<MyScope12> {}
+        impl GetSetDataAcc12 for DataHub<MyScope12> {}
+
+        #[trait_variant::make(Send)]
+        #[overridable]
+        trait HogeData12: Sized {
+            async fn get_text_async(&mut self) -> errs::Result<String>;
+            async fn set_text_async(&mut self, text: String) -> errs::Result<()>;
+        }
+
+        #[override_with(GettingDataAcc12, SettingDataAcc12)]
+        impl HogeData12 for DataHub<MyScope12> {}
+
+        async fn hoge_logic12(data: &mut impl HogeData12) -> errs::Result<()> {
+            let mut text = data.get_text_async().await?;
+            text = text.to_uppercase();
+            data.set_text_async(text).await?;
+            Ok(())
+        }
+
+        #[trait_variant::make(Send)]
+        #[overridable]
+        trait FugaData12 {
+            async fn process_text_async(&mut self) -> errs::Result<()>;
+        }
+
+        #[override_with(GetSetDataAcc12)]
+        impl FugaData12 for DataHub<MyScope12> {}
+
+        async fn fuga_logic12(data: &mut impl FugaData12) -> errs::Result<()> {
+            data.process_text_async().await
+        }
+
+        #[tokio::test]
+        async fn test_run_async() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut runner = LogicRunner::new(DataHub::<MyScope12>::new());
+                runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+                if let Err(err) = runner.run_async(logic!(fuga_logic12)).await {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                &[
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn test_txn() {
+            let logger = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            {
+                let mut runner = LogicRunner::new(DataHub::<MyScope12>::new());
+                runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+                runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
+                if let Err(err) = runner.txn_async(logic!(fuga_logic12)).await {
+                    panic!("{err:?}");
+                }
+            }
+
+            assert_eq!(
+                *logger.lock().unwrap(),
+                &[
+                    "SyncDataSrc::new 1",
+                    "SyncDataSrc::new 2",
+                    "SyncDataSrc::setup_async 1",
+                    "SyncDataSrc::setup_async 2",
+                    "SyncDataSrc::create_data_conn_async 1",
+                    "SyncDataConn::new 1",
+                    "SyncDataSrc::create_data_conn_async 2",
+                    "SyncDataConn::new 2",
+                    "SyncDataConn::pre_commit_async 1",
+                    "SyncDataConn::pre_commit_async 2",
+                    "SyncDataConn::commit_async 1",
+                    "SyncDataConn::commit_async 2",
+                    "SyncDataConn::post_commit_async 1",
+                    "SyncDataConn::post_commit_async 2",
+                    "SyncDataConn::close 2",
+                    "SyncDataConn::drop 2",
+                    "SyncDataConn::close 1",
+                    "SyncDataConn::drop 1",
+                    "SyncDataSrc::close 2",
+                    "SyncDataSrc::drop 2",
+                    "SyncDataSrc::close 1",
+                    "SyncDataSrc::drop 1",
+                ]
+            );
+        }
     }
 }
