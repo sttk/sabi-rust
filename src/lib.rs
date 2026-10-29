@@ -8,11 +8,13 @@
 
 mod async_group;
 mod data_conn;
+mod data_src;
 mod non_null;
 mod txn_failure;
 
 pub use async_group::AsyncGroupError;
 pub use data_conn::DataConnError;
+pub use data_src::DataSrcError;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -138,4 +140,49 @@ struct DataConnManager {
     index_map: HashMap<Arc<str>, usize>,
     ordered_names: Box<[Arc<str>]>,
     committed: bool,
+}
+
+pub trait DataSrc<C>
+where
+    C: DataConn + 'static,
+{
+    fn setup(&mut self, ag: &mut AsyncGroup) -> errs::Result<()>;
+    fn close(&mut self);
+    fn create_data_conn(&mut self) -> errs::Result<Box<C>>;
+}
+
+struct NoopDataSrc {}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl DataSrc<NoopDataConn> for NoopDataSrc {
+    fn setup(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+        Ok(())
+    }
+    fn close(&mut self) {}
+    fn create_data_conn(&mut self) -> errs::Result<Box<NoopDataConn>> {
+        Ok(Box::new(NoopDataConn {}))
+    }
+}
+
+#[repr(C)]
+struct DataSrcContainer<S = NoopDataSrc, C = NoopDataConn>
+where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    drop_fn: fn(*const DataSrcContainer),
+    setup_fn: fn(*const DataSrcContainer, &mut AsyncGroup) -> errs::Result<()>,
+    close_fn: fn(*const DataSrcContainer),
+    create_data_conn_fn: fn(*const DataSrcContainer) -> errs::Result<Box<DataConnContainer<C>>>,
+    is_data_conn_fn: fn(any::TypeId) -> bool,
+
+    local: bool,
+    name: Arc<str>,
+    data_src: S,
+}
+
+struct DataSrcManager {
+    vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
+    vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
+    local: bool,
 }
