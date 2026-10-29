@@ -8,6 +8,7 @@
 
 mod async_group;
 mod data_conn;
+mod data_hub;
 mod data_src;
 mod global_setup;
 mod non_null;
@@ -15,6 +16,7 @@ mod txn_failure;
 
 pub use async_group::AsyncGroupError;
 pub use data_conn::DataConnError;
+pub use data_hub::DataHubError;
 pub use data_src::DataSrcError;
 
 pub use global_setup::create_static_data_src_container;
@@ -233,4 +235,16 @@ macro_rules! uses {
             }
         };
     };
+}
+
+pub struct DataHub<T> {
+    run: DataRun,
+    _phantom: marker::PhantomData<T>,
+}
+
+struct DataRun {
+    local_data_src_manager: DataSrcManager,
+    data_src_map: HashMap<Arc<str>, (bool, usize)>,
+    data_conn_manager: DataConnManager,
+    fixed: bool,
 }
