@@ -7,12 +7,13 @@
 #![allow(unused_features)]
 
 mod async_group;
+mod non_null;
 mod txn_failure;
 
 pub use async_group::AsyncGroupError;
 
 use std::sync::Arc;
-use std::thread;
+use std::{cell, marker, ptr, thread};
 
 #[derive(Debug)]
 pub struct ErrEntry {
@@ -60,4 +61,9 @@ pub struct TxnFailureReport {
     pub data_conn_type: &'static str,
     pub cause: TxnFailureCause,
     pub rollback: TxnFailureRollback,
+}
+
+struct SendSyncNonNull<T: Send + Sync> {
+    non_null_ptr: ptr::NonNull<T>,
+    _phantom: marker::PhantomData<cell::Cell<T>>,
 }
