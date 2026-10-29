@@ -9,12 +9,15 @@
 mod async_group;
 mod data_conn;
 mod data_src;
+mod global_setup;
 mod non_null;
 mod txn_failure;
 
 pub use async_group::AsyncGroupError;
 pub use data_conn::DataConnError;
 pub use data_src::DataSrcError;
+
+pub use global_setup::create_static_data_src_container;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -185,4 +188,49 @@ struct DataSrcManager {
     vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
     vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
     local: bool,
+}
+
+#[must_use = "global DataSrcs are closed when this value is dropped; bind it to a named variable"]
+pub struct AutoShutdown {}
+
+#[doc(hidden)]
+pub struct StaticDataSrcContainer {
+    ssnnptr: SendSyncNonNull<DataSrcContainer>,
+}
+
+#[doc(hidden)]
+pub struct StaticDataSrcRegistration {
+    factory: fn() -> StaticDataSrcContainer,
+}
+
+#[inline]
+pub fn setup() -> errs::Result<AutoShutdown> {
+    global_setup::setup()
+}
+
+#[inline]
+pub fn setup_with_order(names: &[&str]) -> errs::Result<AutoShutdown> {
+    global_setup::setup_with_order(names)
+}
+
+#[inline]
+pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
+where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    global_setup::uses(name, ds)
+}
+
+#[macro_export]
+macro_rules! uses {
+    ($name:tt, $data_src:expr) => {
+        const _: () = {
+            inventory::submit! {
+                $crate::StaticDataSrcRegistration::new(|| {
+                    $crate::create_static_data_src_container($name, $data_src)
+                })
+            }
+        };
+    };
 }
