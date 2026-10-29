@@ -7,10 +7,12 @@
 #![allow(unused_features)]
 
 mod async_group;
+mod data_acc;
 mod data_conn;
 mod data_hub;
 mod data_src;
 mod global_setup;
+mod logic_run;
 mod non_null;
 mod txn_failure;
 
@@ -247,4 +249,34 @@ struct DataRun {
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
     data_conn_manager: DataConnManager,
     fixed: bool,
+}
+
+pub trait AsDataHub {
+    type D: 'static;
+
+    fn as_hub(&mut self) -> &mut DataHub<Self::D>;
+}
+
+pub trait DataAcc: AsDataHub + Sized {
+    fn get_data_conn<C: DataConn + 'static>(&mut self, name: &str) -> errs::Result<&mut C>;
+
+    fn run<F>(&mut self, logic_fn: F) -> errs::Result<()>
+    where
+        F: for<'a> FnMut(&'a mut Self) -> errs::Result<()>;
+
+    fn start(&mut self) -> LogicRun<'_, Self>;
+}
+
+enum LogicErrAt {
+    Begin { err: errs::Err },
+    Run { errors: Vec<ErrEntry> },
+    Block { errors: Vec<ErrEntry> },
+}
+
+#[must_use = "call `end()` to finish the chain and release the data connections"]
+pub struct LogicRun<'a, A> {
+    hub: &'a mut A,
+    err: LogicErrAt,
+    index: usize,
+    nested: bool,
 }
