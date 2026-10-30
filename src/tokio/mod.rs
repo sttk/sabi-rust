@@ -9,6 +9,8 @@ mod data_hub;
 mod data_src;
 mod global_setup;
 mod logic_run;
+mod logic_runner;
+mod logic_txn;
 
 pub use data_conn::DataConnError;
 pub use data_hub::DataHubError;
@@ -302,3 +304,17 @@ pub struct LogicRun<'a, A> {
     index: usize,
     nested: bool,
 }
+
+#[must_use = "call `end_txn_async()` to commit or roll back the transaction"]
+pub struct LogicTxn<'a, T> {
+    hub: &'a mut DataHub<T>,
+    err: LogicErrAt,
+    index: usize,
+}
+
+pub struct LogicRunner<T> {
+    hub: DataHub<T>,
+}
+
+#[doc(inline)]
+pub use crate::_logic as logic;
