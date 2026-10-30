@@ -5,11 +5,14 @@
 mod async_group;
 mod data_conn;
 mod data_src;
+mod global_setup;
 
 pub use data_conn::DataConnError;
 pub use data_src::DataSrcError;
 
-use crate::{ErrEntry, SendSyncNonNull, TxnFailureReport};
+pub use global_setup::create_static_data_src_container;
+
+use crate::{ErrEntry, LogicErrAt, SendSyncNonNull, TxnFailureReport};
 
 use std::any;
 use std::collections::HashMap;
@@ -196,3 +199,58 @@ pub(crate) struct DataSrcManager {
     vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
     local: bool,
 }
+
+#[must_use = "global DataSrcs are closed when this value is dropped; bind it to a named variable"]
+pub struct AutoShutdown {}
+
+#[doc(hidden)]
+pub struct StaticDataSrcContainer {
+    ssnnptr: SendSyncNonNull<DataSrcContainer>,
+}
+
+#[doc(hidden)]
+pub struct StaticDataSrcRegistration {
+    pub(crate) factory: fn() -> StaticDataSrcContainer,
+}
+
+pub async fn setup_async() -> errs::Result<AutoShutdown> {
+    global_setup::setup_async().await
+}
+
+pub async fn setup_with_order_async(names: &'static [&str]) -> errs::Result<AutoShutdown> {
+    global_setup::setup_with_order_async(names).await
+}
+
+#[inline]
+pub async fn uses_async<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
+where
+    S: DataSrc<C> + 'static,
+    C: DataConn + 'static,
+{
+    global_setup::uses_async(name, ds).await
+}
+
+pub fn uses<S, C>(name: impl Into<Arc<str>>, ds: S) -> errs::Result<()>
+where
+    S: DataSrc<C> + 'static,
+    C: DataConn + 'static,
+{
+    global_setup::uses(name, ds)
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _uses_for_async {
+    ($name:tt, $data_src:expr) => {
+        const _: () = {
+            inventory::submit! {
+                $crate::tokio::StaticDataSrcRegistration::new(|| {
+                    $crate::tokio::create_static_data_src_container($name, $data_src)
+                })
+            }
+        };
+    };
+}
+
+#[doc(inline)]
+pub use crate::_uses_for_async as uses;
