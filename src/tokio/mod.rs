@@ -4,8 +4,10 @@
 
 mod async_group;
 mod data_conn;
+mod data_src;
 
 pub use data_conn::DataConnError;
+pub use data_src::DataSrcError;
 
 use crate::{ErrEntry, SendSyncNonNull, TxnFailureReport};
 
@@ -134,4 +136,63 @@ pub(crate) struct DataConnManager {
     index_map: HashMap<Arc<str>, usize>,
     ordered_names: Box<[Arc<str>]>,
     committed: bool,
+}
+
+#[trait_variant::make(Send)]
+#[allow(unused_variables)] // for rustdoc
+pub trait DataSrc<C>
+where
+    C: DataConn + 'static,
+{
+    async fn setup_async(&mut self, ag: &mut AsyncGroup) -> errs::Result<()>;
+
+    fn close(&mut self);
+
+    async fn create_data_conn_async(&mut self) -> errs::Result<Box<C>>;
+}
+
+pub(crate) struct NoopDataSrc {}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl DataSrc<NoopDataConn> for NoopDataSrc {
+    async fn setup_async(&mut self, _ag: &mut AsyncGroup) -> errs::Result<()> {
+        Ok(())
+    }
+    fn close(&mut self) {}
+    async fn create_data_conn_async(&mut self) -> errs::Result<Box<NoopDataConn>> {
+        Ok(Box::new(NoopDataConn {}))
+    }
+}
+
+#[allow(clippy::type_complexity)]
+#[repr(C)]
+pub(crate) struct DataSrcContainer<S = NoopDataSrc, C = NoopDataConn>
+where
+    S: DataSrc<C>,
+    C: DataConn + 'static,
+{
+    drop_fn: fn(*const DataSrcContainer),
+    close_fn: fn(*const DataSrcContainer),
+    is_data_conn_fn: fn(any::TypeId) -> bool,
+
+    setup_fn: for<'ag> fn(
+        *const DataSrcContainer,
+        &'ag mut AsyncGroup,
+    ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'ag>>,
+
+    create_data_conn_fn: fn(
+        *const DataSrcContainer,
+    ) -> Pin<
+        Box<dyn Future<Output = errs::Result<Box<DataConnContainer<C>>>> + Send + 'static>,
+    >,
+
+    local: bool,
+    name: Arc<str>,
+    data_src: S,
+}
+
+pub(crate) struct DataSrcManager {
+    vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
+    vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
+    local: bool,
 }
