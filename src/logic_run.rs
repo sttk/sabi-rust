@@ -122,3 +122,7 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 }
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test;

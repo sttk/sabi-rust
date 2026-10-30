@@ -166,3 +166,7 @@ impl<T: 'static> DataHub<T> {
         }
     }
 }
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_compile;

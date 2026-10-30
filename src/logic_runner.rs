@@ -65,3 +65,19 @@ impl<T: 'static> LogicRunner<T> {
         LogicTxn::new(&mut self.hub)
     }
 }
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_begin_txn;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_new_uses_disuses;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_run;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_start;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_txn;

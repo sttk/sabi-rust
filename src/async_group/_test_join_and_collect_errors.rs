@@ -56,7 +56,7 @@ fn single_fail() {
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", errors[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"a\"), file = src\\async_group/_test_data.rs, line = 30 }"
+        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"a\"), file = src\\async_group\\_test_data.rs, line = 30 }"
     );
 }
 
