@@ -3,13 +3,15 @@
 // See the file LICENSE in this distribution for more details.
 
 mod async_group;
+mod data_acc;
 mod data_conn;
 mod data_hub;
 mod data_src;
 mod global_setup;
+mod logic_run;
 
 pub use data_conn::DataConnError;
-pub use data_src::DataHubError;
+pub use data_hub::DataHubError;
 pub use data_src::DataSrcError;
 
 pub use global_setup::create_static_data_src_container;
@@ -268,4 +270,35 @@ struct DataRun {
     data_src_map: HashMap<Arc<str>, (bool, usize)>,
     data_conn_manager: DataConnManager,
     fixed: bool,
+}
+
+pub trait AsDataHub: Send {
+    type D: 'static;
+
+    fn as_hub(&mut self) -> &mut DataHub<Self::D>;
+}
+
+pub trait DataAcc: AsDataHub + Sized {
+    #[allow(async_fn_in_trait)]
+    fn get_data_conn_async<C: DataConn + 'static>(
+        &mut self,
+        name: &str,
+    ) -> impl Future<Output = errs::Result<&mut C>> + Send;
+
+    #[allow(async_fn_in_trait)]
+    async fn run_async<F>(&mut self, logic_fn: F) -> errs::Result<()>
+    where
+        for<'b> F:
+            FnMut(&'b mut Self) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>;
+
+    #[allow(async_fn_in_trait)]
+    async fn start_async(&mut self) -> LogicRun<'_, Self>;
+}
+
+#[must_use = "call `end()` to finish the chain and release the data connections"]
+pub struct LogicRun<'a, A> {
+    hub: &'a mut A,
+    err: LogicErrAt,
+    index: usize,
+    nested: bool,
 }
