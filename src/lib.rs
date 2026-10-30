@@ -6,6 +6,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(unused_features)]
 
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+#[cfg(feature = "tokio")]
+pub mod tokio;
+
 mod async_group;
 mod data_acc;
 mod data_conn;
