@@ -136,3 +136,7 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 }
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test;

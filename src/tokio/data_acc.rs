@@ -38,3 +38,13 @@ impl<T: 'static + Send> DataAcc for DataHub<T> {
         LogicRun::new_async(self, true).await
     }
 }
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_aggregation;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_get_data_conn;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_nested_logic_running;
