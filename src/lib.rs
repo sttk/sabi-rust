@@ -199,6 +199,7 @@ struct DataSrcManager {
     vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
     vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
     local: bool,
+    is_abnormal: bool,
 }
 
 #[must_use = "global DataSrcs are closed when this value is dropped; bind it to a named variable"]
