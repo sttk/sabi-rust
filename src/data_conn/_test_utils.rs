@@ -201,7 +201,7 @@ fn test_new_failure_reports() {
 
     let mut manager = DataConnManager::new();
 
-    let vec = manager.new_failure_reports();
+    let vec = manager.new_failure_reports(&Ok(()));
     assert_eq!(vec.len(), 0);
 
     let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
@@ -216,7 +216,7 @@ fn test_new_failure_reports() {
     let ssnnptr = SendSyncNonNull::new(nnptr);
     manager.add(ssnnptr);
 
-    let vec = manager.new_failure_reports();
+    let vec = manager.new_failure_reports(&Ok(()));
     assert_eq!(vec.len(), 2);
 
     let report = &vec[0];

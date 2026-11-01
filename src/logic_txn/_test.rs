@@ -146,28 +146,52 @@ fn test_logic_run_but_fail_to_run_but_run_force_runs() {
         }
     }
 
+    #[cfg(unix)]
     assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "SyncDataSrc::new 1",
-                "SyncDataSrc::new 2",
-                "SyncDataSrc::setup 1",
-                "SyncDataSrc::setup 2",
-                "SyncDataSrc::create_data_conn 1",
-                "SyncDataConn::new 1",
-                "execute logic-0",
-                "execute logic-3",
-                "SyncDataConn::rollback 1",
-                "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
-                "SyncDataSrc::close 2",
-                "SyncDataSrc::drop 2",
-                "SyncDataSrc::close 1",
-                "SyncDataSrc::drop 1",
-            ]
-        );
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "execute logic-0",
+            "execute logic-3",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError FailToRunLogic { errors: [ErrEntry { index: 0, name: \"LogicTxn#run(logic-0)\", err: errs::Err { reason = &str \"logic-0 failed\", file = src/logic_txn/_test.rs, line = 106 } }] }, file = src/logic_txn.rs, line = 117 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "execute logic-0",
+            "execute logic-3",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError FailToRunLogic { errors: [ErrEntry { index: 0, name: \"LogicTxn#run(logic-0)\", err: errs::Err { reason = &str \"logic-0 failed\", file = src\\logic_txn\\_test.rs, line = 106 } }] }, file = src\\logic_txn.rs, line = 117 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
 }
 
 #[test]
@@ -236,27 +260,50 @@ fn test_runner_but_failed_to_run_or_block_then_skip_even_run_force() {
         }
     }
 
+    #[cfg(unix)]
     assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "SyncDataSrc::new 1",
-                "SyncDataSrc::new 2",
-                "SyncDataSrc::setup 1",
-                "SyncDataSrc::setup 2",
-                "SyncDataSrc::create_data_conn 1",
-                "SyncDataConn::new 1",
-                "execute logic-0",
-                "SyncDataConn::rollback 1",
-                "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
-                "SyncDataSrc::close 2",
-                "SyncDataSrc::drop 2",
-                "SyncDataSrc::close 1",
-                "SyncDataSrc::drop 1",
-            ]
-        );
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "execute logic-0",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError FailToRunLogic { errors: [ErrEntry { index: 0, name: \"LogicTxn#run_or_block(logic-0)\", err: errs::Err { reason = &str \"logic-0 failed\", file = src/logic_txn/_test.rs, line = 220 } }] }, file = src/logic_txn.rs, line = 125 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "execute logic-0",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError FailToRunLogic { errors: [ErrEntry { index: 0, name: \"LogicTxn#run_or_block(logic-0)\", err: errs::Err { reason = &str \"logic-0 failed\", file = src\\logic_txn\\_test.rs, line = 220 } }] }, file = src\\logic_txn.rs, line = 125 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
 }
 
 #[test]
@@ -324,28 +371,52 @@ fn test_runner_and_failed_to_run_force_then_skip_run_but_run_force_runs() {
         }
     }
 
+    #[cfg(unix)]
     assert_eq!(
-            *logger.lock().unwrap(),
-            &[
-                "SyncDataSrc::new 1",
-                "SyncDataSrc::new 2",
-                "SyncDataSrc::setup 1",
-                "SyncDataSrc::setup 2",
-                "SyncDataSrc::create_data_conn 1",
-                "SyncDataConn::new 1",
-                "execute logic-0",
-                "execute logic-2",
-                "SyncDataConn::rollback 1",
-                "SyncDataConn::on_txn_failure 1",
-                "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
-                "SyncDataConn::close 1",
-                "SyncDataConn::drop 1",
-                "SyncDataSrc::close 2",
-                "SyncDataSrc::drop 2",
-                "SyncDataSrc::close 1",
-                "SyncDataSrc::drop 1",
-            ]
-        );
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "execute logic-0",
+            "execute logic-2",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError FailToRunLogic { errors: [ErrEntry { index: 0, name: \"LogicTxn#run_force(logic-0)\", err: errs::Err { reason = &str \"logic-0 failed\", file = src/logic_txn/_test.rs, line = 331 } }] }, file = src/logic_txn.rs, line = 117 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "execute logic-0",
+            "execute logic-2",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError FailToRunLogic { errors: [ErrEntry { index: 0, name: \"LogicTxn#run_force(logic-0)\", err: errs::Err { reason = &str \"logic-0 failed\", file = src\\logic_txn\\_test.rs, line = 331 } }] }, file = src\\logic_txn.rs, line = 117 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
 }
 
 #[test]

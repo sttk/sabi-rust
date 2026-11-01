@@ -51,6 +51,7 @@ pub enum TxnFailureCause {
     NoneByCommitted,
     NoneByUncommitted,
     LogicFailure(errs::Err),
+    PreCommitFailure(errs::Err),
     CommitFailure(errs::Err),
     PostCommitFailure(errs::Err),
 }

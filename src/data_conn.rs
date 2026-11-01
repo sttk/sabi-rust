@@ -244,13 +244,16 @@ impl DataConnManager {
         Ok(typed_ptr)
     }
 
-    pub(crate) fn new_failure_reports(&self) -> Vec<TxnFailureReport> {
+    pub(crate) fn new_failure_reports(
+        &self,
+        logic_result: &errs::Result<()>,
+    ) -> Vec<TxnFailureReport> {
         let mut reports = Vec::new();
         for ssnnptr in self.vec.iter().flatten() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let name = unsafe { (*ptr).name.clone() };
             let type_fn = unsafe { (*ptr).type_fn };
-            let report = TxnFailureReport::new(name, type_fn());
+            let report = TxnFailureReport::new(name, type_fn(), logic_result);
             reports.push(report);
         }
         reports
@@ -280,7 +283,7 @@ impl DataConnManager {
         if !errors.is_empty() {
             for ee in errors.iter() {
                 let report = &mut reports[ee.index];
-                report.cause = TxnFailureCause::LogicFailure(ee.err.clone());
+                report.cause = TxnFailureCause::PreCommitFailure(ee.err.clone());
             }
             return Err(errs::Err::new(DataConnError::FailToPreCommitDataConn {
                 errors,

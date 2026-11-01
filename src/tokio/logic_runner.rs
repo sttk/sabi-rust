@@ -36,9 +36,10 @@ impl<T: 'static + Send> LogicRunner<T> {
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         self.hub.run.begin_async().await?;
-        let r = logic_fn(&mut self.hub).await;
+
+        let result = logic_fn(&mut self.hub).await;
         self.hub.run.end();
-        r
+        result
     }
 
     #[inline]
@@ -54,16 +55,17 @@ impl<T: 'static + Send> LogicRunner<T> {
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         self.hub.run.begin_async().await?;
-        let mut r = logic_fn(&mut self.hub).await;
-        let mut reports = self.hub.run.new_failure_reports();
-        if r.is_ok() {
-            r = self.hub.run.commit_async(&mut reports).await;
+
+        let mut result = logic_fn(&mut self.hub).await;
+        let mut reports = self.hub.run.new_failure_reports(&result);
+        if result.is_ok() {
+            result = self.hub.run.commit_async(&mut reports).await;
         }
-        if r.is_err() {
+        if result.is_err() {
             self.hub.run.rollback_async(reports).await;
         }
         self.hub.run.end();
-        r
+        result
     }
 
     #[inline]

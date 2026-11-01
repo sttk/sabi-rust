@@ -22,7 +22,7 @@ async fn test_only_rollback_and_first_is_sync() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let reports = manager.new_failure_reports();
+        let reports = manager.new_failure_reports(&Ok(()));
         manager.rollback_async(reports).await;
     }
 
@@ -64,7 +64,7 @@ async fn test_only_rollback_and_first_is_async() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let reports = manager.new_failure_reports();
+        let reports = manager.new_failure_reports(&Ok(()));
         manager.rollback_async(reports).await;
     }
 
@@ -106,7 +106,7 @@ async fn test_only_rollback_and_second_rollback_failed() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let reports = manager.new_failure_reports();
+        let reports = manager.new_failure_reports(&Ok(()));
         manager.rollback_async(reports).await;
     }
 
@@ -167,7 +167,7 @@ async fn test_only_rollback_and_first_rollback_failed() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let reports = manager.new_failure_reports();
+        let reports = manager.new_failure_reports(&Ok(()));
         manager.rollback_async(reports).await;
     }
 
