@@ -191,11 +191,15 @@ impl DataSrcManager {
 
         let vec = mem::take(&mut self.vec_ready);
         for ssnnptr in vec.into_iter().rev() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
             if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let close_fn = unsafe { (*ptr).close_fn };
-                let drop_fn = unsafe { (*ptr).drop_fn };
                 close_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let drop_fn = unsafe { (*ptr).drop_fn };
                 drop_fn(ptr);
             })) {
                 let _ = first_panic.get_or_insert(payload);
@@ -241,11 +245,13 @@ impl DataSrcManager {
 
         let vec = mem::take(&mut self.vec_ready);
         for ssnnptr in vec.into_iter().rev() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
             let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let close_fn = unsafe { (*ptr).close_fn };
-                let drop_fn = unsafe { (*ptr).drop_fn };
                 close_fn(ptr);
+            }));
+            let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let drop_fn = unsafe { (*ptr).drop_fn };
                 drop_fn(ptr);
             }));
         }
