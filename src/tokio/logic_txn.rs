@@ -4,9 +4,10 @@
 
 use crate::tokio::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicTxn};
 
+use futures::FutureExt;
 use std::future::Future;
-use std::mem;
 use std::pin::Pin;
+use std::{mem, panic};
 
 impl<'a, T> LogicTxn<'a, T> {
     pub(crate) async fn new_async(hub: &'a mut DataHub<T>) -> LogicTxn<'a, T> {
@@ -36,15 +37,29 @@ impl<'a, T> LogicTxn<'a, T> {
         let index = self.index;
         self.index += 1;
 
+        if self.hub.run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub).await {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicTxn#run_async(logic-{})", index).into(),
-                            err,
-                        });
+                    match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicTxn#run_async(logic-{})", index).into(),
+                                err,
+                            });
+                        }
+                        Err(payload) => {
+                            self.hub.run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -62,14 +77,28 @@ impl<'a, T> LogicTxn<'a, T> {
         let index = self.index;
         self.index += 1;
 
+        if self.hub.run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
-                if let Err(err) = logic_fn(self.hub).await {
-                    errors.push(ErrEntry {
-                        index,
-                        name: format!("LogicTxn#run_force_async(logic-{})", index).into(),
-                        err,
-                    });
+                match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("LogicTxn#run_force_async(logic-{})", index).into(),
+                            err,
+                        });
+                    }
+                    Err(payload) => {
+                        self.hub.run.abend();
+                        panic::resume_unwind(payload);
+                    }
                 }
                 self
             }
@@ -86,18 +115,33 @@ impl<'a, T> LogicTxn<'a, T> {
         let index = self.index;
         self.index += 1;
 
+        if self.hub.run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub).await {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicTxn#run_or_block_async(logic-{})", index).into(),
-                            err,
-                        });
-                        self.err = LogicErrAt::Block {
-                            errors: mem::take(errors),
-                        };
+                    match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicTxn#run_or_block_async(logic-{})", index)
+                                    .into(),
+                                err,
+                            });
+                            self.err = LogicErrAt::Block {
+                                errors: mem::take(errors),
+                            };
+                        }
+                        Err(payload) => {
+                            self.hub.run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -107,21 +151,34 @@ impl<'a, T> LogicTxn<'a, T> {
     }
 
     pub async fn end_txn_async(self) -> errs::Result<()> {
-        match self.err {
-            LogicErrAt::Begin { err } => {
-                self.hub.run.end();
-                Err(err)
-            }
-            LogicErrAt::Run { errors } => {
-                if errors.is_empty() {
-                    let mut reports = self.hub.run.new_failure_reports(&Ok(()));
-                    let result = self.hub.run.commit_async(&mut reports).await;
-                    if result.is_err() {
-                        self.hub.run.rollback_async(reports).await;
-                    }
+        if self.hub.run.is_abnormal() {
+            return Ok(());
+        }
+
+        match panic::AssertUnwindSafe(async {
+            match self.err {
+                LogicErrAt::Begin { err } => {
                     self.hub.run.end();
-                    result
-                } else {
+                    Err(err)
+                }
+                LogicErrAt::Run { errors } => {
+                    if errors.is_empty() {
+                        let mut reports = self.hub.run.new_failure_reports(&Ok(()));
+                        let result = self.hub.run.commit_async(&mut reports).await;
+                        if result.is_err() {
+                            self.hub.run.rollback_async(reports).await;
+                        }
+                        self.hub.run.end();
+                        result
+                    } else {
+                        let result = Err(errs::Err::new(DataHubError::FailToRunLogic { errors }));
+                        let reports = self.hub.run.new_failure_reports(&result);
+                        self.hub.run.rollback_async(reports).await;
+                        self.hub.run.end();
+                        result
+                    }
+                }
+                LogicErrAt::Block { errors } => {
                     let result = Err(errs::Err::new(DataHubError::FailToRunLogic { errors }));
                     let reports = self.hub.run.new_failure_reports(&result);
                     self.hub.run.rollback_async(reports).await;
@@ -129,12 +186,14 @@ impl<'a, T> LogicTxn<'a, T> {
                     result
                 }
             }
-            LogicErrAt::Block { errors } => {
-                let result = Err(errs::Err::new(DataHubError::FailToRunLogic { errors }));
-                let reports = self.hub.run.new_failure_reports(&result);
-                self.hub.run.rollback_async(reports).await;
-                self.hub.run.end();
-                result
+        })
+        .catch_unwind()
+        .await
+        {
+            Ok(result) => result,
+            Err(payload) => {
+                self.hub.run.abend();
+                panic::resume_unwind(payload);
             }
         }
     }
@@ -143,3 +202,6 @@ impl<'a, T> LogicTxn<'a, T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_panic;

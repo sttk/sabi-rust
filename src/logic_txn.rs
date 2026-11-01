@@ -4,7 +4,7 @@
 
 use crate::{DataHub, DataHubError, ErrEntry, LogicErrAt, LogicTxn};
 
-use std::mem;
+use std::{mem, panic};
 
 impl<'a, T> LogicTxn<'a, T> {
     pub(crate) fn new(hub: &'a mut DataHub<T>) -> LogicTxn<'a, T> {
@@ -32,15 +32,26 @@ impl<'a, T> LogicTxn<'a, T> {
         let index = self.index;
         self.index += 1;
 
+        if self.hub.run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicTxn#run(logic-{})", index).into(),
-                            err,
-                        });
+                    match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self.hub))) {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicTxn#run(logic-{})", index).into(),
+                                err,
+                            });
+                        }
+                        Err(payload) => {
+                            self.hub.run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -56,14 +67,25 @@ impl<'a, T> LogicTxn<'a, T> {
         let index = self.index;
         self.index += 1;
 
+        if self.hub.run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
-                if let Err(err) = logic_fn(self.hub) {
-                    errors.push(ErrEntry {
-                        index,
-                        name: format!("LogicTxn#run_force(logic-{})", index).into(),
-                        err,
-                    });
+                match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self.hub))) {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("LogicTxn#run_force(logic-{})", index).into(),
+                            err,
+                        });
+                    }
+                    Err(payload) => {
+                        self.hub.run.abend();
+                        panic::resume_unwind(payload);
+                    }
                 }
                 self
             }
@@ -78,18 +100,29 @@ impl<'a, T> LogicTxn<'a, T> {
         let index = self.index;
         self.index += 1;
 
+        if self.hub.run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub) {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicTxn#run_or_block(logic-{})", index).into(),
-                            err,
-                        });
-                        self.err = LogicErrAt::Block {
-                            errors: mem::take(errors),
-                        };
+                    match panic::catch_unwind(panic::AssertUnwindSafe(|| logic_fn(self.hub))) {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicTxn#run_or_block(logic-{})", index).into(),
+                                err,
+                            });
+                            self.err = LogicErrAt::Block {
+                                errors: mem::take(errors),
+                            };
+                        }
+                        Err(payload) => {
+                            self.hub.run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -99,7 +132,11 @@ impl<'a, T> LogicTxn<'a, T> {
     }
 
     pub fn end_txn(self) -> errs::Result<()> {
-        match self.err {
+        if self.hub.run.is_abnormal() {
+            return Ok(());
+        }
+
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| match self.err {
             LogicErrAt::Begin { err } => {
                 self.hub.run.end();
                 Err(err)
@@ -128,6 +165,12 @@ impl<'a, T> LogicTxn<'a, T> {
                 self.hub.run.end();
                 result
             }
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                self.hub.run.abend();
+                panic::resume_unwind(payload);
+            }
         }
     }
 }
@@ -135,3 +178,6 @@ impl<'a, T> LogicTxn<'a, T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_panic;

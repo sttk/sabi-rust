@@ -309,7 +309,7 @@ impl DataSrcManager {
             }
             Err(setup_payload) => {
                 let indices: Vec<usize> = (0..n_done).collect();
-                let _ = self.close_on_panic(&indices);
+                self.close_on_panic(&indices);
                 panic::resume_unwind(setup_payload);
             }
         }
@@ -397,7 +397,7 @@ impl DataSrcManager {
                     .iter()
                     .filter_map(|o| *o)
                     .collect();
-                let _ = self.close_on_panic(&indices);
+                self.close_on_panic(&indices);
                 panic::resume_unwind(setup_payload);
             }
         }
