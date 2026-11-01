@@ -105,8 +105,8 @@ impl<'a, T> LogicTxn<'a, T> {
                 Err(err)
             }
             LogicErrAt::Run { errors } => {
-                let mut reports = self.hub.run.new_failure_reports();
                 if errors.is_empty() {
+                    let mut reports = self.hub.run.new_failure_reports(&Ok(()));
                     let result = self.hub.run.commit(&mut reports);
                     if result.is_err() {
                         self.hub.run.rollback(reports);
@@ -114,16 +114,19 @@ impl<'a, T> LogicTxn<'a, T> {
                     self.hub.run.end();
                     result
                 } else {
+                    let result = Err(errs::Err::new(DataHubError::FailToRunLogic { errors }));
+                    let reports = self.hub.run.new_failure_reports(&result);
                     self.hub.run.rollback(reports);
                     self.hub.run.end();
-                    Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                    result
                 }
             }
             LogicErrAt::Block { errors } => {
-                let reports = self.hub.run.new_failure_reports();
+                let result = Err(errs::Err::new(DataHubError::FailToRunLogic { errors }));
+                let reports = self.hub.run.new_failure_reports(&result);
                 self.hub.run.rollback(reports);
                 self.hub.run.end();
-                Err(errs::Err::new(DataHubError::FailToRunLogic { errors }))
+                result
             }
         }
     }

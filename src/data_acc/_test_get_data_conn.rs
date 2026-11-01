@@ -48,6 +48,7 @@ fn test_get_data_conn_by_creating_but_failed_to_cast() {
         assert_eq!(runner.hub.run.fixed, false);
     }
 
+    #[cfg(unix)]
     assert_eq!(
         *logger.lock().unwrap(),
         &[
@@ -59,7 +60,28 @@ fn test_get_data_conn_by_creating_but_failed_to_cast() {
             "SyncDataConn::new 1",
             "SyncDataConn::rollback 1",
             "SyncDataConn::on_txn_failure 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_src::DataSrcError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src/data_src.rs, line = 322 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_src::DataSrcError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src\\data_src.rs, line = 322 }), rollback: NoneByRolledBack }]",
             "SyncDataConn::close 1",
             "SyncDataConn::drop 1",
             "SyncDataSrc::close 2",
@@ -187,6 +209,7 @@ fn test_get_data_conn_by_using_cache_but_failed_to_cast() {
         assert_eq!(runner.hub.run.fixed, false);
     }
 
+    #[cfg(unix)]
     assert_eq!(
         *logger.lock().unwrap(),
         &[
@@ -201,9 +224,37 @@ fn test_get_data_conn_by_using_cache_but_failed_to_cast() {
             "SyncDataConn::rollback 1",
             "SyncDataConn::rollback 2",
             "SyncDataConn::on_txn_failure 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src/data_conn.rs, line = 237 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src/data_conn.rs, line = 237 }), rollback: NoneByRolledBack }]",
             "SyncDataConn::on_txn_failure 2",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src/data_conn.rs, line = 237 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src/data_conn.rs, line = 237 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 2",
+            "SyncDataConn::drop 2",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "SyncDataSrc::create_data_conn 2",
+            "SyncDataConn::new 2",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::rollback 2",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src\\data_conn.rs, line = 237 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src\\data_conn.rs, line = 237 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::on_txn_failure 2",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src\\data_conn.rs, line = 237 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src\\data_conn.rs, line = 237 }), rollback: NoneByRolledBack }]",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -267,6 +318,7 @@ fn test_get_data_conn_but_no_corresponding_data_src() {
         assert_eq!(runner.hub.run.fixed, false);
     }
 
+    #[cfg(unix)]
     assert_eq!(
         *logger.lock().unwrap(),
         &[
@@ -278,7 +330,28 @@ fn test_get_data_conn_but_no_corresponding_data_src() {
             "SyncDataConn::new 1",
             "SyncDataConn::rollback 1",
             "SyncDataConn::on_txn_failure 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError NoDataSrcToCreateDataConn { name: \"xxx\", data_conn_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src/data_hub.rs, line = 147 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup 1",
+            "SyncDataSrc::setup 2",
+            "SyncDataSrc::create_data_conn 1",
+            "SyncDataConn::new 1",
+            "SyncDataConn::rollback 1",
+            "SyncDataConn::on_txn_failure 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::data_hub::DataHubError NoDataSrcToCreateDataConn { name: \"xxx\", data_conn_type: \"sabi::data_conn::_test_data::AsyncDataConn\" }, file = src\\data_hub.rs, line = 147 }), rollback: NoneByRolledBack }]",
             "SyncDataConn::close 1",
             "SyncDataConn::drop 1",
             "SyncDataSrc::close 2",

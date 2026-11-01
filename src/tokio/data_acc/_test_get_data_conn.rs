@@ -63,6 +63,7 @@ async fn test_get_data_conn_by_creating_but_failed_to_cast() {
         assert_eq!(runner.hub.run.fixed, false);
     }
 
+    #[cfg(unix)]
     assert_eq!(
         *logger.lock().unwrap(),
         &[
@@ -74,7 +75,28 @@ async fn test_get_data_conn_by_creating_but_failed_to_cast() {
             "SyncDataConn::new 1",
             "SyncDataConn::rollback_async 1",
             "SyncDataConn::on_txn_failure_async 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_src::DataSrcError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src/tokio/data_src.rs, line = 339 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup_async 1",
+            "SyncDataSrc::setup_async 2",
+            "SyncDataSrc::create_data_conn_async 1",
+            "SyncDataConn::new 1",
+            "SyncDataConn::rollback_async 1",
+            "SyncDataConn::on_txn_failure_async 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_src::DataSrcError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src/tokio/data_src.rs, line = 339 }), rollback: NoneByRolledBack }]",
             "SyncDataConn::close 1",
             "SyncDataConn::drop 1",
             "SyncDataSrc::close 2",
@@ -225,6 +247,7 @@ async fn test_get_data_conn_by_using_cache_but_failed_to_cast() {
         assert_eq!(runner.hub.run.fixed, false);
     }
 
+    #[cfg(unix)]
     assert_eq!(
         *logger.lock().unwrap(),
         &[
@@ -239,9 +262,37 @@ async fn test_get_data_conn_by_using_cache_but_failed_to_cast() {
             "SyncDataConn::rollback_async 1",
             "SyncDataConn::rollback_async 2",
             "SyncDataConn::on_txn_failure_async 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src/tokio/data_conn.rs, line = 250 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src/tokio/data_conn.rs, line = 250 }), rollback: NoneByRolledBack }]",
             "SyncDataConn::on_txn_failure_async 2",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src/tokio/data_conn.rs, line = 250 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src/tokio/data_conn.rs, line = 250 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 2",
+            "SyncDataConn::drop 2",
+            "SyncDataConn::close 1",
+            "SyncDataConn::drop 1",
+            "SyncDataSrc::close 2",
+            "SyncDataSrc::drop 2",
+            "SyncDataSrc::close 1",
+            "SyncDataSrc::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "SyncDataSrc::new 1",
+            "SyncDataSrc::new 2",
+            "SyncDataSrc::setup_async 1",
+            "SyncDataSrc::setup_async 2",
+            "SyncDataSrc::create_data_conn_async 1",
+            "SyncDataConn::new 1",
+            "SyncDataSrc::create_data_conn_async 2",
+            "SyncDataConn::new 2",
+            "SyncDataConn::rollback_async 1",
+            "SyncDataConn::rollback_async 2",
+            "SyncDataConn::on_txn_failure_async 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src\\tokio\\data_conn.rs, line = 250 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src\\tokio\\data_conn.rs, line = 250 }), rollback: NoneByRolledBack }]",
+            "SyncDataConn::on_txn_failure_async 2",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src\\tokio\\data_conn.rs, line = 250 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = sabi::tokio::data_conn::DataConnError FailToCastDataConn { name: \"bar\", target_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\" }, file = src\\tokio\\data_conn.rs, line = 250 }), rollback: NoneByRolledBack }]",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "SyncDataConn::close 1",

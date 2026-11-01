@@ -23,7 +23,7 @@ async fn test_commit_and_rollback_ok() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         assert!(manager.commit_async(&mut reports).await.is_ok());
         manager.rollback_async(reports).await;
     }
@@ -76,7 +76,7 @@ async fn test_commit_with_order_and_rollback_ok() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         assert!(manager.commit_async(&mut reports).await.is_ok());
         manager.rollback_async(reports).await;
     }
@@ -131,7 +131,7 @@ async fn test_commit_and_rollback_but_fail_first_sync_pre_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
@@ -158,9 +158,9 @@ async fn test_commit_and_rollback_but_fail_first_sync_pre_commit() {
             "SyncDataConn::rollback_async 1",
             "AsyncDataConn::rollback_async 2",
             "SyncDataConn::on_txn_failure_async 1",
-            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
+            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
             "AsyncDataConn::on_txn_failure_async 2",
-            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
+            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
             "AsyncDataConn::close 2",
             "AsyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -177,9 +177,9 @@ async fn test_commit_and_rollback_but_fail_first_sync_pre_commit() {
             "SyncDataConn::rollback_async 1",
             "AsyncDataConn::rollback_async 2",
             "SyncDataConn::on_txn_failure_async 1",
-            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
+            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
             "AsyncDataConn::on_txn_failure_async 2",
-            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
+            &format!("TxnFailureReports=[TxnFailureReport {{ data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err {{ reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = {} }}), rollback: NoneByRolledBack }}, TxnFailureReport {{ data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }}]", 94),
             "AsyncDataConn::close 2",
             "AsyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -207,7 +207,7 @@ async fn test_commit_and_rollback_but_fail_first_async_pre_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
@@ -232,9 +232,9 @@ async fn test_commit_and_rollback_but_fail_first_async_pre_commit() {
         "SyncDataConn::rollback_async 1",
         "AsyncDataConn::rollback_async 2",
         "SyncDataConn::on_txn_failure_async 1",
-        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = 94 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = 94 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
         "AsyncDataConn::on_txn_failure_async 2",
-        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = 94 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src/tokio/data_conn/_test_data.rs, line = 94 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
         "AsyncDataConn::close 2",
         "AsyncDataConn::drop 2",
         "SyncDataConn::close 1",
@@ -248,9 +248,9 @@ async fn test_commit_and_rollback_but_fail_first_async_pre_commit() {
         "SyncDataConn::rollback_async 1",
         "AsyncDataConn::rollback_async 2",
         "SyncDataConn::on_txn_failure_async 1",
-        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = 94 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = 94 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
         "AsyncDataConn::on_txn_failure_async 2",
-        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = 94 }), rollback: NoneByRolledBack }}, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+        "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"zzz\", file = src\\tokio\\data_conn\\_test_data.rs, line = 94 }), rollback: NoneByRolledBack }}, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
         "AsyncDataConn::close 2",
         "AsyncDataConn::drop 2",
         "SyncDataConn::close 1",
@@ -277,7 +277,7 @@ async fn test_commit_and_rollback_but_fail_second_pre_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToPreCommitDataConn { errors }) => {
@@ -294,6 +294,7 @@ async fn test_commit_and_rollback_but_fail_second_pre_commit() {
         manager.rollback_async(reports).await;
     }
 
+    #[cfg(unix)]
     assert_eq!(
         *logger.lock().unwrap(),
         &[
@@ -304,9 +305,29 @@ async fn test_commit_and_rollback_but_fail_second_pre_commit() {
             "SyncDataConn::rollback_async 2",
             "AsyncDataConn::rollback_async 1",
             "SyncDataConn::on_txn_failure_async 2",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"yyy\", file = src/tokio/data_conn/_test_data.rs, line = 271 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"yyy\", file = src/tokio/data_conn/_test_data.rs, line = 271 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
             "AsyncDataConn::on_txn_failure_async 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: LogicFailure(errs::Err { reason = alloc::string::String \"yyy\", file = src/tokio/data_conn/_test_data.rs, line = 271 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"yyy\", file = src/tokio/data_conn/_test_data.rs, line = 271 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "SyncDataConn::close 2",
+            "SyncDataConn::drop 2",
+            "AsyncDataConn::close 1",
+            "AsyncDataConn::drop 1",
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        *logger.lock().unwrap(),
+        &[
+            "AsyncDataConn::new 1",
+            "SyncDataConn::new 2",
+            "SyncDataConn::pre_commit_async 2",
+            "AsyncDataConn::pre_commit_async 1 failed",
+            "SyncDataConn::rollback_async 2",
+            "AsyncDataConn::rollback_async 1",
+            "SyncDataConn::on_txn_failure_async 2",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"yyy\", file = src/tokio/data_conn/_test_data.rs, line = 271 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
+            "AsyncDataConn::on_txn_failure_async 1",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::tokio::data_conn::_test_data::AsyncDataConn\", cause: PreCommitFailure(errs::Err { reason = alloc::string::String \"yyy\", file = src/tokio/data_conn/_test_data.rs, line = 271 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::tokio::data_conn::_test_data::SyncDataConn\", cause: NoneByUncommitted, rollback: NoneByRolledBack }]",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "AsyncDataConn::close 1",
@@ -334,7 +355,7 @@ async fn test_commit_and_rollback_but_fail_first_sync_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -414,7 +435,7 @@ async fn test_commit_and_rollback_but_fail_first_async_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -494,7 +515,7 @@ async fn test_commit_and_rollback_but_fail_second_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -574,7 +595,7 @@ async fn test_commit_and_rollback_but_fail_first_sync_post_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
@@ -659,7 +680,7 @@ async fn test_commit_and_rollback_but_fail_first_async_post_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
@@ -738,7 +759,7 @@ async fn test_commit_and_rollback_but_fail_second_post_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
@@ -826,8 +847,7 @@ async fn test_commit_and_rollback_but_fail_second_post_commit_and_contains_no_co
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
-
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToPostCommitDataConn { errors }) => {
@@ -925,8 +945,7 @@ async fn test_commit_and_rollback_and_first_commit_failed_and_second_rollback_fa
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
-
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -1007,8 +1026,7 @@ async fn test_commit_and_rollback_and_secod_commit_failed_and_first_rollback_fai
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
-
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -1089,7 +1107,7 @@ async fn test_commit_and_rollback_and_pre_commit_become_committed_and_ok() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
+        let mut reports = manager.new_failure_reports(&Ok(()));
         assert!(manager.commit_async(&mut reports).await.is_ok());
         manager.rollback_async(reports).await;
     }
@@ -1134,8 +1152,7 @@ async fn test_commit_and_rollback_and_pre_commit_become_committed_but_failed() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports();
-
+        let mut reports = manager.new_failure_reports(&Ok(()));
         if let Err(e) = manager.commit_async(&mut reports).await {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {

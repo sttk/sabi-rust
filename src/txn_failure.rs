@@ -7,11 +7,14 @@ use crate::{TxnFailureCause, TxnFailureRecovery, TxnFailureReport, TxnFailureRol
 use std::sync::Arc;
 
 impl TxnFailureReport {
-    pub(crate) fn new(name: Arc<str>, typ: &'static str) -> Self {
+    pub(crate) fn new(name: Arc<str>, typ: &'static str, logic_result: &errs::Result<()>) -> Self {
         Self {
             data_conn_name: name,
             data_conn_type: typ,
-            cause: TxnFailureCause::NoneByUncommitted,
+            cause: match logic_result {
+                Ok(_) => TxnFailureCause::NoneByUncommitted,
+                Err(err) => TxnFailureCause::LogicFailure(err.clone()),
+            },
             rollback: TxnFailureRollback::NoneByNotRolledBack,
         }
     }
@@ -19,7 +22,9 @@ impl TxnFailureReport {
     pub fn is_cause_of_failure(&self) -> bool {
         !matches!(
             self.cause,
-            TxnFailureCause::NoneByCommitted | TxnFailureCause::NoneByUncommitted
+            TxnFailureCause::NoneByCommitted
+                | TxnFailureCause::NoneByUncommitted
+                | TxnFailureCause::LogicFailure(_)
         )
     }
 
@@ -40,6 +45,10 @@ impl TxnFailureReport {
             (LogicFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
             (LogicFailure(_), NoneByRolledBack) => ResolveCauseThenRerunLogicAndCommit,
             (LogicFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (PreCommitFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (PreCommitFailure(_), NoneByRolledBack) => ResolveCauseThenRerunLogicAndCommit,
+            (PreCommitFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
 
             (CommitFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
             (CommitFailure(_), NoneByRolledBack) => ResolveCauseThenRerunLogicAndCommit,
@@ -68,6 +77,10 @@ impl TxnFailureReport {
             (LogicFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
             (LogicFailure(_), NoneByRolledBack) => NoActionRequired,
             (LogicFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
+
+            (PreCommitFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
+            (PreCommitFailure(_), NoneByRolledBack) => NoActionRequired,
+            (PreCommitFailure(_), RollbackFailure(_)) => ResolveCauseAndInconsistency,
 
             (CommitFailure(_), NoneByNotRolledBack) => InvestigateBecauseImpossible,
             (CommitFailure(_), NoneByRolledBack) => NoActionRequired,
