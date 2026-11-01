@@ -78,6 +78,11 @@ pub trait DataConn {
     }
 
     fn close(&mut self);
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn abend(&mut self) {
+        self.close();
+    }
 }
 
 pub(crate) struct NoopDataConn {}
@@ -136,6 +141,7 @@ where
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'ag>>,
 
     close_fn: fn(*const DataConnContainer),
+    abend_fn: fn(*const DataConnContainer),
 
     name: Arc<str>,
     data_conn: Box<C>,
@@ -205,6 +211,7 @@ pub(crate) struct DataSrcManager {
     vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
     vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
     local: bool,
+    is_abnormal: bool,
 }
 
 #[must_use = "global DataSrcs are closed when this value is dropped; bind it to a named variable"]

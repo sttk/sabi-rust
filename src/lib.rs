@@ -111,6 +111,11 @@ pub trait DataConn {
     fn on_txn_failure(&mut self, ag: &mut AsyncGroup, reports: &[TxnFailureReport]) {}
 
     fn close(&mut self);
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn abend(&mut self) {
+        self.close();
+    }
 }
 
 struct NoopDataConn {}
@@ -144,6 +149,7 @@ where
     rollback_fn: fn(*const DataConnContainer, &mut AsyncGroup) -> errs::Result<()>,
     on_txn_failure_fn: fn(*const DataConnContainer, &mut AsyncGroup, &[TxnFailureReport]),
     close_fn: fn(*const DataConnContainer),
+    abend_fn: fn(*const DataConnContainer),
 
     name: Arc<str>,
     data_conn: Box<C>,
@@ -199,6 +205,7 @@ struct DataSrcManager {
     vec_unready: Vec<SendSyncNonNull<DataSrcContainer>>,
     vec_ready: Vec<SendSyncNonNull<DataSrcContainer>>,
     local: bool,
+    is_abnormal: bool,
 }
 
 #[must_use = "global DataSrcs are closed when this value is dropped; bind it to a named variable"]

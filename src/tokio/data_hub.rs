@@ -57,6 +57,11 @@ impl DataRun {
     }
 
     #[inline]
+    pub(crate) fn is_abnormal(&self) -> bool {
+        self.local_data_src_manager.is_abnormal
+    }
+
+    #[inline]
     pub(crate) fn uses<S, C>(&mut self, name: impl Into<Arc<str>>, ds: S)
     where
         S: DataSrc<C> + 'static,
@@ -120,6 +125,14 @@ impl DataRun {
     pub(crate) fn end(&mut self) {
         self.data_conn_manager.close();
         self.fixed = false;
+    }
+
+    #[inline]
+    pub(crate) fn abend(&mut self) {
+        self.local_data_src_manager.is_abnormal = true;
+        self.data_conn_manager.abend();
+        self.local_data_src_manager.close();
+        self.data_src_map.clear();
     }
 
     pub(crate) async fn get_data_conn_async<C>(&mut self, name: &str) -> errs::Result<&mut C>

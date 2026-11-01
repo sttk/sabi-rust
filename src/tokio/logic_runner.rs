@@ -4,7 +4,9 @@
 
 use crate::tokio::{DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
 
+use futures::FutureExt;
 use std::future::Future;
+use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -35,11 +37,26 @@ impl<T: 'static + Send> LogicRunner<T> {
             &'b mut DataHub<T>,
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
+        if self.hub.run.is_abnormal() {
+            return Ok(());
+        }
+
         self.hub.run.begin_async().await?;
 
-        let result = logic_fn(&mut self.hub).await;
-        self.hub.run.end();
-        result
+        match panic::AssertUnwindSafe(async {
+            let result = logic_fn(&mut self.hub).await;
+            self.hub.run.end();
+            result
+        })
+        .catch_unwind()
+        .await
+        {
+            Ok(result) => result,
+            Err(payload) => {
+                self.hub.run.abend();
+                panic::resume_unwind(payload);
+            }
+        }
     }
 
     #[inline]
@@ -54,18 +71,33 @@ impl<T: 'static + Send> LogicRunner<T> {
             &'b mut DataHub<T>,
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
+        if self.hub.run.is_abnormal() {
+            return Ok(());
+        }
+
         self.hub.run.begin_async().await?;
 
-        let mut result = logic_fn(&mut self.hub).await;
-        let mut reports = self.hub.run.new_failure_reports(&result);
-        if result.is_ok() {
-            result = self.hub.run.commit_async(&mut reports).await;
+        match panic::AssertUnwindSafe(async {
+            let mut result = logic_fn(&mut self.hub).await;
+            let mut reports = self.hub.run.new_failure_reports(&result);
+            if result.is_ok() {
+                result = self.hub.run.commit_async(&mut reports).await;
+            }
+            if result.is_err() {
+                self.hub.run.rollback_async(reports).await;
+            }
+            self.hub.run.end();
+            result
+        })
+        .catch_unwind()
+        .await
+        {
+            Ok(result) => result,
+            Err(payload) => {
+                self.hub.run.abend();
+                panic::resume_unwind(payload);
+            }
         }
-        if result.is_err() {
-            self.hub.run.rollback_async(reports).await;
-        }
-        self.hub.run.end();
-        result
     }
 
     #[inline]
@@ -92,6 +124,9 @@ mod _test_begin_txn;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test_new_uses_disuses;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_panic;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test_run;

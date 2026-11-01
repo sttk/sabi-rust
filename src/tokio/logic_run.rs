@@ -4,9 +4,10 @@
 
 use crate::tokio::{AsDataHub, DataHubError, ErrEntry, LogicErrAt, LogicRun};
 
+use futures::FutureExt;
 use std::future::Future;
-use std::mem;
 use std::pin::Pin;
+use std::{mem, panic};
 
 impl<'a, A: AsDataHub> LogicRun<'a, A> {
     pub(crate) async fn new_async(hub: &'a mut A, nested: bool) -> LogicRun<'a, A> {
@@ -38,15 +39,29 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         let index = self.index;
         self.index = index + 1;
 
+        if self.hub.as_hub().run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub).await {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicRun#run_async(logic-{})", index).into(),
-                            err,
-                        });
+                    match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicRun#run_async(logic-{})", index).into(),
+                                err,
+                            });
+                        }
+                        Err(payload) => {
+                            self.hub.as_hub().run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -62,14 +77,28 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         let index = self.index;
         self.index = index + 1;
 
+        if self.hub.as_hub().run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
-                if let Err(err) = logic_fn(self.hub).await {
-                    errors.push(ErrEntry {
-                        index,
-                        name: format!("LogicRun#run_force_async(logic-{})", index).into(),
-                        err,
-                    });
+                match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        errors.push(ErrEntry {
+                            index,
+                            name: format!("LogicRun#run_force_async(logic-{})", index).into(),
+                            err,
+                        });
+                    }
+                    Err(payload) => {
+                        self.hub.as_hub().run.abend();
+                        panic::resume_unwind(payload);
+                    }
                 }
                 self
             }
@@ -84,18 +113,33 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         let index = self.index;
         self.index = index + 1;
 
+        if self.hub.as_hub().run.is_abnormal() {
+            return self;
+        }
+
         match self.err {
             LogicErrAt::Run { ref mut errors } => {
                 if errors.is_empty() {
-                    if let Err(err) = logic_fn(self.hub).await {
-                        errors.push(ErrEntry {
-                            index,
-                            name: format!("LogicRun#run_or_block_async(logic-{})", index).into(),
-                            err,
-                        });
-                        self.err = LogicErrAt::Block {
-                            errors: mem::take(errors),
-                        };
+                    match panic::AssertUnwindSafe(async { logic_fn(self.hub).await })
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            errors.push(ErrEntry {
+                                index,
+                                name: format!("LogicRun#run_or_block_async(logic-{})", index)
+                                    .into(),
+                                err,
+                            });
+                            self.err = LogicErrAt::Block {
+                                errors: mem::take(errors),
+                            };
+                        }
+                        Err(payload) => {
+                            self.hub.as_hub().run.abend();
+                            panic::resume_unwind(payload);
+                        }
                     }
                 }
                 self
@@ -105,8 +149,20 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
     }
 
     pub fn end(self) -> errs::Result<()> {
+        if self.hub.as_hub().run.is_abnormal() {
+            return Ok(());
+        }
+
         if !self.nested {
-            self.hub.as_hub().run.end();
+            match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                self.hub.as_hub().run.end();
+            })) {
+                Ok(_) => {}
+                Err(payload) => {
+                    self.hub.as_hub().run.abend();
+                    panic::resume_unwind(payload);
+                }
+            }
         }
 
         match self.err {
@@ -128,3 +184,6 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_panic;

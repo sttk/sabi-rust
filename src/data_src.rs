@@ -9,7 +9,7 @@ use crate::{
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{any, mem, ptr};
+use std::{any, mem, panic, ptr};
 
 #[derive(Debug)]
 pub enum DataSrcError {
@@ -132,10 +132,14 @@ impl DataSrcManager {
             vec_unready: Vec::new(),
             vec_ready: Vec::new(),
             local,
+            is_abnormal: false,
         }
     }
 
     pub(crate) fn prepend(&mut self, vec: Vec<SendSyncNonNull<DataSrcContainer>>) {
+        if self.is_abnormal {
+            return;
+        }
         self.vec_unready.splice(0..0, vec);
     }
 
@@ -144,6 +148,9 @@ impl DataSrcManager {
         S: DataSrc<C>,
         C: DataConn + 'static,
     {
+        if self.is_abnormal {
+            return;
+        }
         let boxed = Box::new(DataSrcContainer::<S, C>::new(name, ds, self.local));
         let ptr = ptr::NonNull::from(Box::leak(boxed)).cast::<DataSrcContainer>();
         self.vec_unready.push(SendSyncNonNull::new(ptr));
@@ -180,19 +187,73 @@ impl DataSrcManager {
     }
 
     pub(crate) fn close(&mut self) {
+        let mut first_panic: Option<Box<dyn any::Any + Send>> = None;
+
         let vec = mem::take(&mut self.vec_ready);
         for ssnnptr in vec.into_iter().rev() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let close_fn = unsafe { (*ptr).close_fn };
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            close_fn(ptr);
-            drop_fn(ptr);
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let close_fn = unsafe { (*ptr).close_fn };
+                close_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                drop_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
         }
         let vec = mem::take(&mut self.vec_unready);
         for ssnnptr in vec.into_iter().rev() {
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                drop_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
+        }
+
+        if let Some(payload) = first_panic {
+            panic::resume_unwind(payload);
+        }
+    }
+
+    fn close_on_panic(&mut self, indices: &[usize]) {
+        self.is_abnormal = true;
+
+        for &idx in indices.iter().rev() {
+            if let Some(ssnnptr) = self.vec_unready.get(idx) {
+                let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let close_fn = unsafe { (*ptr).close_fn };
+                    close_fn(ptr);
+                }));
+            }
+        }
+
+        let vec = mem::take(&mut self.vec_unready);
+        for ssnnptr in vec.into_iter().rev() {
+            let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                drop_fn(ptr);
+            }));
+        }
+
+        let vec = mem::take(&mut self.vec_ready);
+        for ssnnptr in vec.into_iter().rev() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            drop_fn(ptr);
+            let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let close_fn = unsafe { (*ptr).close_fn };
+                close_fn(ptr);
+            }));
+            let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                drop_fn(ptr);
+            }));
         }
     }
 
@@ -202,31 +263,44 @@ impl DataSrcManager {
         }
 
         let mut ag = AsyncGroup::new();
-        for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
-            let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let setup_fn = unsafe { (*ptr).setup_fn };
-            let name = unsafe { &(*ptr).name };
-            ag.index = i;
-            ag.name = name.clone();
-            if let Err(err) = setup_fn(ptr, &mut ag) {
-                errors.push(ErrEntry {
-                    index: i,
-                    name: name.clone(),
-                    err,
-                });
-                break;
+
+        let setup_panic = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            for (i, ssnnptr) in self.vec_unready.iter().enumerate() {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let setup_fn = unsafe { (*ptr).setup_fn };
+                let name = unsafe { &(*ptr).name };
+                ag.index = i;
+                ag.name = name.clone();
+                if let Err(err) = setup_fn(ptr, &mut ag) {
+                    errors.push(ErrEntry {
+                        index: i,
+                        name: name.clone(),
+                        err,
+                    });
+                    break;
+                }
             }
-        }
+        }));
+
         let n_done = ag.index;
         ag.join_and_collect_errors(errors);
 
-        if errors.is_empty() {
-            self.vec_ready.append(&mut self.vec_unready);
-        } else {
-            for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
+        match setup_panic {
+            Ok(()) => {
+                if errors.is_empty() {
+                    self.vec_ready.append(&mut self.vec_unready);
+                } else {
+                    for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
+                        let ptr = ssnnptr.non_null_ptr.as_ptr();
+                        let close_fn = unsafe { (*ptr).close_fn };
+                        close_fn(ptr);
+                    }
+                }
+            }
+            Err(setup_payload) => {
+                let indices: Vec<usize> = (0..n_done).collect();
+                self.close_on_panic(&indices);
+                panic::resume_unwind(setup_payload);
             }
         }
     }
@@ -258,41 +332,57 @@ impl DataSrcManager {
 
         let mut ag = AsyncGroup::new();
         let mut n_done = 0;
-        for vec_index_opt in ordered_indexes.iter() {
-            if let Some(vec_index) = vec_index_opt {
-                let ssnnptr = &self.vec_unready[*vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let setup_fn = unsafe { (*ptr).setup_fn };
-                let name = unsafe { &(*ptr).name };
-                ag.index = *vec_index;
-                ag.name = name.clone();
-                if let Err(err) = setup_fn(ptr, &mut ag) {
-                    errors.push(ErrEntry {
-                        index: *vec_index,
-                        name: name.clone(),
-                        err,
-                    });
-                    break;
+
+        let setup_panic = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            for vec_index_opt in ordered_indexes.iter() {
+                if let Some(vec_index) = vec_index_opt {
+                    let ssnnptr = &self.vec_unready[*vec_index];
+                    let ptr = ssnnptr.non_null_ptr.as_ptr();
+                    let setup_fn = unsafe { (*ptr).setup_fn };
+                    let name = unsafe { &(*ptr).name };
+                    ag.index = *vec_index;
+                    ag.name = name.clone();
+                    if let Err(err) = setup_fn(ptr, &mut ag) {
+                        errors.push(ErrEntry {
+                            index: *vec_index,
+                            name: name.clone(),
+                            err,
+                        });
+                        break;
+                    }
                 }
+                n_done += 1;
             }
-            n_done += 1;
-        }
+        }));
+
         ag.join_and_collect_errors(errors);
 
-        if errors.is_empty() {
-            let old_unready = mem::take(&mut self.vec_unready);
-            // Maximizing performance by pre-allocating the required capacity.
-            self.vec_ready
-                .reserve(ordered_indexes.iter().flatten().count());
-            for vec_index in ordered_indexes.iter().flatten() {
-                self.vec_ready.push(old_unready[*vec_index]);
+        match setup_panic {
+            Ok(()) => {
+                if errors.is_empty() {
+                    let old_unready = mem::take(&mut self.vec_unready);
+                    // Maximizing performance by pre-allocating the required capacity.
+                    self.vec_ready
+                        .reserve(ordered_indexes.iter().flatten().count());
+                    for vec_index in ordered_indexes.iter().flatten() {
+                        self.vec_ready.push(old_unready[*vec_index]);
+                    }
+                } else {
+                    for vec_index in ordered_indexes.iter().take(n_done).flatten().rev() {
+                        let ssnnptr = &self.vec_unready[*vec_index];
+                        let ptr = ssnnptr.non_null_ptr.as_ptr();
+                        let close_fn = unsafe { (*ptr).close_fn };
+                        close_fn(ptr);
+                    }
+                }
             }
-        } else {
-            for vec_index in ordered_indexes.iter().take(n_done).flatten().rev() {
-                let ssnnptr = &self.vec_unready[*vec_index];
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
-                let close_fn = unsafe { (*ptr).close_fn };
-                close_fn(ptr);
+            Err(setup_payload) => {
+                let indices: Vec<usize> = ordered_indexes[0..n_done]
+                    .iter()
+                    .filter_map(|o| *o)
+                    .collect();
+                self.close_on_panic(&indices);
+                panic::resume_unwind(setup_payload);
             }
         }
     }
@@ -359,6 +449,9 @@ pub(crate) mod _test_data;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test_new_add_remove_close;
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod _test_panic;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test_setup;
