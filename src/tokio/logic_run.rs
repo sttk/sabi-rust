@@ -32,6 +32,27 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Executes an asynchronous logic function if no prior errors have occurred in the chain.
+    ///
+    /// If an error occurred in a preceding step, `logic_fn` is skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the async logic function.
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The asynchronous business logic function to execute. Use the
+    ///   [`logic!`](crate::tokio::logic) macro to adapt async functions.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub async fn run_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(&'b mut A) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
@@ -70,6 +91,28 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Executes an asynchronous logic function even if prior steps produced errors.
+    ///
+    /// Useful for cleanup or compensating operations that must run regardless of previous
+    /// failures, unless execution has been blocked by
+    /// [`run_or_block_async`](Self::run_or_block_async).
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the async logic function.
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The asynchronous business logic function to execute unconditionally.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub async fn run_force_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(&'b mut A) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
@@ -106,6 +149,27 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Executes an asynchronous logic function, blocking all subsequent steps if it fails.
+    ///
+    /// If `logic_fn` produces an error, the error is recorded and all subsequent steps
+    /// (including [`run_force_async`](Self::run_force_async)) will be skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the async logic function.
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The critical asynchronous business logic function to execute.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub async fn run_or_block_async<F>(mut self, mut logic_fn: F) -> Self
     where
         for<'b> F: FnMut(&'b mut A) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
@@ -148,6 +212,13 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Finishes the logic execution chain, releases data connections, and returns the result.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())` if all executed logic functions completed successfully.
+    /// - `Err(errs::Err)` containing [`DataHubError::FailToRunLogic`] with collected errors if any
+    ///   step failed, or the initial error if the session failed to begin.
     pub fn end(self) -> errs::Result<()> {
         if self.hub.as_hub().run.is_abnormal() {
             return Ok(());

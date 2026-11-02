@@ -11,32 +11,50 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, mem, panic, ptr};
 
+/// Error type representing failures during [`DataSrc`] registration, initialization, or
+/// connection creation.
 #[derive(Debug)]
 pub enum DataSrcError {
+    /// Failed to register a global data source, typically because setup has already occurred
+    /// or cleanup is in progress.
     FailToRegisterGlobalDataSrc {
+        /// Name of the data source being registered.
         name: Arc<str>,
     },
 
+    /// One or more global data sources failed during their setup phase.
     FailToSetupGlobalDataSrcs {
+        /// Collection of errors from failed setup operations.
         errors: Vec<ErrEntry>,
     },
 
+    /// Global data sources are currently being initialized by another thread.
     DuringSetupGlobalDataSrcs,
 
+    /// Global data sources have already been initialized.
     AlreadySetupGlobalDataSrcs,
 
+    /// A created data connection could not be cast to the requested concrete type.
     FailToCastDataConn {
+        /// Name of the data connection.
         name: Arc<str>,
+        /// Expected target connection type name.
         target_type: &'static str,
     },
 
+    /// Failed to create a new data connection instance from the data source.
     FailToCreateDataConn {
+        /// Name of the data connection.
         name: Arc<str>,
+        /// Type name of the data connection being created.
         data_conn_type: &'static str,
     },
 
+    /// No data source with the specified name was found to create the requested data connection.
     NoDataSrcToCreateDataConn {
+        /// Name of the missing data source.
         name: Arc<str>,
+        /// Expected type name of the data connection.
         data_conn_type: &'static str,
     },
 }

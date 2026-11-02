@@ -29,6 +29,26 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Executes a business logic function if no prior errors have occurred in the chain.
+    ///
+    /// If an error occurred in a preceding step, `logic_fn` is skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the logic function (`FnMut(&mut A) -> errs::Result<()>`).
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The business logic function to execute.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub fn run<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut A) -> errs::Result<()>,
@@ -64,6 +84,27 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Executes a business logic function even if prior steps produced errors.
+    ///
+    /// Useful for cleanup or compensating operations that must run regardless of previous
+    /// failures, unless execution has been blocked by [`run_or_block`](Self::run_or_block).
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the logic function (`FnMut(&mut A) -> errs::Result<()>`).
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The business logic function to execute unconditionally.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut A) -> errs::Result<()>,
@@ -97,6 +138,27 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Executes a business logic function, blocking all subsequent steps if it fails.
+    ///
+    /// If `logic_fn` produces an error, the error is recorded and all subsequent steps
+    /// (including [`run_force`](Self::run_force)) will be skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the logic function (`FnMut(&mut A) -> errs::Result<()>`).
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The critical business logic function to execute.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut A) -> errs::Result<()>,
@@ -135,6 +197,13 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
         }
     }
 
+    /// Finishes the logic execution chain, releases data connections, and returns the result.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())` if all executed logic functions completed successfully.
+    /// - `Err(errs::Err)` containing [`DataHubError::FailToRunLogic`] with collected errors if any
+    ///   step failed, or the initial error if the session failed to begin.
     pub fn end(self) -> errs::Result<()> {
         if self.hub.as_hub().run.is_abnormal() {
             return Ok(());

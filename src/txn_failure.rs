@@ -19,6 +19,15 @@ impl TxnFailureReport {
         }
     }
 
+    /// Returns whether this data connection is identified as the root cause of the
+    /// transaction failure.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the cause is [`TxnFailureCause::PreCommitFailure`],
+    /// [`TxnFailureCause::CommitFailure`], or [`TxnFailureCause::PostCommitFailure`];
+    /// `false` if it is [`TxnFailureCause::NoneByCommitted`],
+    /// [`TxnFailureCause::NoneByUncommitted`], or [`TxnFailureCause::LogicFailure`].
     pub fn is_cause_of_failure(&self) -> bool {
         !matches!(
             self.cause,
@@ -28,6 +37,15 @@ impl TxnFailureReport {
         )
     }
 
+    /// Determines the recommended recovery action when committing a transaction failed.
+    ///
+    /// Inspects the combination of [`cause`](Self::cause) and [`rollback`](Self::rollback) to
+    /// advise on whether logic can simply be rerun, root cause must be fixed first, or manual
+    /// intervention is needed.
+    ///
+    /// # Returns
+    ///
+    /// The recommended [`TxnFailureRecovery`] action.
     pub fn recovery_for_commit(&self) -> TxnFailureRecovery {
         use TxnFailureCause::*;
         use TxnFailureRecovery::*;
@@ -60,6 +78,14 @@ impl TxnFailureReport {
         }
     }
 
+    /// Determines the recommended recovery action when rolling back a transaction failed.
+    ///
+    /// Inspects the combination of [`cause`](Self::cause) and [`rollback`](Self::rollback) to
+    /// determine whether manual rollback or data reconciliation is required.
+    ///
+    /// # Returns
+    ///
+    /// The recommended [`TxnFailureRecovery`] action.
     pub fn recovery_for_rollback(&self) -> TxnFailureRecovery {
         use TxnFailureCause::*;
         use TxnFailureRecovery::*;
