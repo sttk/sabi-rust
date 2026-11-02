@@ -37,6 +37,9 @@ pub enum DataHubError {
         /// Collection of errors from failed logic functions.
         errors: Vec<ErrEntry>,
     },
+
+    /// The data hub is in an abnormal state and cannot be used.
+    AbnormalState,
 }
 
 impl DataRun {
