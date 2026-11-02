@@ -182,12 +182,22 @@ impl DataSrcManager {
             })
             .collect();
 
+        let mut first_panic: Option<Box<dyn std::any::Any + std::marker::Send>> = None;
+
         for ssnnptr in extracted_vec.iter().rev() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let close_fn = unsafe { (*ptr).close_fn };
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            close_fn(ptr);
-            drop_fn(ptr);
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let close_fn = unsafe { (*ptr).close_fn };
+                close_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                drop_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
         }
 
         let extracted_vec: Vec<_> = self
@@ -199,8 +209,16 @@ impl DataSrcManager {
 
         for ssnnptr in extracted_vec.iter().rev() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
-            let drop_fn = unsafe { (*ptr).drop_fn };
-            drop_fn(ptr);
+            if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let drop_fn = unsafe { (*ptr).drop_fn };
+                drop_fn(ptr);
+            })) {
+                let _ = first_panic.get_or_insert(payload);
+            }
+        }
+
+        if let Some(payload) = first_panic {
+            panic::resume_unwind(payload);
         }
     }
 
