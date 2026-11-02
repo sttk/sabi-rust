@@ -17,6 +17,18 @@ impl AsyncGroup {
         }
     }
 
+    /// Adds an asynchronous task to this group.
+    ///
+    /// The task is boxed and held until the group is joined, at which point all registered
+    /// tasks are awaited concurrently using [`futures::future::join_all`].
+    ///
+    /// # Type Parameters
+    ///
+    /// - `Fut`: The future type (`Future<Output = errs::Result<()>> + Send + 'static`).
+    ///
+    /// # Arguments
+    ///
+    /// - `future`: The asynchronous task to run.
     #[allow(clippy::doc_overindented_list_items)]
     pub fn add<Fut>(&mut self, future: Fut)
     where

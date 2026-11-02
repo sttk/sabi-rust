@@ -25,6 +25,27 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a business logic function if no prior errors have occurred in this transaction.
+    ///
+    /// If an error occurred in an earlier step, `logic_fn` is skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the logic function
+    ///   (`FnMut(&mut DataHub<T>) -> errs::Result<()>`).
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The business logic function to execute.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub fn run<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -60,6 +81,29 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a business logic function even if prior steps produced errors.
+    ///
+    /// Useful for cleanup or compensating operations that must run regardless of previous
+    /// failures, unless execution has been blocked by [`run_or_block`](Self::run_or_block).
+    /// Note that if any step failed, the transaction will still be rolled back at the end.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the logic function
+    ///   (`FnMut(&mut DataHub<T>) -> errs::Result<()>`).
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The business logic function to execute unconditionally.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub fn run_force<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -93,6 +137,28 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Executes a business logic function, blocking all subsequent steps if it fails.
+    ///
+    /// If `logic_fn` produces an error, the error is recorded and all subsequent steps
+    /// (including [`run_force`](Self::run_force)) will be skipped.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: The closure type for the logic function
+    ///   (`FnMut(&mut DataHub<T>) -> errs::Result<()>`).
+    ///
+    /// # Arguments
+    ///
+    /// - `logic_fn`: The critical business logic function to execute.
+    ///
+    /// # Returns
+    ///
+    /// `Self` for continuing the method chain.
+    ///
+    /// # Panics
+    ///
+    /// If `logic_fn` panics, opened data connections are abnormally terminated via `abend()`,
+    /// and the panic is resumed.
     pub fn run_or_block<F>(mut self, mut logic_fn: F) -> Self
     where
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
@@ -131,6 +197,17 @@ impl<'a, T> LogicTxn<'a, T> {
         }
     }
 
+    /// Finishes the transaction chain, commits or rolls back, and closes data connections.
+    ///
+    /// If all executed logic functions succeeded, attempts to commit all opened data connections.
+    /// If any logic function produced an error or if committing fails, all connections are
+    /// rolled back. In all cases, opened connections are closed.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())` on successful execution and commit.
+    /// - `Err(errs::Err)` containing [`DataHubError::FailToRunLogic`] if any logic step failed,
+    ///   commit error if commit failed, or the initial error if the session failed to begin.
     pub fn end_txn(self) -> errs::Result<()> {
         if self.hub.run.is_abnormal() {
             return Ok(());

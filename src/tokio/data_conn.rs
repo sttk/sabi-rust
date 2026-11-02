@@ -14,23 +14,33 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{any, mem, panic};
 
+/// Error type representing failures that occur during asynchronous [`DataConn`] operations.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum DataConnError {
+    /// Failure during the asynchronous pre-commit phase of one or more data connections.
     FailToPreCommitDataConn {
+        /// Collection of errors from failed pre-commit operations.
         errors: Vec<ErrEntry>,
     },
 
+    /// Failure during the asynchronous commit phase of one or more data connections.
     FailToCommitDataConn {
+        /// Collection of errors from failed commit operations.
         errors: Vec<ErrEntry>,
     },
 
+    /// Failure during the asynchronous post-commit phase of one or more data connections.
     FailToPostCommitDataConn {
+        /// Collection of errors from failed post-commit operations.
         errors: Vec<ErrEntry>,
     },
 
+    /// The retrieved data connection could not be cast to the requested concrete type.
     FailToCastDataConn {
+        /// Name of the data connection.
         name: Arc<str>,
+        /// Expected target connection type name.
         target_type: &'static str,
     },
 }

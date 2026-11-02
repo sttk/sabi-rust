@@ -15,18 +15,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{any, marker, ptr};
 
+/// Error type representing failures that occur within an asynchronous [`DataHub`].
 #[derive(Debug)]
 pub enum DataHubError {
+    /// One or more session-local data sources failed during their asynchronous setup phase.
     FailToSetupLocalDataSrcs {
+        /// Collection of errors from failed setup operations.
         errors: Vec<ErrEntry>,
     },
 
+    /// No data source with the specified name was found to create the requested connection.
     NoDataSrcToCreateDataConn {
+        /// Identifier name of the missing data source.
         name: Arc<str>,
+        /// Expected type name of the data connection.
         data_conn_type: &'static str,
     },
 
+    /// One or more errors occurred during the execution of asynchronous logic functions.
     FailToRunLogic {
+        /// Collection of errors from failed logic functions.
         errors: Vec<ErrEntry>,
     },
 }
@@ -171,6 +179,20 @@ impl DataRun {
 }
 
 impl<T: 'static + Send> DataHub<T> {
+    /// Creates a new asynchronous `DataHub` instance.
+    ///
+    /// The newly created hub inherits all registered global data sources.
+    ///
+    /// # Returns
+    ///
+    /// A new asynchronous [`DataHub<T>`] instance.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// struct MyScope;
+    /// let hub = sabi::tokio::DataHub::<MyScope>::new();
+    /// ```
     #[allow(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
@@ -180,6 +202,20 @@ impl<T: 'static + Send> DataHub<T> {
         }
     }
 
+    /// Creates a new asynchronous `DataHub` instance with a specified commit order for data
+    /// connections.
+    ///
+    /// During a transaction commit, connections listed in `names` are committed first in
+    /// the given order. Any connections not listed are committed afterward in the order
+    /// they were accessed.
+    ///
+    /// # Arguments
+    ///
+    /// - `names`: Slice of connection identifier names determining the commit order.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DataHub<T>`] instance configured with the specified commit order.
     #[inline]
     pub fn with_commit_order(names: &[&str]) -> Self {
         Self {
