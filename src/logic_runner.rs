@@ -2,7 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::{DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
+use crate::{DataConn, DataHub, DataHubError, DataSrc, LogicRun, LogicRunner, LogicTxn};
 
 use std::panic;
 use std::sync::Arc;
@@ -105,7 +105,7 @@ impl<T: 'static> LogicRunner<T> {
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
         if self.hub.run.is_abnormal() {
-            return Ok(());
+            return Err(errs::Err::new(DataHubError::AbnormalState));
         }
 
         self.hub.run.begin()?;
@@ -180,7 +180,7 @@ impl<T: 'static> LogicRunner<T> {
         F: FnMut(&mut DataHub<T>) -> errs::Result<()>,
     {
         if self.hub.run.is_abnormal() {
-            return Ok(());
+            return Err(errs::Err::new(DataHubError::AbnormalState));
         }
 
         self.hub.run.begin()?;

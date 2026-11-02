@@ -229,7 +229,7 @@ impl<'a, T> LogicTxn<'a, T> {
     ///   commit error if commit failed, or the initial error if the session failed to begin.
     pub async fn end_txn_async(self) -> errs::Result<()> {
         if self.hub.run.is_abnormal() {
-            return Ok(());
+            return Err(errs::Err::new(DataHubError::AbnormalState));
         }
 
         match panic::AssertUnwindSafe(async {

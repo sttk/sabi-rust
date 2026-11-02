@@ -2,7 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
-use crate::tokio::{DataConn, DataHub, DataSrc, LogicRun, LogicRunner, LogicTxn};
+use crate::tokio::{DataConn, DataHub, DataHubError, DataSrc, LogicRun, LogicRunner, LogicTxn};
 
 use futures::FutureExt;
 use std::future::Future;
@@ -105,7 +105,7 @@ impl<T: 'static + Send> LogicRunner<T> {
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         if self.hub.run.is_abnormal() {
-            return Ok(());
+            return Err(errs::Err::new(DataHubError::AbnormalState));
         }
 
         self.hub.run.begin_async().await?;
@@ -174,7 +174,7 @@ impl<T: 'static + Send> LogicRunner<T> {
         ) -> Pin<Box<dyn Future<Output = errs::Result<()>> + Send + 'b>>,
     {
         if self.hub.run.is_abnormal() {
-            return Ok(());
+            return Err(errs::Err::new(DataHubError::AbnormalState));
         }
 
         self.hub.run.begin_async().await?;

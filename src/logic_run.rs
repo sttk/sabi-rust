@@ -206,7 +206,7 @@ impl<'a, A: AsDataHub> LogicRun<'a, A> {
     ///   step failed, or the initial error if the session failed to begin.
     pub fn end(self) -> errs::Result<()> {
         if self.hub.as_hub().run.is_abnormal() {
-            return Ok(());
+            return Err(errs::Err::new(DataHubError::AbnormalState));
         }
 
         if !self.nested {
