@@ -469,6 +469,8 @@ impl DataConnManager {
             }
         }
 
+        self.committed = false;
+
         if let Some(payload) = first_panic {
             panic::resume_unwind(payload);
         }
@@ -490,6 +492,7 @@ impl DataConnManager {
         }
 
         self.index_map.clear();
+        self.committed = false;
     }
 }
 
