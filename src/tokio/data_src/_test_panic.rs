@@ -57,6 +57,7 @@ async fn test_of_setup_but_error() {
             "SyncDataSrc::new 3",
             "SyncDataSrc::setup_async 1",
             "SyncDataSrc::setup_async 2 panicked",
+            "SyncDataSrc::close 2",
             "SyncDataSrc::close 1",
             "SyncDataSrc::drop 3",
             "SyncDataSrc::drop 2",

@@ -81,6 +81,7 @@ fn test_start_but_failed_to_begin() {
             "SyncDataSrc::new 3",
             "SyncDataSrc::setup 1",
             "SyncDataSrc::setup 2 failed",
+            "SyncDataSrc::close 2",
             "SyncDataSrc::close 1",
             "SyncDataSrc::drop 3",
             "SyncDataSrc::drop 2",
