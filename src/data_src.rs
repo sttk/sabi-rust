@@ -318,7 +318,7 @@ impl DataSrcManager {
             }
         }));
 
-        let n_done = ag.index;
+        let n_done = ag.index + 1;
         ag.join_and_collect_errors(errors);
 
         match setup_panic {
@@ -371,6 +371,7 @@ impl DataSrcManager {
 
         let setup_panic = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             for vec_index_opt in ordered_indexes.iter() {
+                n_done += 1;
                 if let Some(vec_index) = vec_index_opt {
                     let ssnnptr = &self.vec_unready[*vec_index];
                     let ptr = ssnnptr.non_null_ptr.as_ptr();
@@ -387,7 +388,6 @@ impl DataSrcManager {
                         break;
                     }
                 }
-                n_done += 1;
             }
         }));
 
