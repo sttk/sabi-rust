@@ -213,11 +213,11 @@ fn test_pre_commit_panic() {
     struct Abc;
     let mut runner = LogicRunner::new(DataHub::<Abc>::new());
 
-    runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
     runner.uses(
-        "bar",
-        SyncDataSrc::new(2, logger.clone(), Fail::PreCommitPanicked),
+        "foo",
+        SyncDataSrc::new(1, logger.clone(), Fail::PreCommitPanicked),
     );
+    runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
     assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
     assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
@@ -261,8 +261,7 @@ fn test_pre_commit_panic() {
             "SyncDataSrc::create_data_conn 2",
             "SyncDataConn::new 2",
             "Run the logic",
-            "SyncDataConn::pre_commit 1",
-            "SyncDataConn::pre_commit 2 panicked",
+            "SyncDataConn::pre_commit 1 panicked",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -282,11 +281,11 @@ fn test_commit_panic() {
     struct Abc;
     let mut runner = LogicRunner::new(DataHub::<Abc>::new());
 
-    runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
     runner.uses(
-        "bar",
-        SyncDataSrc::new(2, logger.clone(), Fail::CommitPanicked),
+        "foo",
+        SyncDataSrc::new(1, logger.clone(), Fail::CommitPanicked),
     );
+    runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
     assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
     assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
@@ -332,8 +331,7 @@ fn test_commit_panic() {
             "Run the logic",
             "SyncDataConn::pre_commit 1",
             "SyncDataConn::pre_commit 2",
-            "SyncDataConn::commit 1",
-            "SyncDataConn::commit 2 panicked",
+            "SyncDataConn::commit 1 panicked",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -353,11 +351,11 @@ fn test_post_commit_panic() {
     struct Abc;
     let mut runner = LogicRunner::new(DataHub::<Abc>::new());
 
-    runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
     runner.uses(
-        "bar",
-        SyncDataSrc::new(2, logger.clone(), Fail::PostCommitPanicked),
+        "foo",
+        SyncDataSrc::new(1, logger.clone(), Fail::PostCommitPanicked),
     );
+    runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::None));
 
     assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
     assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
@@ -405,8 +403,7 @@ fn test_post_commit_panic() {
             "SyncDataConn::pre_commit 2",
             "SyncDataConn::commit 1",
             "SyncDataConn::commit 2",
-            "SyncDataConn::post_commit 1",
-            "SyncDataConn::post_commit 2 panicked",
+            "SyncDataConn::post_commit 1 panicked",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -426,7 +423,10 @@ fn test_rollback_panic() {
     struct Abc;
     let mut runner = LogicRunner::new(DataHub::<Abc>::new());
 
-    runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+    runner.uses(
+        "foo",
+        SyncDataSrc::new(1, logger.clone(), Fail::RollbackPanicked),
+    );
     runner.uses(
         "bar",
         SyncDataSrc::new(2, logger.clone(), Fail::RollbackPanicked),
@@ -478,12 +478,12 @@ fn test_rollback_panic() {
             "SyncDataSrc::create_data_conn 2",
             "SyncDataConn::new 2",
             "Run the logic but error",
-            "SyncDataConn::rollback 1",
+            "SyncDataConn::rollback 1 panicked",
             "SyncDataConn::rollback 2 panicked",
             "SyncDataConn::on_txn_failure 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
             "SyncDataConn::on_txn_failure 2",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src/logic_runner/_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -507,12 +507,12 @@ fn test_rollback_panic() {
             "SyncDataSrc::create_data_conn 2",
             "SyncDataConn::new 2",
             "Run the logic but error",
-            "SyncDataConn::rollback 1",
+            "SyncDataConn::rollback 1 panicked",
             "SyncDataConn::rollback 2 panicked",
             "SyncDataConn::on_txn_failure 1",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
             "SyncDataConn::on_txn_failure 2",
-            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
+            "TxnFailureReports=[TxnFailureReport { data_conn_name: \"foo\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }, TxnFailureReport { data_conn_name: \"bar\", data_conn_type: \"sabi::data_conn::_test_data::SyncDataConn\", cause: LogicFailure(errs::Err { reason = &str \"run logic error\", file = src\\logic_runner\\_test_panic.rs, line = 451 }), rollback: NoneByNotRolledBack }]",
             "SyncDataConn::close 2",
             "SyncDataConn::drop 2",
             "SyncDataConn::close 1",
@@ -532,7 +532,10 @@ fn test_close_panic() {
     struct Abc;
     let mut runner = LogicRunner::new(DataHub::<Abc>::new());
 
-    runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
+    runner.uses(
+        "foo",
+        SyncDataSrc::new(1, logger.clone(), Fail::ClosePanicked),
+    );
     runner.uses(
         "bar",
         SyncDataSrc::new(2, logger.clone(), Fail::ClosePanicked),
@@ -588,7 +591,7 @@ fn test_close_panic() {
             "SyncDataConn::post_commit 2",
             "SyncDataConn::close 2 panicked",
             "SyncDataConn::drop 2",
-            "SyncDataConn::close 1",
+            "SyncDataConn::close 1 panicked",
             "SyncDataConn::drop 1",
             "SyncDataSrc::close 2",
             "SyncDataSrc::drop 2",
