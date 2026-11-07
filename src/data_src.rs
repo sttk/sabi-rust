@@ -327,9 +327,11 @@ impl DataSrcManager {
                     self.vec_ready.append(&mut self.vec_unready);
                 } else {
                     for ssnnptr in self.vec_unready[0..n_done].iter().rev() {
-                        let ptr = ssnnptr.non_null_ptr.as_ptr();
-                        let close_fn = unsafe { (*ptr).close_fn };
-                        close_fn(ptr);
+                        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                            let ptr = ssnnptr.non_null_ptr.as_ptr();
+                            let close_fn = unsafe { (*ptr).close_fn };
+                            close_fn(ptr);
+                        }));
                     }
                 }
             }
@@ -406,9 +408,11 @@ impl DataSrcManager {
                 } else {
                     for vec_index in ordered_indexes.iter().take(n_done).flatten().rev() {
                         let ssnnptr = &self.vec_unready[*vec_index];
-                        let ptr = ssnnptr.non_null_ptr.as_ptr();
-                        let close_fn = unsafe { (*ptr).close_fn };
-                        close_fn(ptr);
+                        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                            let ptr = ssnnptr.non_null_ptr.as_ptr();
+                            let close_fn = unsafe { (*ptr).close_fn };
+                            close_fn(ptr);
+                        }));
                     }
                 }
             }
