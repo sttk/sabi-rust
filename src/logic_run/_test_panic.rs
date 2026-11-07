@@ -222,11 +222,8 @@ fn test_close_panic() {
     struct Abc;
     let mut runner = LogicRunner::new(DataHub::<Abc>::new());
 
-    runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::None));
-    runner.uses(
-        "bar",
-        SyncDataSrc::new(2, logger.clone(), Fail::ClosePanicked),
-    );
+    runner.uses("foo", SyncDataSrc::new(1, logger.clone(), Fail::ClosePanicked));
+    runner.uses("bar", SyncDataSrc::new(2, logger.clone(), Fail::ClosePanicked));
 
     assert_eq!(runner.hub.run.local_data_src_manager.vec_unready.len(), 2);
     assert_eq!(runner.hub.run.local_data_src_manager.vec_ready.len(), 0);
@@ -275,7 +272,7 @@ fn test_close_panic() {
             "Run the logic",
             "SyncDataConn::close 2 panicked",
             "SyncDataConn::drop 2",
-            "SyncDataConn::close 1",
+            "SyncDataConn::close 1 panicked",
             "SyncDataConn::drop 1",
             "SyncDataSrc::close 2",
             "SyncDataSrc::drop 2",
