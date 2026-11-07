@@ -2,6 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
+use crate::panic_to_string;
 use crate::{
     AsyncGroup, ErrEntry, SendSyncNonNull, TxnFailureCause, TxnFailureReport, TxnFailureRollback,
 };
@@ -385,8 +386,9 @@ impl DataConnManager {
 
         let mut ag = AsyncGroup::new();
         for (i, ssnnptr) in self.vec.iter().flatten().enumerate() {
+            let ptr = ssnnptr.non_null_ptr.as_ptr();
+            let name = unsafe { &(*ptr).name };
             if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let ptr = ssnnptr.non_null_ptr.as_ptr();
                 let report = &mut reports[i];
                 let is_committed_fn = unsafe { (*ptr).is_committed_fn };
                 if is_committed_fn(ptr) {
@@ -399,7 +401,6 @@ impl DataConnManager {
                     return;
                 }
                 let rollback_fn = unsafe { (*ptr).rollback_fn };
-                let name = unsafe { &(*ptr).name };
                 ag.index = i;
                 ag.name = name.clone();
                 if let Err(err) = rollback_fn(ptr, &mut ag) {
@@ -412,6 +413,11 @@ impl DataConnManager {
                     report.rollback = TxnFailureRollback::NoneByRolledBack;
                 }
             })) {
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err: errs::Err::new(panic_to_string(payload.as_ref())),
+                });
                 let _ = first_panic.get_or_insert(payload);
             }
         }

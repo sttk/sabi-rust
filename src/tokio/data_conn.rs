@@ -2,6 +2,7 @@
 // This program is free software under MIT License.
 // See the file LICENSE in this distribution for more details.
 
+use crate::panic_to_string;
 use crate::tokio::{
     AsyncGroup, DataConn, DataConnContainer, DataConnManager, ErrEntry, SendSyncNonNull,
 };
@@ -430,6 +431,13 @@ impl DataConnManager {
             .catch_unwind()
             .await
             {
+                let ptr = ssnnptr.non_null_ptr.as_ptr();
+                let name = unsafe { &(*ptr).name };
+                errors.push(ErrEntry {
+                    index: i,
+                    name: name.clone(),
+                    err: errs::Err::new(panic_to_string(payload.as_ref())),
+                });
                 let _ = first_panic.get_or_insert(payload);
             }
         }

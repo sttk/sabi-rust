@@ -672,3 +672,19 @@ pub struct LogicTxn<'a, T> {
 pub struct LogicRunner<T> {
     hub: DataHub<T>,
 }
+
+fn panic_to_string(payload: &(dyn any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<Arc<&str>>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<Arc<str>>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<Arc<String>>() {
+        s.to_string()
+    } else {
+        "Unknown panic payload".to_string()
+    }
+}
