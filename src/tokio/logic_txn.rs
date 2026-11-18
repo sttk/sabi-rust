@@ -240,7 +240,7 @@ impl<'a, T> LogicTxn<'a, T> {
                 }
                 LogicErrAt::Run { errors } => {
                     if errors.is_empty() {
-                        let mut reports = self.hub.run.new_failure_reports(&Ok(()));
+                        let mut reports = self.hub.run.new_txn_failure_reports(&Ok(()));
                         let result = self.hub.run.commit_async(&mut reports).await;
                         if result.is_err() {
                             self.hub.run.rollback_async(reports).await;
@@ -249,7 +249,7 @@ impl<'a, T> LogicTxn<'a, T> {
                         result
                     } else {
                         let result = Err(errs::Err::new(DataHubError::FailToRunLogic { errors }));
-                        let reports = self.hub.run.new_failure_reports(&result);
+                        let reports = self.hub.run.new_txn_failure_reports(&result);
                         self.hub.run.rollback_async(reports).await;
                         self.hub.run.end();
                         result
@@ -257,7 +257,7 @@ impl<'a, T> LogicTxn<'a, T> {
                 }
                 LogicErrAt::Block { errors } => {
                     let result = Err(errs::Err::new(DataHubError::FailToRunLogic { errors }));
-                    let reports = self.hub.run.new_failure_reports(&result);
+                    let reports = self.hub.run.new_txn_failure_reports(&result);
                     self.hub.run.rollback_async(reports).await;
                     self.hub.run.end();
                     result

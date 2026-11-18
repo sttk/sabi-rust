@@ -23,7 +23,7 @@ fn test_commit_and_rollback_ok() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
         assert!(manager.commit(&mut reports).is_ok());
         manager.rollback(reports);
     }
@@ -70,7 +70,7 @@ fn test_commit_and_rollback_but_fail_first_sync_pre_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -148,7 +148,7 @@ fn test_commit_and_rollback_but_fail_first_async_pre_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -231,7 +231,7 @@ fn test_commit_and_rollback_but_fail_second_pre_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -311,7 +311,7 @@ fn test_commit_and_rollback_but_fail_first_sync_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -393,7 +393,7 @@ fn test_commit_and_rollback_but_fail_first_async_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -475,7 +475,7 @@ fn test_commit_and_rollback_but_fail_second_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -557,7 +557,7 @@ fn test_commit_and_rollback_but_fail_first_sync_post_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -644,7 +644,7 @@ fn test_commit_and_rollback_but_fail_first_async_post_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -731,7 +731,7 @@ fn test_commit_and_rollback_but_fail_second_post_commit() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -821,7 +821,7 @@ fn test_commit_and_rollback_but_fail_second_post_commit_and_contains_no_commit()
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
 
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
@@ -921,7 +921,7 @@ fn test_commit_and_rollback_and_first_commit_failed_and_second_rollback_failed()
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -1001,7 +1001,7 @@ fn test_commit_and_rollback_and_secod_commit_failed_and_first_rollback_failed() 
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -1081,7 +1081,7 @@ fn test_commit_and_rollback_and_pre_commit_become_committed_and_ok() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
         assert!(manager.commit(&mut reports).is_ok());
         manager.rollback(reports);
     }
@@ -1126,7 +1126,7 @@ fn test_commit_and_rollback_and_pre_commit_become_committed_but_failed() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
         if let Err(e) = manager.commit(&mut reports) {
             match e.reason::<DataConnError>() {
                 Ok(DataConnError::FailToCommitDataConn { errors }) => {
@@ -1210,7 +1210,7 @@ fn test_commit_with_order_and_rollback_ok() {
         let ssnnptr = SendSyncNonNull::new(nnptr);
         manager.add(ssnnptr);
 
-        let mut reports = manager.new_failure_reports(&Ok(()));
+        let mut reports = manager.new_txn_failure_reports(&Ok(()));
         assert!(manager.commit(&mut reports).is_ok());
         manager.rollback(reports);
     }

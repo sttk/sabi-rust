@@ -196,12 +196,12 @@ fn test_to_typed_ptr_but_fail() {
 }
 
 #[test]
-fn test_new_failure_reports() {
+fn test_new_txn_failure_reports() {
     let logger = Arc::new(Mutex::new(Vec::new()));
 
     let mut manager = DataConnManager::new();
 
-    let vec = manager.new_failure_reports(&Ok(()));
+    let vec = manager.new_txn_failure_reports(&Ok(()));
     assert_eq!(vec.len(), 0);
 
     let conn = SyncDataConn::new(1, logger.clone(), Fail::None);
@@ -216,7 +216,7 @@ fn test_new_failure_reports() {
     let ssnnptr = SendSyncNonNull::new(nnptr);
     manager.add(ssnnptr);
 
-    let vec = manager.new_failure_reports(&Ok(()));
+    let vec = manager.new_txn_failure_reports(&Ok(()));
     assert_eq!(vec.len(), 2);
 
     let report = &vec[0];

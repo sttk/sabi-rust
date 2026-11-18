@@ -187,7 +187,7 @@ impl<T: 'static> LogicRunner<T> {
 
         match panic::catch_unwind(panic::AssertUnwindSafe(|| {
             let mut result = logic_fn(&mut self.hub);
-            let mut reports = self.hub.run.new_failure_reports(&result);
+            let mut reports = self.hub.run.new_txn_failure_reports(&result);
             if result.is_ok() {
                 result = self.hub.run.commit(&mut reports);
             }
