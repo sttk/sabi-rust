@@ -110,11 +110,11 @@ impl DataRun {
     }
 
     #[inline]
-    pub(crate) fn new_failure_reports(
+    pub(crate) fn new_txn_failure_reports(
         &self,
         logic_result: &errs::Result<()>,
     ) -> Vec<TxnFailureReport> {
-        self.data_conn_manager.new_failure_reports(logic_result)
+        self.data_conn_manager.new_txn_failure_reports(logic_result)
     }
 
     #[inline]
