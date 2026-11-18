@@ -357,8 +357,7 @@ impl DataSrcManager {
         let mut ordered_indexes = Vec::<Option<usize>>::with_capacity(self.vec_unready.len());
         ordered_indexes.resize(names.len(), None);
 
-        for vec_index in 0..self.vec_unready.len() {
-            let ssnnptr = &self.vec_unready[vec_index];
+        for (vec_index, ssnnptr) in self.vec_unready.iter().enumerate() {
             let ptr = ssnnptr.non_null_ptr.as_ptr();
             let name = unsafe { (*ptr).name.clone() };
             if let Some(order_index) = index_map.remove(name.as_ref()) {
