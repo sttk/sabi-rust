@@ -21,14 +21,14 @@ setup_read_cleanup = "0.8"
 inventory = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"], optional = true }
 futures = { version = "0.3", optional = true }
-trait-variant = "0.1.2"
+trait-variant = { version = "0.1.2", optional = true }
 
 [dev-dependencies]
 trybuild = "=1.0.119"
 override_macro = "0.1"
 
 [features]
-tokio = ["dep:tokio", "dep:futures", "setup_read_cleanup/tokio"]
+tokio = ["dep:tokio", "dep:futures", "dep:trait-variant", "setup_read_cleanup/tokio"]
 default = []
 full = ["tokio"]
 
