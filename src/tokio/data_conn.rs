@@ -538,7 +538,7 @@ impl Drop for DataConnManager {
 mod _test_commit_and_rollback;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
-pub(crate) mod _test_data;
+pub(crate) mod _test_doubles;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test_new_and_add;

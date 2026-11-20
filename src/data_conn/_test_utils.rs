@@ -1,4 +1,4 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
 use std::ptr;
 use std::sync::{Arc, Mutex};
@@ -131,7 +131,7 @@ fn test_to_typed_ptr() {
     if let Ok(typed_ssnnptr) = DataConnManager::to_typed_ptr::<SyncDataConn>(&ssnnptr) {
         assert_eq!(
             any::type_name_of_val(&typed_ssnnptr),
-            "*mut sabi::DataConnContainer<sabi::data_conn::_test_data::SyncDataConn>"
+            "*mut sabi::DataConnContainer<sabi::data_conn::_test_doubles::SyncDataConn>"
         );
         assert_eq!(unsafe { (*typed_ssnnptr).name.clone() }, "foo".into());
     } else {
@@ -142,7 +142,7 @@ fn test_to_typed_ptr() {
     if let Ok(typed_ssnnptr) = DataConnManager::to_typed_ptr::<AsyncDataConn>(&ssnnptr) {
         assert_eq!(
             any::type_name_of_val(&typed_ssnnptr),
-            "*mut sabi::DataConnContainer<sabi::data_conn::_test_data::AsyncDataConn>"
+            "*mut sabi::DataConnContainer<sabi::data_conn::_test_doubles::AsyncDataConn>"
         );
         assert_eq!(unsafe { (*typed_ssnnptr).name.clone() }, "bar".into());
     } else {
@@ -173,7 +173,10 @@ fn test_to_typed_ptr_but_fail() {
         match err.reason::<DataConnError>() {
             Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                 assert_eq!(name.as_ref(), "foo");
-                assert_eq!(*target_type, "sabi::data_conn::_test_data::AsyncDataConn");
+                assert_eq!(
+                    *target_type,
+                    "sabi::data_conn::_test_doubles::AsyncDataConn"
+                );
             }
             _ => panic!(),
         }
@@ -186,7 +189,7 @@ fn test_to_typed_ptr_but_fail() {
         match err.reason::<DataConnError>() {
             Ok(DataConnError::FailToCastDataConn { name, target_type }) => {
                 assert_eq!(name.as_ref(), "bar");
-                assert_eq!(*target_type, "sabi::data_conn::_test_data::SyncDataConn");
+                assert_eq!(*target_type, "sabi::data_conn::_test_doubles::SyncDataConn");
             }
             _ => panic!(),
         }
@@ -223,13 +226,13 @@ fn test_new_txn_failure_reports() {
     assert_eq!(report.data_conn_name, "foo".into());
     assert_eq!(
         report.data_conn_type,
-        "sabi::data_conn::_test_data::SyncDataConn"
+        "sabi::data_conn::_test_doubles::SyncDataConn"
     );
 
     let report = &vec[1];
     assert_eq!(report.data_conn_name, "bar".into());
     assert_eq!(
         report.data_conn_type,
-        "sabi::data_conn::_test_data::AsyncDataConn"
+        "sabi::data_conn::_test_doubles::AsyncDataConn"
     );
 }

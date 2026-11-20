@@ -1,6 +1,6 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
-use crate::data_conn::_test_data::*;
+use crate::data_conn::_test_doubles::*;
 
 use std::sync::{Arc, Mutex};
 
@@ -35,7 +35,10 @@ fn test_of_create_data_conn_but_not_found() {
                 data_conn_type,
             }) => {
                 assert_eq!(*name, "foo".into());
-                assert_eq!(*data_conn_type, "sabi::data_conn::_test_data::SyncDataConn");
+                assert_eq!(
+                    *data_conn_type,
+                    "sabi::data_conn::_test_doubles::SyncDataConn"
+                );
             }
             _ => panic!(),
         }
@@ -58,7 +61,10 @@ fn test_of_create_data_conn_but_fail_to_cast() {
         match err.reason::<DataSrcError>() {
             Ok(DataSrcError::FailToCastDataConn { name, target_type }) => {
                 assert_eq!(*name, "foo".into());
-                assert_eq!(*target_type, "sabi::data_conn::_test_data::AsyncDataConn");
+                assert_eq!(
+                    *target_type,
+                    "sabi::data_conn::_test_doubles::AsyncDataConn"
+                );
             }
             _ => panic!(),
         }
@@ -84,7 +90,10 @@ fn test_of_create_data_conn_but_fail_to_create() {
                 data_conn_type,
             }) => {
                 assert_eq!(*name, "foo".into());
-                assert_eq!(*data_conn_type, "sabi::data_conn::_test_data::SyncDataConn");
+                assert_eq!(
+                    *data_conn_type,
+                    "sabi::data_conn::_test_doubles::SyncDataConn"
+                );
             }
             _ => panic!(),
         }

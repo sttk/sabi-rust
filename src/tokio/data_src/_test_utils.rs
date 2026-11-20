@@ -1,6 +1,6 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
-use crate::tokio::data_conn::_test_data::*;
+use crate::tokio::data_conn::_test_doubles::*;
 
 use std::collections::HashMap;
 use std::sync::Arc;

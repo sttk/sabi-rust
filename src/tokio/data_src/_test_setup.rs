@@ -1,6 +1,6 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
-use crate::tokio::data_conn::_test_data::*;
+use crate::tokio::data_conn::_test_doubles::*;
 
 #[tokio::test]
 async fn test_of_setup_async_and_ok() {
@@ -202,9 +202,9 @@ async fn test_of_setup_with_order_but_fail() {
         assert_eq!(errors[0].index, 0);
         assert_eq!(errors[0].name, "foo".into());
         #[cfg(unix)]
-        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/_test_data.rs, line = 44 }");
+        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/tokio/data_src/_test_doubles.rs, line = 44 }");
         #[cfg(windows)]
-        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\_test_data.rs, line = 44 }");
+        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\tokio\\data_src\\_test_doubles.rs, line = 44 }");
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

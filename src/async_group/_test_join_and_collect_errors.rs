@@ -1,4 +1,4 @@
-use super::_test_data::MyStruct;
+use super::_test_doubles::MyStruct;
 use super::*;
 use std::panic::panic_any;
 
@@ -51,12 +51,12 @@ fn single_fail() {
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", errors[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"a\"), file = src/async_group/_test_data.rs, line = 30 }"
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"a\"), file = src/async_group/_test_doubles.rs, line = 30 }"
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", errors[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"a\"), file = src\\async_group\\_test_data.rs, line = 30 }"
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"a\"), file = src\\async_group\\_test_doubles.rs, line = 30 }"
     );
 }
 
@@ -129,12 +129,12 @@ fn multiple_processes_and_single_fail() {
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"b\"), file = src/async_group/_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"b\"), file = src/async_group/_test_doubles.rs, line = 30 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"b\"), file = src\\async_group\\_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"b\"), file = src\\async_group\\_test_doubles.rs, line = 30 }",
     );
 
     assert_eq!(*struct_a.string.lock().unwrap(), "A");
@@ -183,32 +183,32 @@ fn multiple_fail() {
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"a\"), file = src/async_group/_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"a\"), file = src/async_group/_test_doubles.rs, line = 30 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"a\"), file = src\\async_group\\_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"a\"), file = src\\async_group\\_test_doubles.rs, line = 30 }",
     );
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"b\"), file = src/async_group/_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"b\"), file = src/async_group/_test_doubles.rs, line = 30 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"b\"), file = src\\async_group\\_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"b\"), file = src\\async_group\\_test_doubles.rs, line = 30 }",
     );
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[2].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"c\"), file = src/async_group/_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"c\"), file = src/async_group/_test_doubles.rs, line = 30 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[2].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"c\"), file = src\\async_group\\_test_data.rs, line = 30 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"c\"), file = src\\async_group\\_test_doubles.rs, line = 30 }",
     );
 
     assert_eq!(*struct_a.string.lock().unwrap(), "a");
@@ -260,23 +260,23 @@ fn collect_all_errors_if_data_src_executes_multiple_setup_handles() {
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"d\"), file = src/async_group/_test_data.rs, line = 46 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"d\"), file = src/async_group/_test_doubles.rs, line = 46 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"d\"), file = src\\async_group\\_test_data.rs, line = 46 }"
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"d\"), file = src\\async_group\\_test_doubles.rs, line = 46 }"
     );
 
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"d\"), file = src/async_group/_test_data.rs, line = 60 }",
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"d\"), file = src/async_group/_test_doubles.rs, line = 60 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::async_group::_test_data::Reasons BadString(\"d\"), file = src\\async_group\\_test_data.rs, line = 60 }"
+        "errs::Err { reason = sabi::async_group::_test_doubles::Reasons BadString(\"d\"), file = src\\async_group\\_test_doubles.rs, line = 60 }"
     );
 
     assert_eq!(*struct_d.string.lock().unwrap(), "d");

@@ -1,4 +1,4 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
 
 use std::ptr;
@@ -132,7 +132,7 @@ fn test_to_typed_ptr() {
     if let Ok(typed_nnptr) = DataConnManager::to_typed_ptr::<SyncDataConn>(&nnptr) {
         assert_eq!(
             any::type_name_of_val(&typed_nnptr),
-            "*mut sabi::tokio::DataConnContainer<sabi::tokio::data_conn::_test_data::SyncDataConn>"
+            "*mut sabi::tokio::DataConnContainer<sabi::tokio::data_conn::_test_doubles::SyncDataConn>"
         );
         assert_eq!(unsafe { (*typed_nnptr).name.clone() }, "foo".into());
     } else {
@@ -143,7 +143,7 @@ fn test_to_typed_ptr() {
     if let Ok(typed_nnptr) = DataConnManager::to_typed_ptr::<AsyncDataConn>(&nnptr) {
         assert_eq!(
             any::type_name_of_val(&typed_nnptr),
-            "*mut sabi::tokio::DataConnContainer<sabi::tokio::data_conn::_test_data::AsyncDataConn>"
+            "*mut sabi::tokio::DataConnContainer<sabi::tokio::data_conn::_test_doubles::AsyncDataConn>"
         );
         assert_eq!(unsafe { (*typed_nnptr).name.clone() }, "bar".into());
     } else {
@@ -176,7 +176,7 @@ fn test_to_typed_ptr_but_fail() {
                 assert_eq!(name.as_ref(), "foo");
                 assert_eq!(
                     *target_type,
-                    "sabi::tokio::data_conn::_test_data::AsyncDataConn"
+                    "sabi::tokio::data_conn::_test_doubles::AsyncDataConn"
                 );
             }
             _ => panic!(),
@@ -192,7 +192,7 @@ fn test_to_typed_ptr_but_fail() {
                 assert_eq!(name.as_ref(), "bar");
                 assert_eq!(
                     *target_type,
-                    "sabi::tokio::data_conn::_test_data::SyncDataConn"
+                    "sabi::tokio::data_conn::_test_doubles::SyncDataConn"
                 );
             }
             _ => panic!(),
@@ -230,13 +230,13 @@ fn test_new_txn_failure_reports() {
     assert_eq!(report.data_conn_name, "foo".into());
     assert_eq!(
         report.data_conn_type,
-        "sabi::tokio::data_conn::_test_data::SyncDataConn"
+        "sabi::tokio::data_conn::_test_doubles::SyncDataConn"
     );
 
     let report = &vec[1];
     assert_eq!(report.data_conn_name, "bar".into());
     assert_eq!(
         report.data_conn_type,
-        "sabi::tokio::data_conn::_test_data::AsyncDataConn"
+        "sabi::tokio::data_conn::_test_doubles::AsyncDataConn"
     );
 }

@@ -1,6 +1,6 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
-use crate::tokio::data_conn::_test_data::*;
+use crate::tokio::data_conn::_test_doubles::*;
 
 #[tokio::test]
 async fn test_of_create_data_conn_and_ok() {
@@ -41,7 +41,7 @@ async fn test_of_create_data_conn_but_not_found() {
                 assert_eq!(*name, "foo".into());
                 assert_eq!(
                     *data_conn_type,
-                    "sabi::tokio::data_conn::_test_data::SyncDataConn"
+                    "sabi::tokio::data_conn::_test_doubles::SyncDataConn"
                 );
             }
             _ => panic!(),
@@ -70,7 +70,7 @@ async fn test_of_create_data_conn_but_fail_to_cast() {
                 assert_eq!(*name, "foo".into());
                 assert_eq!(
                     *target_type,
-                    "sabi::tokio::data_conn::_test_data::AsyncDataConn"
+                    "sabi::tokio::data_conn::_test_doubles::AsyncDataConn"
                 );
             }
             _ => panic!(),
@@ -102,7 +102,7 @@ async fn test_of_create_data_conn_but_fail_to_create() {
                 assert_eq!(*name, "foo".into());
                 assert_eq!(
                     *data_conn_type,
-                    "sabi::tokio::data_conn::_test_data::SyncDataConn"
+                    "sabi::tokio::data_conn::_test_doubles::SyncDataConn"
                 );
             }
             _ => panic!(),
