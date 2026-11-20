@@ -501,7 +501,7 @@ impl Drop for DataSrcManager {
 mod _test_create_data_conn;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
-pub(crate) mod _test_data;
+pub(crate) mod _test_doubles;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test_new_add_remove_close;

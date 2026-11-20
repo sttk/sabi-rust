@@ -1,4 +1,4 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
 use std::ptr;
 use std::sync::{Arc, Mutex};

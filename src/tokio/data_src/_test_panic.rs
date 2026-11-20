@@ -1,5 +1,5 @@
-use super::_test_data::*;
-use crate::tokio::data_conn::_test_data::*;
+use super::_test_doubles::*;
+use crate::tokio::data_conn::_test_doubles::*;
 use crate::tokio::*;
 
 use futures::FutureExt;

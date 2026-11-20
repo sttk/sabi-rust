@@ -1,4 +1,4 @@
-use super::_test_data::MyStruct;
+use super::_test_doubles::MyStruct;
 use super::*;
 
 #[test]

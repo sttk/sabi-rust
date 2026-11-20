@@ -1,6 +1,6 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
-use crate::data_conn::_test_data::*;
+use crate::data_conn::_test_doubles::*;
 use std::sync::{Arc, Mutex};
 
 #[test]

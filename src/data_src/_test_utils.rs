@@ -1,5 +1,5 @@
-use super::_test_data::*;
-use crate::data_conn::_test_data::*;
+use super::_test_doubles::*;
+use crate::data_conn::_test_doubles::*;
 use crate::*;
 use std::ptr;
 use std::sync::{Arc, Mutex};

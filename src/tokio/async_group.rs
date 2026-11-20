@@ -62,7 +62,7 @@ impl AsyncGroup {
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
-pub(crate) mod _test_data;
+pub(crate) mod _test_doubles;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod _test_join_and_collect_errors_async;

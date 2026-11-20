@@ -1,6 +1,6 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
-use crate::data_conn::_test_data::*;
+use crate::data_conn::_test_doubles::*;
 
 use std::sync::{Arc, Mutex};
 
@@ -99,9 +99,9 @@ fn test_of_setup_but_error() {
         assert_eq!(errors[0].index, 1);
         assert_eq!(errors[0].name, "bar".into());
         #[cfg(unix)]
-        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/_test_data.rs, line = 41 }");
+        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/_test_doubles.rs, line = 41 }");
         #[cfg(windows)]
-        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\_test_data.rs, line = 41 }");
+        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\_test_doubles.rs, line = 41 }");
     }
 
     assert_eq!(
@@ -228,9 +228,9 @@ fn test_of_setup_with_order_but_fail() {
         assert_eq!(errors[0].index, 0);
         assert_eq!(errors[0].name, "foo".into());
         #[cfg(unix)]
-        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/_test_data.rs, line = 41 }");
+        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src/data_src/_test_doubles.rs, line = 41 }");
         #[cfg(windows)]
-        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\_test_data.rs, line = 41 }");
+        assert_eq!(format!("{:?}", errors[0].err), "errs::Err { reason = alloc::string::String \"XXX\", file = src\\data_src\\_test_doubles.rs, line = 41 }");
     }
 
     assert_eq!(

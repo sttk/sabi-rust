@@ -1,5 +1,5 @@
-use crate::data_conn::_test_data::*;
-use crate::data_src::_test_data::*;
+use crate::data_conn::_test_doubles::*;
+use crate::data_src::_test_doubles::*;
 use crate::{DataHub, LogicRunner};
 use std::sync::{Arc, Mutex};
 

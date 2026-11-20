@@ -1,4 +1,4 @@
-use super::_test_data::*;
+use super::_test_doubles::*;
 use super::*;
 
 #[tokio::test]
@@ -51,12 +51,12 @@ async fn single_fail() {
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", errors[0].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"a\"), file = src/tokio/async_group/_test_data.rs, line = 34 }"
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"a\"), file = src/tokio/async_group/_test_doubles.rs, line = 34 }"
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", errors[0].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"a\"), file = src\\tokio\\async_group\\_test_data.rs, line = 34 }"
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"a\"), file = src\\tokio\\async_group\\_test_doubles.rs, line = 34 }"
     );
 }
 
@@ -129,12 +129,12 @@ async fn multiple_processes_and_single_fail() {
     #[cfg(unix)]
     assert_eq!(
                 format!("{:?}", err_vec[0].err),
-                "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"b\"), file = src/tokio/async_group/_test_data.rs, line = 34 }",
+                "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"b\"), file = src/tokio/async_group/_test_doubles.rs, line = 34 }",
             );
     #[cfg(windows)]
     assert_eq!(
                 format!("{:?}", err_vec[0].err),
-                "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"b\"), file = src\\tokio\\async_group\\_test_data.rs, line = 34 }",
+                "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"b\"), file = src\\tokio\\async_group\\_test_doubles.rs, line = 34 }",
             );
 
     assert_eq!(*struct_a.string.lock().await, "A");
@@ -183,32 +183,32 @@ async fn multiple_fail() {
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"a\"), file = src/tokio/async_group/_test_data.rs, line = 34 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"a\"), file = src/tokio/async_group/_test_doubles.rs, line = 34 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"a\"), file = src\\tokio\\async_group\\_test_data.rs, line = 34 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"a\"), file = src\\tokio\\async_group\\_test_doubles.rs, line = 34 }",
     );
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"b\"), file = src/tokio/async_group/_test_data.rs, line = 34 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"b\"), file = src/tokio/async_group/_test_doubles.rs, line = 34 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"b\"), file = src\\tokio\\async_group\\_test_data.rs, line = 34 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"b\"), file = src\\tokio\\async_group\\_test_doubles.rs, line = 34 }",
     );
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[2].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"c\"), file = src/tokio/async_group/_test_data.rs, line = 34 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"c\"), file = src/tokio/async_group/_test_doubles.rs, line = 34 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[2].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"c\"), file = src\\tokio\\async_group\\_test_data.rs, line = 34 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"c\"), file = src\\tokio\\async_group\\_test_doubles.rs, line = 34 }",
     );
 
     assert_eq!(*struct_a.string.lock().await, "a");
@@ -260,23 +260,23 @@ async fn collect_all_errors_if_data_src_executes_multiple_setup_handles() {
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"d\"), file = src/tokio/async_group/_test_data.rs, line = 53 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"d\"), file = src/tokio/async_group/_test_doubles.rs, line = 53 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[0].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"d\"), file = src\\tokio\\async_group\\_test_data.rs, line = 53 }"
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"d\"), file = src\\tokio\\async_group\\_test_doubles.rs, line = 53 }"
     );
 
     #[cfg(unix)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"d\"), file = src/tokio/async_group/_test_data.rs, line = 70 }",
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"d\"), file = src/tokio/async_group/_test_doubles.rs, line = 70 }",
     );
     #[cfg(windows)]
     assert_eq!(
         format!("{:?}", err_vec[1].err),
-        "errs::Err { reason = sabi::tokio::async_group::_test_data::Reasons BadString(\"d\"), file = src\\tokio\\async_group\\_test_data.rs, line = 70 }"
+        "errs::Err { reason = sabi::tokio::async_group::_test_doubles::Reasons BadString(\"d\"), file = src\\tokio\\async_group\\_test_doubles.rs, line = 70 }"
     );
 
     assert_eq!(*struct_d.string.lock().await, "d");
